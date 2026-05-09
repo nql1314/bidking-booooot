@@ -59,6 +59,7 @@ from ...analysis._board_pricing import (
     map_skill_total_hidden_cells_from_logs,
     vacant_cells_from_map_skill_total_hidden,
 )
+from ...analysis.raw_pricing import build_raw_pricing_dict
 from ._client_profile import load_client_settings_beside_snapshot, sanitize_aisha_client_payload
 from ...analysis.snapshot import game_state_to_json, item_knowledge_to_json
 
@@ -1578,17 +1579,24 @@ class GridWindow:
                 row["quality"] = int(item.quality)
                 row["shape"] = int(item.shape)
                 row["price"] = int(item.base_value)
-        occ_n = len(self._build_occupied())
+        raw_pricing = build_raw_pricing_dict(
+            map_id=int(self.state.map_id or 0),
+            skill_logs=list(self._skill_logs),
+            snapshot_path_hint=self._snapshot_path,
+        )
+        board_snapshot = {
+            "game_state": gs,
+            "skill_logs": list(self._skill_logs),
+            "current_round": int(self.state.current_round or 1),
+            "map_id": int(self.state.map_id or 0),
+            "raw_pricing": raw_pricing,
+        }
         return build_snapshot_pricing_dict(
+            board_snapshot,
+            snapshot_path_hint=self._snapshot_path,
             total=float(self._calc_grid_total_price()),
             raw_vacant=self._compute_empty_zone_count(),
             sum_gold_red_min_minus_weighted=float(self._sum_gold_red_min_minus_weighted()),
-            map_id=int(self.state.map_id or 0),
-            current_round=int(self.state.current_round or 1),
-            skill_logs=list(self._skill_logs),
-            game_state_json=gs,
-            snapshot_path_hint=self._snapshot_path,
-            vacant_occupied_cell_count=occ_n,
         )
 
     def _grid_overlay_to_json(self) -> dict:
