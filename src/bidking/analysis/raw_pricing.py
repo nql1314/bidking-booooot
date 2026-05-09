@@ -346,13 +346,15 @@ def build_raw_pricing_dict(
     q6_price_total = _safe_int_field(skill_entries.get(MAP_SKILL_RED_TOTAL_PRICE), "HitItemTotalPrice")
 
 
-
     direct: Dict[str, Any] = {
         "total_count": total_count,
         "total_grid_count": total_grid_count,
         "total_grid_avg": total_grid_avg,
         "total_price_min": total_price_min,
+        "q1_count": None,
+        "q2_count": None,
         "q12_count": q12_count,
+        "q3_count": None,
         "q3_grid_count": q3_grid_count,
         "q3_grid_avg": q3_grid_avg,
         "q4_count": q4_count,
@@ -361,6 +363,7 @@ def build_raw_pricing_dict(
         "q4_count_min": q4_count_min,
         "q4_grid_min": q4_grid_min,
         "q4_price_avg": q4_price_avg,
+        "q4_price_total": None,
         "q5_count": q5_count,
         "q5_count_min": q5_count_min,
         "q5_grid_count": q5_grid_count,
@@ -378,56 +381,60 @@ def build_raw_pricing_dict(
     }
 
     # ── 2) 由直接字段推导的模糊量 + 轮廓技能 HitBoxList 补全 ───────────────
-    inferred = dict(direct)
-    for q in (3, 4, 5, 6):
+    for q in (1, 2, 3, 4, 5, 6):
         agg = _best_outline_aggregate_for_quality(skill_entries, q)
         if agg is None or agg["count"] <= 0:
             continue
+        if q == 1:
+            if direct["q1_count"] in (None, 0):
+                direct["q1_count"] = int(agg["count"])
+        if q == 2:
+            if direct["q2_count"] in (None, 0):
+                direct["q2_count"] = int(agg["count"])
         if q == 3:
-            if inferred["q3_count"] in (None, 0):
-                inferred["q3_count"] = int(agg["count"])
-            if not inferred["q3_grid_count"] and agg["total_cells"]:
-                inferred["q3_grid_count"] = int(agg["total_cells"])
-            if inferred["q3_grid_avg"] is None and agg["avg_cells"] is not None:
-                inferred["q3_grid_avg"] = float(agg["avg_cells"])
+            if direct["q3_count"] in (None, 0):
+                direct["q3_count"] = int(agg["count"])
+            if not direct["q3_grid_count"] and agg["total_cells"]:
+                direct["q3_grid_count"] = int(agg["total_cells"])
+            if direct["q3_grid_avg"] is None and agg["avg_cells"] is not None:
+                direct["q3_grid_avg"] = float(agg["avg_cells"])
         if q == 4:
-            if inferred["q4_count"] in (None, 0):
-                inferred["q4_count"] = int(agg["count"])
-            if not inferred["q4_grid_count"] and agg["total_cells"]:
-                inferred["q4_grid_count"] = int(agg["total_cells"])
-            if inferred["q4_grid_avg"] is None and agg["avg_cells"] is not None:
-                inferred["q4_grid_avg"] = float(agg["avg_cells"])
-            if inferred["q4_price_total"] in (None, 0) and agg["total_price"]:
-                inferred["q4_price_total"] = int(agg["total_price"])
-            if inferred["q4_price_avg"] is None and agg["avg_price"] is not None:
-                inferred["q4_price_avg"] = float(agg["avg_price"])
+            if direct["q4_count"] in (None, 0):
+                direct["q4_count"] = int(agg["count"])
+            if not direct["q4_grid_count"] and agg["total_cells"]:
+                direct["q4_grid_count"] = int(agg["total_cells"])
+            if direct["q4_grid_avg"] is None and agg["avg_cells"] is not None:
+                direct["q4_grid_avg"] = float(agg["avg_cells"])
+            if direct["q4_price_total"] in (None, 0) and agg["total_price"]:
+                direct["q4_price_total"] = int(agg["total_price"])
+            if direct["q4_price_avg"] is None and agg["avg_price"] is not None:
+                direct["q4_price_avg"] = float(agg["avg_price"])
         if q == 5:
-            if inferred["q5_count"] in (None, 0):
-                inferred["q5_count"] = int(agg["count"])
-            if not inferred["q5_grid_count"] and agg["total_cells"]:
-                inferred["q5_grid_count"] = int(agg["total_cells"])
-            if inferred["q5_grid_avg"] is None and agg["avg_cells"] is not None:
-                inferred["q5_grid_avg"] = float(agg["avg_cells"])
-            if inferred["q5_price_total"] in (None, 0) and agg["total_price"]:
-                inferred["q5_price_total"] = int(agg["total_price"])
-            if inferred["q5_price_avg"] is None and agg["avg_price"] is not None:
-                inferred["q5_price_avg"] = float(agg["avg_price"])
+            if direct["q5_count"] in (None, 0):
+                direct["q5_count"] = int(agg["count"])
+            if not direct["q5_grid_count"] and agg["total_cells"]:
+                direct["q5_grid_count"] = int(agg["total_cells"])
+            if direct["q5_grid_avg"] is None and agg["avg_cells"] is not None:
+                direct["q5_grid_avg"] = float(agg["avg_cells"])
+            if direct["q5_price_total"] in (None, 0) and agg["total_price"]:
+                direct["q5_price_total"] = int(agg["total_price"])
+            if direct["q5_price_avg"] is None and agg["avg_price"] is not None:
+                direct["q5_price_avg"] = float(agg["avg_price"])
         if q == 6:
-            if inferred["q6_count"] in (None, 0):
-                inferred["q6_count"] = int(agg["count"])
-            if not inferred["q6_grid_count"] and agg["total_cells"]:
-                inferred["q6_grid_count"] = int(agg["total_cells"])
-            if inferred["q6_grid_avg"] is None and agg["avg_cells"] is not None:
-                inferred["q6_grid_avg"] = float(agg["avg_cells"])
-            if inferred["q6_price_total"] in (None, 0) and agg["total_price"]:
-                inferred["q6_price_total"] = int(agg["total_price"])
-            if inferred["q6_price_avg"] is None and agg["avg_price"] is not None:
-                inferred["q6_price_avg"] = float(agg["avg_price"])
+            if direct["q6_count"] in (None, 0):
+                direct["q6_count"] = int(agg["count"])
+            if not direct["q6_grid_count"] and agg["total_cells"]:
+                direct["q6_grid_count"] = int(agg["total_cells"])
+            if direct["q6_grid_avg"] is None and agg["avg_cells"] is not None:
+                direct["q6_grid_avg"] = float(agg["avg_cells"])
+            if direct["q6_price_total"] in (None, 0) and agg["total_price"]:
+                direct["q6_price_total"] = int(agg["total_price"])
+            if direct["q6_price_avg"] is None and agg["avg_price"] is not None:
+                direct["q6_price_avg"] = float(agg["avg_price"])
 
     # ── 3) 综合整理：分档零一致性 ─────────────────────────────────────────
-    event_stats = dict(inferred)
     _apply_tier_zero_coherence(
-        event_stats,
+        direct,
         count_k="q3_count",
         grid_k="q3_grid_count",
         avg_grid_k="q3_grid_avg",
@@ -461,7 +468,7 @@ def build_raw_pricing_dict(
         ),
     ):
         _apply_tier_zero_coherence(
-            event_stats,
+            direct,
             count_k=count_k,
             grid_k=grid_k,
             avg_grid_k=avg_grid_k,
@@ -470,10 +477,13 @@ def build_raw_pricing_dict(
             also_zero=also,
         )
 
+    if direct["q1_count"] is not None and direct["q2_count"] is not None:
+        direct["q12_count"] = direct["q1_count"] + direct["q2_count"]
+
     return {
         "csv_quality_groups_avg_per_cell": csv_groups_per_cell,
         "csv_quality_groups_avg_per_item": csv_groups_per_item,
         "map_quality_avg_csv": map_quality_csv_path_resolved(snapshot_path_hint),
         "map_quality_avg_hit": bool(csv_groups_full),
-        "event_stats": event_stats,
+        "event_stats": direct,
     }
