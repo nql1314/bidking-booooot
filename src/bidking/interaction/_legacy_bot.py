@@ -23,6 +23,7 @@ from PIL import Image, ImageOps
 
 ROOT = Path(__file__).resolve().parent
 
+from ..pricing.compute import compute_price as pricing_compute_price  # noqa: E402
 from .board_snapshot_util import (  # noqa: E402
     clear_board_snapshot_file,
     current_round_from_snapshot,
@@ -30,6 +31,8 @@ from .board_snapshot_util import (  # noqa: E402
     load_board_snapshot_for_loop,
 )
 from .window import capture_window_frame, find_window, scale_point  # noqa: E402
+from ..config.paths import config_overlay_path  # noqa: E402
+from ..config.pricing import deep_merge  # noqa: E402
 from ..logsys.app_log import append_app_log, log_timestamp, set_app_log_file  # noqa: E402
 from ..logsys.perf_log import perf_log, perf_log_elapsed  # noqa: E402
 
@@ -181,6 +184,32 @@ def load_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8-sig"))
 
 
+def load_merged_bot_config(overlay_path: Path) -> dict[str, Any]:
+    """``runtime.json`` 为基底，``overlay_path``（通常为 ``config.json``）覆盖。"""
+    from ..config.paths import runtime_path
+
+    rp = runtime_path()
+    base: dict[str, Any] = {}
+    if rp.is_file():
+        base = load_json(rp)
+    overlay: dict[str, Any] = {}
+    if overlay_path.is_file():
+        overlay = load_json(overlay_path)
+    return deep_merge(base, overlay)
+
+
+def persist_overlay_patch(overlay_path: Path, patch: dict[str, Any]) -> None:
+    existing: dict[str, Any] = {}
+    if overlay_path.is_file():
+        existing = load_json(overlay_path)
+    merged_overlay = deep_merge(existing, patch)
+    overlay_path.parent.mkdir(parents=True, exist_ok=True)
+    overlay_path.write_text(
+        json.dumps(merged_overlay, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
 def refresh_poll_loop_locals(config: dict[str, Any]) -> dict[str, Any]:
     """从 config 读取轮询间隔、地图与回合限制等，便于与 GUI 写入的 config.json 同步。"""
     timing = config.get("timing") or {}
@@ -210,13 +239,26 @@ def apply_pyautogui_from_config(config: dict[str, Any]) -> None:
 def compute_price(
     config: dict[str, Any],
     *,
+    config_path: Path,
     round_no: int,
     observation: Observation | None = None,
     knowledge_patch: dict[str, Any] | None = None,
-) -> int:
-    """出价计算入口占位：由后续策略实现替换；当前恒定返回 10000。"""
-    _ = config, round_no, observation, knowledge_patch
-    return 10000
+) -> tuple[int, dict[str, Any]]:
+    """出价计算：调用 ``bidking.pricing``（快照 ``pricing`` 与对手列均在 pricing 层解析）。"""
+    _ = observation, knowledge_patch
+    bs_cfg = config.get("board_snapshot") or {}
+    bs_data = load_board_snapshot_for_loop(config) if bool(bs_cfg.get("enabled")) else None
+    effective_round = int(round_no)
+    if bs_data is not None:
+        sr = current_round_from_snapshot(bs_data)
+        if sr is not None:
+            effective_round = int(sr)
+    return pricing_compute_price(
+        config,
+        config_path=config_path,
+        round_no=effective_round,
+        board_snapshot=bs_data,
+    )
 
 
 def normalize_text(text: str) -> str:
@@ -1039,7 +1081,7 @@ def run_warehouse_auto_sort(config: dict[str, Any]) -> None:
 
 def run_aisha_loop(config_path: Path) -> None:
     """兼容入口：清快照、强制 ``aisha_premium`` 后进入 :func:`run_loop`。"""
-    cfg0 = load_json(config_path)
+    cfg0 = load_merged_bot_config(config_path)
     if board_snapshot_file_missing(cfg0):
         log(
             "启动时未发现 board_snapshot 文件：按新一局处理；请先在游戏内开局，"
@@ -1081,14 +1123,16 @@ def handle_round(
         auction_round_no=int(round_no),
     )
     knowledge_patch = apply_observation_memory(observation, knowledge_patch)
-    price = compute_price(
+    price, details = compute_price(
         config,
+        config_path=config_path,
         round_no=int(round_no),
         observation=observation,
         knowledge_patch=knowledge_patch,
     )
     log(f"compute_price -> {price}")
-    details = {"reason": "interaction.compute_price placeholder"}
+    if details.get("fallback"):
+        log(f"price fallback: {price}; reason={details.get('reason')}")
     save_round_debug_bundle(
         config,
         config_path,
@@ -1101,6 +1145,9 @@ def handle_round(
     )
     if bool(config.get("debug", {}).get("print_ocr_snippet", False)):
         log("ocr snippet: " + compact_text(observation.capture.text)[:160])
+    if details.get("skip_submit"):
+        log(f"bid skipped: {details.get('reason')}")
+        return knowledge_patch
     input_bid(config, price, config_path=config_path)
     return knowledge_patch
 
@@ -1130,7 +1177,7 @@ def run_loop(
 ) -> None:
     # 与控制台同内容的运行日志；cwd 在脚本与 PyInstaller exe 下均为进程当前工作目录
     set_app_log_file(app_log_path or (Path.cwd() / "bidking_fresh_bot.log"))
-    config = load_json(config_path)
+    config = load_merged_bot_config(config_path)
     set_gui_log_verbose(bool((config.get("debug") or {}).get("gui_verbose", False)))
     if clear_snapshot_on_start:
         clear_board_snapshot_file(config)
@@ -1181,7 +1228,7 @@ def run_loop(
         try:
             ensure_not_stopped()
             # 与 GUI 写入的 config.json 同步，便于不停止脚本时调整参数
-            config = load_json(config_path)
+            config = load_merged_bot_config(config_path)
             set_gui_log_verbose(bool((config.get("debug") or {}).get("gui_verbose", False)))
             if force_selected_mode:
                 config.setdefault("automation", {})["selected_mode"] = str(force_selected_mode)
@@ -1488,7 +1535,7 @@ def run_loop(
 
 
 def print_click_positions(config_path: Path) -> None:
-    config = load_json(config_path)
+    config = load_merged_bot_config(config_path)
     info = find_window(config.get("window", {}))
     log(
         f"window hwnd={info.hwnd} client_origin={info.client_origin} client_size={info.width}x{info.height}",
@@ -1521,7 +1568,7 @@ def print_click_positions(config_path: Path) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Fresh BidKing bot loop.")
-    parser.add_argument("--config", default=str(ROOT / "config.json"))
+    parser.add_argument("--config", default=str(config_overlay_path()))
     parser.add_argument("--print-clicks", action="store_true", help="Print converted screen click positions and exit.")
     args = parser.parse_args()
     config_path = Path(args.config).resolve()
@@ -1529,7 +1576,7 @@ def main() -> int:
         print_click_positions(config_path)
         return 0
     else:
-        config = load_json(config_path)
+        config = load_merged_bot_config(config_path)
         maps = config.get("automation", {}).get("maps", {})
         default_map = str(config.get("automation", {}).get("default_map", "4"))
         default_runs = int(config.get("automation", {}).get("default_runs", 1))
@@ -1540,10 +1587,10 @@ def main() -> int:
         map_input = input(f"地图编号 [默认 {default_map}]: ").strip() or default_map
         runs_input = input(f"刷取次数 [默认 {default_runs}]: ").strip() or str(default_runs)
         selected_runs = int(runs_input) if runs_input.isdigit() and int(runs_input) > 0 else default_runs
-        config.setdefault("automation", {})
-        config["automation"]["selected_map"] = map_input
-        config["automation"]["selected_runs"] = selected_runs
-        config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+        persist_overlay_patch(
+            config_path,
+            {"automation": {"selected_map": map_input, "selected_runs": selected_runs}},
+        )
         reset_stop()
         run_loop(config_path)
     return 0
@@ -1552,10 +1599,10 @@ def main() -> int:
 def main_aisha() -> int:
     """交互式选择地图/次数后写入配置并启动 :func:`run_aisha_loop`（旧 ``_legacy_aisha.main``）。"""
     parser = argparse.ArgumentParser(description="BidKing 艾莎兼容 CLI（fresh_aisha_bot）。")
-    parser.add_argument("--config", default=str(ROOT / "config.json"))
+    parser.add_argument("--config", default=str(config_overlay_path()))
     args = parser.parse_args()
     config_path = Path(args.config).resolve()
-    config = load_json(config_path)
+    config = load_merged_bot_config(config_path)
     maps = config.get("automation", {}).get("maps", {})
     default_map = str(config.get("automation", {}).get("default_map", "4"))
     default_runs = int(config.get("automation", {}).get("default_runs", 1))
@@ -1566,11 +1613,16 @@ def main_aisha() -> int:
     map_input = input(f"地图编号 [默认 {default_map}]: ").strip() or default_map
     runs_input = input(f"刷取次数 [默认 {default_runs}]: ").strip() or str(default_runs)
     selected_runs = int(runs_input) if runs_input.isdigit() and int(runs_input) > 0 else default_runs
-    config.setdefault("automation", {})
-    config["automation"]["selected_map"] = map_input
-    config["automation"]["selected_runs"] = selected_runs
-    config["automation"]["selected_mode"] = "aisha_premium"
-    config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+    persist_overlay_patch(
+        config_path,
+        {
+            "automation": {
+                "selected_map": map_input,
+                "selected_runs": selected_runs,
+                "selected_mode": "aisha_premium",
+            }
+        },
+    )
     reset_stop()
     run_aisha_loop(config_path)
     return 0
