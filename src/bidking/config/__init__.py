@@ -5,6 +5,7 @@ from .paths import (
     configs_dir,
     data_dir,
     runtime_path,
+    config_overlay_path,
     pricing_path,
     pricing_map_override_path,
 )
@@ -16,6 +17,7 @@ __all__ = [
     "configs_dir",
     "data_dir",
     "runtime_path",
+    "config_overlay_path",
     "pricing_path",
     "pricing_map_override_path",
     "RuntimeConfig",

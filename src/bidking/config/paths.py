@@ -41,6 +41,11 @@ def runtime_path() -> Path:
     return configs_dir() / "runtime.json"
 
 
+def config_overlay_path() -> Path:
+    """与本机/玩法相关的覆盖配置（窗口、点击、快照路径等），与 :func:`runtime_path` 深合并。"""
+    return configs_dir() / "config.json"
+
+
 def pricing_path() -> Path:
     return configs_dir() / "pricing.json"
 

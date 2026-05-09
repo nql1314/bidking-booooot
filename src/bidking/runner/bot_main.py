@@ -9,7 +9,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from ..config.paths import runtime_path
+from ..config.paths import config_overlay_path
 from ..interaction import _legacy_bot as _bot
 from ._common import configure_logging, install_snapshot_file_writer, load_all
 
@@ -29,7 +29,7 @@ def main(argv: list[str] | None = None) -> None:
     configure_logging(runtime, app_log_path=Path(args.app_log).resolve())
     install_snapshot_file_writer(runtime)
 
-    cfg_path = runtime.source_path or runtime_path()
+    cfg_path = config_overlay_path()
 
     if hasattr(_bot, "run_loop"):
         _bot.run_loop(cfg_path)
