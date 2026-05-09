@@ -47,20 +47,6 @@ def set_map_quality_csv_override(path: Optional[str]) -> None:
     _map_avg_csv.set_map_quality_csv_override(path)
 
 
-def map_skill_total_hidden_cells_from_logs(skill_logs: List[dict]) -> Optional[int]:
-    return _grid_overlay.map_skill_total_hidden_cells_from_logs(skill_logs)
-
-
-def vacant_cells_from_map_skill_total_hidden(
-    skill_logs: List[dict],
-    *,
-    occupied_cell_count: int,
-) -> Optional[int]:
-    return _grid_overlay.vacant_cells_from_map_skill_total_hidden(
-        skill_logs, occupied_cell_count=occupied_cell_count
-    )
-
-
 def map_id_from_board_snapshot(board_snapshot: Dict[str, Any]) -> Optional[int]:
     gs = board_snapshot.get("game_state")
     mid = None
@@ -330,16 +316,16 @@ def compute_items_total_and_footprint(
 def build_snapshot_pricing_dict(
     board_snapshot: Dict[str, Any],
     *,
-    total: Optional[float] = None,
     snapshot_path_hint: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     组装 ``board_snapshot.json`` 的 ``pricing`` 字段。
 
     从 ``board_snapshot`` 合并后的有效物品表（``game_state.items`` + ``grid_overlay``）
-    计算 ``total``；测试或覆盖场景可用 ``total=``。
-    有效空置 ``pricing.vacant`` 由 :func:`grid_overlay.resolve_pricing_vacant` 决定（技能 200009
-    优先，否则 ``grid_overlay.vacant``，再否则历史 ``pricing.vacant_geometric``）。
+    计算 ``total``（不做外部覆盖）。
+    有效空置 ``pricing.vacant`` 与快照 ``grid_overlay.vacant`` 同源，由
+    :func:`grid_overlay.vacant_dict_from_board_snapshot` / :func:`grid_overlay.compute_overlay_vacant_dict`
+    统一计算；占位格优先 ``grid_overlay.occupied_cell_bids``。
     """
     game_state_json = board_snapshot.get("game_state") or {}
     skill_logs = list(board_snapshot.get("skill_logs") or [])
@@ -377,16 +363,25 @@ def build_snapshot_pricing_dict(
     computed_total, footprint_sum = compute_items_total_and_footprint(
         snap_full, csv_cells_raw=csv_cells_for_est
     )
-    if total is None:
-        total_f = float(computed_total)
-    else:
-        total_f = float(total)
+    total_f = float(computed_total)
 
-    occ_n = int(max(0, round(footprint_sum)))
-    vacant_num, vacant_geo, vacant_src = _grid_overlay.resolve_pricing_vacant(
+    vb = _grid_overlay.vacant_dict_from_board_snapshot(
         snap_full,
-        occupied_cell_count=occ_n,
     )
+    ec_raw = vb.get("effective_count")
+    if ec_raw is None:
+        vacant_num = 0
+    else:
+        try:
+            vacant_num = max(0, int(ec_raw))
+        except (TypeError, ValueError):
+            vacant_num = 0
+    geo_raw = vb.get("geometric")
+    try:
+        vacant_geo = int(geo_raw) if geo_raw is not None else None
+    except (TypeError, ValueError):
+        vacant_geo = None
+    vacant_src = str(vb.get("source") or "")
 
     u_orange = int(round(float(csv_cells_for_est.get("q5", 0.0))))
     u_gr = int(round(float(csv_cells_for_est.get("q5+q6", 0.0))))

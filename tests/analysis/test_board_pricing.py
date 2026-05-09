@@ -270,18 +270,20 @@ class BoardPricingTests(unittest.TestCase):
         poss = bp._possible_qualities_from_negative_constraints(snap)
         self.assertEqual(poss, frozenset({3}))
 
-    def test_map_skill_total_hidden_cells_from_logs(self) -> None:
+    def test_map_skill_total_hidden_for_overlay_from_raw_pricing(self) -> None:
         logs = [
             {
                 "game_data": {
                     "MapSkillLog": [
-                        {"SkillCid": 200009, "TotalHitBoxIndex": 42},
+                        {"SkillCid": MAP_SKILL_TOTAL_HIDDEN_CELLS, "TotalHitBoxIndex": 42},
                     ]
                 }
             }
         ]
-        self.assertEqual(bp.map_skill_total_hidden_cells_from_logs(logs), 42)
-        self.assertIsNone(bp.map_skill_total_hidden_cells_from_logs([]))
+        raw = build_raw_pricing_dict(map_id=0, skill_logs=logs, snapshot_path_hint=None)
+        self.assertEqual(grid_overlay_mod.map_skill_total_hidden_for_overlay({"raw_pricing": raw}), 42)
+        self.assertIsNone(grid_overlay_mod.map_skill_total_hidden_for_overlay(None))
+        self.assertIsNone(grid_overlay_mod.map_skill_total_hidden_for_overlay({}))
 
     def test_merged_items_applies_overlay_manual_shape(self) -> None:
         """``grid_overlay.manual_shapes`` 在无 shape 时写入定价用外形（w*10+h）。"""
@@ -307,6 +309,43 @@ class BoardPricingTests(unittest.TestCase):
         }
         m = grid_overlay_mod.merged_items_dict(snap)
         self.assertEqual(m["x"]["shape"], 21)
+
+    def test_early_round_vacant_dict_uses_geometry(self) -> None:
+        """无 200009 时：``vacant_dict_from_board_snapshot`` 按几何前缀区计空置（与定价同源）。"""
+        gs = {
+            "uid": "u1",
+            "map_id": 2101,
+            "current_round": 2,
+            "players": {},
+            "items": {
+                "a": {
+                    "uid": "a",
+                    "box_id": 5,
+                    "box_id_confirmed": True,
+                    "shape": 11,
+                    "quality": 5,
+                    "categories": [],
+                    "item_cid": None,
+                    "price": None,
+                    "manual_confirm_item_id": None,
+                    "excluded_categories": [],
+                    "excluded_qualities": [],
+                }
+            },
+            "displayed_event_uids": [],
+            "scan_history": [],
+        }
+        snap = {
+            "game_state": gs,
+            "skill_logs": [],
+            "map_id": 2101,
+            "current_round": 2,
+        }
+        vb = grid_overlay_mod.vacant_dict_from_board_snapshot(snap)
+        self.assertEqual(vb.get("effective_count"), 5)
+        self.assertEqual(vb.get("source"), "geometric_empty_zone")
+        p = bp.build_snapshot_pricing_dict(snap, snapshot_path_hint=None)
+        self.assertEqual(p["vacant"], 5)
 
     def test_map_quality_csv_uses_normalize_map_id_41xx(self) -> None:
         """CSV 仅含 21xx 时，日志 41xx（等价 MapCid）应命中同一行。"""
@@ -355,7 +394,6 @@ class BoardPricingTests(unittest.TestCase):
                         }
                     },
                 },
-                total=100.0,
                 snapshot_path_hint=None,
             )
             self.assertTrue(pricing.get("map_quality_avg_hit"))
@@ -377,8 +415,12 @@ class BoardPricingTests(unittest.TestCase):
                 }
             }
         ]
+        raw = build_raw_pricing_dict(map_id=0, skill_logs=logs, snapshot_path_hint=None)
         self.assertEqual(
-            bp.vacant_cells_from_map_skill_total_hidden(logs, occupied_cell_count=10),
+            grid_overlay_mod.map_skill_hidden_vacant(
+                grid_overlay_mod.map_skill_total_hidden_for_overlay({"raw_pricing": raw}),
+                occupied_cell_count=10,
+            ),
             51,
         )
         gs = {
@@ -397,13 +439,23 @@ class BoardPricingTests(unittest.TestCase):
                 "map_id": 0,
                 "current_round": 5,
             },
-            total=1000.0,
             snapshot_path_hint=None,
         )
         self.assertEqual(p.get("vacant_geometric"), 61)
         self.assertEqual(p.get("vacant_effective_count"), 61)
 
-    def test_build_snapshot_three_position_totals(self) -> None:
+    def test_vacant_from_raw_pricing_when_skill_logs_empty(self) -> None:
+        """``skill_logs`` 已剥离但 ``raw_pricing`` 含 200009 时，仍按总格数 − 占位算空置。"""
+        logs = [
+            {
+                "game_data": {
+                    "MapSkillLog": [
+                        {"SkillCid": MAP_SKILL_TOTAL_HIDDEN_CELLS, "TotalHitBoxIndex": 61},
+                    ]
+                }
+            }
+        ]
+        raw = build_raw_pricing_dict(map_id=0, skill_logs=logs, snapshot_path_hint=None)
         gs = {
             "uid": "u1",
             "map_id": 0,
@@ -419,18 +471,49 @@ class BoardPricingTests(unittest.TestCase):
                 "skill_logs": [],
                 "map_id": 0,
                 "current_round": 5,
-                "grid_overlay": {
-                    "vacant": {
-                        "effective_count": 3,
-                        "geometric": 3,
-                        "source": "test",
-                    }
-                },
+                "raw_pricing": raw,
             },
-            total=1000.0,
             snapshot_path_hint=None,
         )
-        self.assertEqual(p["total"], 1000.0)
+        self.assertEqual(p.get("vacant_source"), "map_skill_total_hidden_minus_occupied")
+        self.assertEqual(p.get("vacant_geometric"), 61)
+        self.assertEqual(p.get("vacant_effective_count"), 61)
+
+    def test_build_snapshot_three_position_totals(self) -> None:
+        """定价重算空置：需有已确认锚点，前缀区内 3 格空则 ``vacant==3``。"""
+        gs = {
+            "uid": "u1",
+            "map_id": 0,
+            "current_round": 5,
+            "players": {},
+            "items": {
+                "a": {
+                    "uid": "a",
+                    "box_id": 3,
+                    "box_id_confirmed": True,
+                    "shape": 11,
+                    "quality": 1,
+                    "categories": [],
+                    "item_cid": None,
+                    "price": None,
+                    "manual_confirm_item_id": None,
+                    "excluded_categories": [],
+                    "excluded_qualities": [],
+                }
+            },
+            "displayed_event_uids": [],
+            "scan_history": [],
+        }
+        p = bp.build_snapshot_pricing_dict(
+            {
+                "game_state": gs,
+                "skill_logs": [],
+                "map_id": 0,
+                "current_round": 5,
+            },
+            snapshot_path_hint=None,
+        )
+        self.assertIn("total", p)
         self.assertIn("points", p)
         self.assertIn("points_floor", p)
         self.assertIn("points_ceiling", p)
@@ -520,8 +603,8 @@ class BoardPricingTests(unittest.TestCase):
             snapshot_path_hint=None,
         )
         snap = {"game_state": gs, "skill_logs": [], "map_id": 0, "current_round": 5, "raw_pricing": raw}
-        p = bp.build_snapshot_pricing_dict(snap, total=1000.0)
-        self.assertEqual(p.get("total"), 1000.0)
+        p = bp.build_snapshot_pricing_dict(snap)
+        self.assertEqual(p.get("total"), 0.0)
 
     def test_build_snapshot_uses_raw_pricing_csv_units(self) -> None:
         snap = {
@@ -530,7 +613,21 @@ class BoardPricingTests(unittest.TestCase):
                 "map_id": 9999,
                 "current_round": 5,
                 "players": {},
-                "items": {},
+                "items": {
+                    "a": {
+                        "uid": "a",
+                        "box_id": 2,
+                        "box_id_confirmed": True,
+                        "shape": 11,
+                        "quality": 1,
+                        "categories": [],
+                        "item_cid": None,
+                        "price": None,
+                        "manual_confirm_item_id": None,
+                        "excluded_categories": [],
+                        "excluded_qualities": [],
+                    }
+                },
                 "displayed_event_uids": [],
                 "scan_history": [],
             },
@@ -545,22 +642,13 @@ class BoardPricingTests(unittest.TestCase):
                 }
             },
         }
-        snap = {
-            **snap,
-            "grid_overlay": {
-                "vacant": {
-                    "effective_count": 2,
-                    "geometric": 2,
-                    "source": "test",
-                }
-            },
-        }
-        p = bp.build_snapshot_pricing_dict(snap, total=1000.0)
+        p = bp.build_snapshot_pricing_dict(snap)
         self.assertEqual(p.get("vacant_unit_all_orange"), 111)
         self.assertEqual(p.get("vacant_unit_gold_red"), 222)
         self.assertEqual(p.get("vacant_unit_all_red"), 333)
         self.assertEqual(p.get("vacant"), 2)
-        self.assertEqual(p.get("est_orange"), 1000 + 2 * 111)
+        t = float(p.get("total") or 0.0)
+        self.assertEqual(p.get("est_orange"), int(round(t + 2 * 111)))
 
 
 if __name__ == "__main__":
