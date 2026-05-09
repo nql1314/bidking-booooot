@@ -16,23 +16,29 @@ if str(SRC) not in sys.path:
 
 from bidking.analysis import _board_pricing as bp
 from bidking.analysis import grid_overlay as grid_overlay_mod
+from bidking.analysis.map_avg_csv import set_map_quality_csv_override
 from bidking.analysis.raw_pricing import build_raw_pricing_dict
+from bidking.analysis.scan_inference import (
+    csv_quality_group_from_possible_set,
+    possible_qualities_from_scan_history,
+    vacant_early_unit_from_exclusions,
+)
 from bidking.parsing.constants import MAP_SKILL_TOTAL_HIDDEN_CELLS
 
 
 class BoardPricingTests(unittest.TestCase):
     def tearDown(self) -> None:
-        bp.set_map_quality_csv_override(None)
+        set_map_quality_csv_override(None)
 
     def test_csv_quality_group_from_possible_set(self) -> None:
-        self.assertIsNone(bp._csv_quality_group_from_possible_set(frozenset()))
+        self.assertIsNone(csv_quality_group_from_possible_set(frozenset()))
         self.assertEqual(
-            bp._csv_quality_group_from_possible_set(frozenset(range(1, 7))),
+            csv_quality_group_from_possible_set(frozenset(range(1, 7))),
             "all",
         )
-        self.assertEqual(bp._csv_quality_group_from_possible_set(frozenset({3})), "q3")
+        self.assertEqual(csv_quality_group_from_possible_set(frozenset({3})), "q3")
         self.assertEqual(
-            bp._csv_quality_group_from_possible_set(frozenset({5, 6})),
+            csv_quality_group_from_possible_set(frozenset({5, 6})),
             "q5+q6",
         )
 
@@ -56,7 +62,7 @@ class BoardPricingTests(unittest.TestCase):
         }
         snap = {"game_state": gs, "pricing": {"total": 1.0}, "skill_logs": []}
         self.assertEqual(
-            bp._possible_qualities_from_negative_constraints(snap),
+            possible_qualities_from_scan_history(snap),
             frozenset(range(1, 7)),
         )
 
@@ -86,7 +92,7 @@ class BoardPricingTests(unittest.TestCase):
             ],
         }
         snap = {"game_state": gs, "pricing": {"total": 1.0}, "skill_logs": []}
-        poss = bp._possible_qualities_from_negative_constraints(snap)
+        poss = possible_qualities_from_scan_history(snap)
         self.assertEqual(poss, frozenset({5, 6}))
 
     def test_possible_qualities_quality_scan_same_value_last_overwrites(self) -> None:
@@ -112,7 +118,7 @@ class BoardPricingTests(unittest.TestCase):
             ],
         }
         snap = {"game_state": gs, "pricing": {"total": 1.0}, "skill_logs": []}
-        poss = bp._possible_qualities_from_negative_constraints(snap)
+        poss = possible_qualities_from_scan_history(snap)
         self.assertEqual(poss, frozenset({1, 2, 4, 5, 6}))
 
     def test_possible_qualities_no_quality_scans_is_all(self) -> None:
@@ -136,9 +142,9 @@ class BoardPricingTests(unittest.TestCase):
         }
         snap = {"game_state": gs, "pricing": {"total": 1.0}, "skill_logs": []}
         all_q = frozenset(range(1, 7))
-        poss = bp._possible_qualities_from_negative_constraints(snap)
+        poss = possible_qualities_from_scan_history(snap)
         self.assertEqual(poss, all_q)
-        self.assertEqual(bp._csv_quality_group_from_possible_set(poss), "all")
+        self.assertEqual(csv_quality_group_from_possible_set(poss), "all")
 
     def test_possible_qualities_scan_only_q56(self) -> None:
         """仅 scan_history：未知 uid 未出现在 1–4 档 hit → 仍可能 5、6。"""
@@ -165,9 +171,9 @@ class BoardPricingTests(unittest.TestCase):
             ],
         }
         snap = {"game_state": gs, "pricing": {"total": 1.0}, "skill_logs": []}
-        poss = bp._possible_qualities_from_negative_constraints(snap)
+        poss = possible_qualities_from_scan_history(snap)
         self.assertEqual(poss, frozenset({5, 6}))
-        self.assertEqual(bp._csv_quality_group_from_possible_set(poss), "q5+q6")
+        self.assertEqual(csv_quality_group_from_possible_set(poss), "q5+q6")
 
     def test_vacant_early_unit_csv_miss_is_zero(self) -> None:
         gs = {
@@ -193,7 +199,7 @@ class BoardPricingTests(unittest.TestCase):
             ],
         }
         snap = {"game_state": gs, "pricing": {"total": 1.0}, "skill_logs": []}
-        unit, qg, _ = bp._vacant_early_unit_from_exclusions(
+        unit, qg, _ = vacant_early_unit_from_exclusions(
             board_snapshot=snap,
             csv_cells_raw={"q3": 99.0},
             pricing={},
@@ -226,7 +232,7 @@ class BoardPricingTests(unittest.TestCase):
         }
         snap = {"game_state": gs, "pricing": {"total": 1.0}, "skill_logs": []}
         raw = {"q5+q6": 1234.56}
-        unit, qg, _ = bp._vacant_early_unit_from_exclusions(
+        unit, qg, _ = vacant_early_unit_from_exclusions(
             board_snapshot=snap,
             csv_cells_raw=raw,
             pricing={},
@@ -267,7 +273,7 @@ class BoardPricingTests(unittest.TestCase):
             ],
         }
         snap = {"game_state": gs, "pricing": {"total": 1000.0}, "skill_logs": []}
-        poss = bp._possible_qualities_from_negative_constraints(snap)
+        poss = possible_qualities_from_scan_history(snap)
         self.assertEqual(poss, frozenset({3}))
 
     def test_map_skill_total_hidden_for_overlay_from_raw_pricing(self) -> None:
@@ -379,7 +385,7 @@ class BoardPricingTests(unittest.TestCase):
             w.writerow({**base, "quality_group": "q5+q6", "avg_price_per_cell": "222"})
             w.writerow({**base, "quality_group": "q6", "avg_price_per_cell": "333"})
         try:
-            bp.set_map_quality_csv_override(path)
+            set_map_quality_csv_override(path)
             pricing = bp.build_snapshot_pricing_dict(
                 {
                     "game_state": {"map_id": 4101, "current_round": 4, "items": {}},
@@ -401,7 +407,7 @@ class BoardPricingTests(unittest.TestCase):
             self.assertEqual(pricing.get("vacant_unit_gold_red"), 222)
             self.assertEqual(pricing.get("vacant_unit_all_red"), 333)
         finally:
-            bp.set_map_quality_csv_override(None)
+            set_map_quality_csv_override(None)
             Path(path).unlink(missing_ok=True)
 
     def test_vacant_200009_total_minus_board_occupied(self) -> None:
@@ -521,6 +527,33 @@ class BoardPricingTests(unittest.TestCase):
         self.assertIn("est_gold_red", p)
         self.assertIn("est_red", p)
         self.assertEqual(p["vacant"], 3)
+
+    def test_ahmad_points_from_event_stats(self) -> None:
+        """``pricing.ahmad_points`` 由 ``raw_pricing.event_stats`` 简单公式汇总。"""
+        gs = {
+            "uid": "u1",
+            "map_id": 0,
+            "current_round": 5,
+            "players": {},
+            "items": {},
+            "displayed_event_uids": [],
+            "scan_history": [],
+        }
+        raw = {
+            "csv_quality_groups_avg_per_cell": {"q5": 1.0, "q5+q6": 1.0, "q6": 1.0},
+            "event_stats": {
+                "total_count": 20,
+                "q4_grid_min": 5,
+                "q5_grid_min": None,
+                "q6_grid_min": None,
+            },
+        }
+        p = bp.build_snapshot_pricing_dict(
+            {"game_state": gs, "skill_logs": [], "map_id": 0, "current_round": 5, "raw_pricing": raw},
+            snapshot_path_hint=None,
+        )
+        # 20*1000 + 5*1000 + 0 + 0
+        self.assertEqual(p.get("ahmad_points"), 25000)
 
     def test_raw_pricing_contains_requested_event_stats(self) -> None:
         gs = {

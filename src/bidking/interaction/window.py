@@ -266,7 +266,11 @@ def capture_window_frame(config: dict[str, Any]) -> tuple[Image.Image, WindowInf
 def crop_central_info_from_image(image: Image.Image, config: dict[str, Any]) -> tuple[Image.Image, tuple[int, int, int, int]]:
     window_config = config.get("window", {})
     reference = window_config.get("reference_client_size", {})
-    region = config["capture"]["central_info_region"]
+    cap = config.get("capture") or {}
+    region = cap.get("central_info_region")
+    if not isinstance(region, dict) or not region:
+        w, h = image.width, image.height
+        return image, (0, 0, w, h)
     x, y, width, height = scale_rect(region, reference, image.width, image.height)
     right = min(image.width, max(0, x + width))
     bottom = min(image.height, max(0, y + height))
@@ -631,7 +635,7 @@ def main() -> int:
         image, info, crop_rect = crop_central_info(config)
         payload = {
             "ok": True,
-            "capture_mode": "central_info",
+            "capture_mode": "client_or_full",
             "output": "",
             "window": info.__dict__,
             "crop_rect": list(crop_rect),
