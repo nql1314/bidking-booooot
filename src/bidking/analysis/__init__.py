@@ -16,7 +16,7 @@
 ``build_snapshot_pricing_dict``，第 4 层 ``pricing.aisha`` 可直接消费。
 """
 
-from . import map_avg_csv, quality_stats, scan_inference, snapshot, unknown_value, vacant
+from . import map_avg_csv, quality_stats, raw_pricing, scan_inference, snapshot, unknown_value, vacant
 from .snapshot import (
     build_board_snapshot,
     game_state_from_json,
@@ -30,6 +30,7 @@ from ._board_pricing import (
     current_round_from_board_snapshot,
     map_id_from_board_snapshot,
 )
+from .raw_pricing import build_raw_pricing_dict
 
 __all__ = [
     "snapshot",
@@ -38,6 +39,8 @@ __all__ = [
     "scan_inference",
     "unknown_value",
     "map_avg_csv",
+    "raw_pricing",
+    "build_raw_pricing_dict",
     "build_board_snapshot",
     "build_snapshot_pricing_dict",
     "compute_aisha_bid_from_board_snapshot",

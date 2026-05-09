@@ -8,16 +8,17 @@
 
 from __future__ import annotations
 
-import csv
 import math
-import os
-import re
-from collections import defaultdict
 from decimal import Decimal
 from fractions import Fraction
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from ..parsing import item_db
+from . import map_avg_csv as _map_avg_csv
+from . import quality_stats as _quality_stats
+from . import scan_inference as _scan_inference
+from . import unknown_value as _unknown_value
+from . import vacant as _vacant
 from ..parsing.constants import (
     MAP_SKILL_AVG_GOLD_CELLS,
     MAP_SKILL_AVG_GOLD_PRICE,
@@ -29,7 +30,6 @@ from ..parsing.constants import (
     MAP_SKILL_RANDOM9_AVG_PRICE,
     MAP_SKILL_RED_ITEM_COUNT,
     MAP_SKILL_TOTAL_GOLD_CELLS,
-    MAP_SKILL_TOTAL_HIDDEN_CELLS,
     MAP_SKILL_TOTAL_RED_CELLS,
 )
 GRID_COLS = 10
@@ -42,18 +42,6 @@ _MS_RND_AVG = (
     MAP_SKILL_RANDOM9_AVG_PRICE,
 )
 
-_DEFAULT_UNIT_Q234 = 874.5672
-_DEFAULT_UNIT_Q34 = 1275.0056
-_DEFAULT_UNIT_Q4 = 2444.4747
-_DEFAULT_UNIT_Q5_Q6 = 10916.9326
-_DEFAULT_UNIT_Q5 = 9587.4375
-_DEFAULT_UNIT_Q6 = 64551.3821
-
-# 地图 CSV 缺行时按品质的格均价回退（与 map_quality_avg_out 典型量级一致）
-_DEFAULT_AVG_CELL_Q1 = 118.4634
-_DEFAULT_AVG_CELL_Q2 = 291.5937
-_DEFAULT_AVG_CELL_Q3 = 917.4746
-
 ITEM_PRICES_CSV_RELPATHS = (
     ("..", "..", "..", "data", "item_prices.csv"),
     ("..", "..", "data", "item_prices.csv"),
@@ -61,159 +49,9 @@ ITEM_PRICES_CSV_RELPATHS = (
 
 _item_prices_cache: Optional[Tuple[Dict[int, Any], List[Any]]] = None
 
-VACANT_UNIT_ALL_ORANGE = 10_000
-VACANT_UNIT_GOLD_RED = 17_000
-VACANT_UNIT_ALL_RED = 56_000
-
-_map_quality_cells_cache: Optional[Dict[int, Dict[str, float]]] = None
-_map_quality_blends_cache: Optional[Dict[int, Dict[str, float]]] = None
-_map_quality_csv_override: Optional[str] = None
-
-
 def set_map_quality_csv_override(path: Optional[str]) -> None:
-    """测试或自定义报表路径时调用；``None`` 恢复默认候选解析。"""
-    global _map_quality_cells_cache, _map_quality_blends_cache, _map_quality_csv_override
-    _map_quality_csv_override = path
-    _map_quality_cells_cache = None
-    _map_quality_blends_cache = None
-
-
-def _map_quality_csv_candidates(snapshot_path_hint: Optional[str] = None) -> List[str]:
-    out: List[str] = []
-    if _map_quality_csv_override and os.path.isfile(_map_quality_csv_override):
-        return [_map_quality_csv_override]
-    snap = (snapshot_path_hint or "").strip()
-    if snap:
-        out.append(
-            os.path.normpath(
-                os.path.join(os.path.dirname(snap), "data", "map_quality_avg_out.csv")
-            )
-        )
-    try:
-        here = os.path.dirname(os.path.abspath(__file__))
-        out.append(
-            os.path.normpath(
-                os.path.join(here, "..", "..", "..", "data", "map_quality_avg_out.csv")
-            )
-        )
-    except Exception:
-        pass
-    return out
-
-
-def map_quality_csv_path_resolved(snapshot_path_hint: Optional[str] = None) -> str:
-    for p in _map_quality_csv_candidates(snapshot_path_hint):
-        if p and os.path.isfile(p):
-            return p
-    cands = _map_quality_csv_candidates(snapshot_path_hint)
-    return cands[0] if cands else ""
-
-
-def load_map_quality_cells_by_map_id(snapshot_path_hint: Optional[str] = None) -> Dict[int, Dict[str, float]]:
-    global _map_quality_cells_cache
-    if _map_quality_csv_override is None and _map_quality_cells_cache is not None:
-        return _map_quality_cells_cache
-    tab: Dict[int, Dict[str, float]] = {}
-    path = map_quality_csv_path_resolved(snapshot_path_hint)
-    if path and os.path.isfile(path):
-        try:
-            with open(path, encoding="utf-8-sig", newline="") as f:
-                for row in csv.DictReader(f):
-                    try:
-                        mid = int(row["map_id"])
-                        qg = str(row["quality_group"]).strip()
-                        cell = float(row["avg_price_per_cell"])
-                    except (KeyError, TypeError, ValueError):
-                        continue
-                    tab.setdefault(mid, {})[qg] = cell
-        except OSError:
-            tab = {}
-    if _map_quality_csv_override is None:
-        _map_quality_cells_cache = tab
-    return tab
-
-
-def load_map_quality_blends_by_map_id(snapshot_path_hint: Optional[str] = None) -> Dict[int, Dict[str, float]]:
-    global _map_quality_blends_cache
-    if _map_quality_csv_override is None and _map_quality_blends_cache is not None:
-        return _map_quality_blends_cache
-    groups: Dict[Tuple[int, str, str], List[Tuple[str, float, float, float]]] = defaultdict(list)
-    path = map_quality_csv_path_resolved(snapshot_path_hint)
-    if not path or not os.path.isfile(path):
-        out: Dict[int, Dict[str, float]] = {}
-        if _map_quality_csv_override is None:
-            _map_quality_blends_cache = out
-        return out
-    with open(path, encoding="utf-8-sig", newline="") as f:
-        for row in csv.DictReader(f):
-            try:
-                mid = int(row["map_id"])
-                qg = str(row["quality_group"]).strip()
-                cell = float(row["avg_price_per_cell"])
-                pit = float(row["avg_price_per_item"])
-                prob = float(row["prob_in_group"])
-            except (KeyError, TypeError, ValueError):
-                continue
-            tier = str(row.get("tier") or "")
-            nest = str(row.get("nest_drop_id") or "")
-            groups[(mid, tier, nest)].append((qg, cell, pit, prob))
-
-    out: Dict[int, Dict[str, float]] = {}
-    for mid in {k[0] for k in groups}:
-        best: Optional[Tuple[int, Dict[str, float]]] = None
-        for key, lst in groups.items():
-            if key[0] != mid:
-                continue
-            by_qg: Dict[str, Tuple[float, float, float]] = {}
-            for qg, cell, pit, prob in lst:
-                by_qg[qg] = (cell, pit, prob)
-            if "q2" not in by_qg or "q3" not in by_qg:
-                continue
-            q2c, _, q2p = by_qg["q2"]
-            q3c, q3i, q3p = by_qg["q3"]
-            denom = q2p + q3p
-            q23_cell = (q2p * q2c + q3p * q3c) / denom if denom > 0 else (q2c + q3c) / 2
-            q5_item = by_qg["q5"][1] if "q5" in by_qg else 0.0
-            q6_item = by_qg["q6"][1] if "q6" in by_qg else 0.0
-            score = 2 if "q4" in by_qg else (1 if "q5" in by_qg else 0)
-            chunk = {
-                "q2+q3_cell": float(q23_cell),
-                "q3_cell": float(q3c),
-                "q5_item": float(q5_item),
-                "q6_item": float(q6_item),
-            }
-            if best is None or score > best[0]:
-                best = (score, chunk)
-        if best is not None:
-            out[mid] = best[1]
-    if _map_quality_csv_override is None:
-        _map_quality_blends_cache = out
-    return out
-
-
-def vacant_unit_prices_for_map_id(
-    map_id: int, snapshot_path_hint: Optional[str] = None
-) -> Tuple[int, int, int, bool]:
-    tab = load_map_quality_cells_by_map_id(snapshot_path_hint)
-    if map_id <= 0:
-        return VACANT_UNIT_ALL_ORANGE, VACANT_UNIT_GOLD_RED, VACANT_UNIT_ALL_RED, False
-    mid_csv = item_db.normalize_map_id(map_id)
-    cells = tab.get(mid_csv) if mid_csv is not None else None
-    if not cells:
-        return VACANT_UNIT_ALL_ORANGE, VACANT_UNIT_GOLD_RED, VACANT_UNIT_ALL_RED, False
-
-    def pick(qg: str, default: int) -> int:
-        v = cells.get(qg)
-        if v is None:
-            return default
-        return int(round(float(v)))
-
-    return (
-        pick("q5", VACANT_UNIT_ALL_ORANGE),
-        pick("q5+q6", VACANT_UNIT_GOLD_RED),
-        pick("q6", VACANT_UNIT_ALL_RED),
-        True,
-    )
+    """兼容入口，转发到 ``analysis.map_avg_csv``。"""
+    _map_avg_csv.set_map_quality_csv_override(path)
 
 
 def _merge_latest_map_skill_entries(skill_logs: List[dict]) -> Dict[int, dict]:
@@ -237,18 +75,7 @@ def _merge_latest_map_skill_entries(skill_logs: List[dict]) -> Dict[int, dict]:
 
 
 def map_skill_total_hidden_cells_from_logs(skill_logs: List[dict]) -> Optional[int]:
-    """
-    地图技能 200009「所有藏品格数」：取各 SkillCid 最新一条的占用格总数。
-    与 ``grid_view`` 空置区、``pricing.vacant`` 一致；无有效数据时返回 ``None``。
-
-    有有效总数时，空置格可取 **收藏总格数 − 画板已有物品占位格数**（见
-    ``vacant_cells_from_map_skill_total_hidden``）。
-    """
-    ent = _merge_latest_map_skill_entries(skill_logs or []).get(MAP_SKILL_TOTAL_HIDDEN_CELLS)
-    if not ent:
-        return None
-    v = _ms_int_field(ent, "TotalHitBoxIndex", "HitItemIndex")
-    return v if v is not None and v > 0 else None
+    return _vacant.map_skill_total_hidden_cells_from_logs(skill_logs)
 
 
 def vacant_cells_from_map_skill_total_hidden(
@@ -256,59 +83,9 @@ def vacant_cells_from_map_skill_total_hidden(
     *,
     occupied_cell_count: int,
 ) -> Optional[int]:
-    """
-    地图技能 200009 已揭示时：空置格 = 收藏总格数 − 画板已有物品占位格数。
-
-    无 200009 或总数无效时返回 ``None``（调用方继续用几何空置区 / 诈骗格等路径）。
-    """
-    total_h = map_skill_total_hidden_cells_from_logs(skill_logs)
-    if total_h is None:
-        return None
-    try:
-        occ = int(occupied_cell_count)
-    except (TypeError, ValueError):
-        occ = 0
-    occ = max(0, occ)
-    return max(0, total_h - occ)
-
-
-def _ms_int_field(entry: dict, *keys: str) -> Optional[int]:
-    for k in keys:
-        v = entry.get(k)
-        if v is None:
-            continue
-        try:
-            return int(v)
-        except (TypeError, ValueError):
-            continue
-    return None
-
-
-def _ms_float_field(entry: dict, *keys: str) -> Optional[float]:
-    for k in keys:
-        v = entry.get(k)
-        if v is None:
-            continue
-        try:
-            return float(v)
-        except (TypeError, ValueError):
-            continue
-    return None
-
-
-def _min_total_cells_from_avg_per_item_ui(avg: float) -> int:
-    if avg <= 0 or avg != avg:
-        return 0
-    max_cells = GRID_COLS * GRID_ROWS
-    try:
-        fr = Fraction(Decimal(str(avg))).limit_denominator(512)
-    except (ArithmeticError, ValueError, TypeError):
-        try:
-            fr = Fraction(avg).limit_denominator(512)
-        except (ArithmeticError, ValueError, TypeError):
-            return max(0, min(int(round(avg)), max_cells))
-    return max(0, min(fr.numerator, max_cells))
-
+    return _vacant.vacant_cells_from_map_skill_total_hidden(
+        skill_logs, occupied_cell_count=occupied_cell_count
+    )
 
 def _shape_wh_from_snapshot(shape: Any) -> Tuple[int, int]:
     if shape is None:
@@ -333,99 +110,12 @@ def _item_occupied_cells(box_id: int, shape: Any) -> set:
     return cells
 
 
-def _confirmed_items_from_snapshot(board_snapshot: Dict[str, Any]) -> List[dict]:
-    raw = (board_snapshot.get("game_state") or {}).get("items") or {}
-    out: List[dict] = []
-    for _uid, it in raw.items():
-        if not isinstance(it, dict) or not it.get("box_id_confirmed"):
-            continue
-        bid = it.get("box_id")
-        if bid is None:
-            continue
-        try:
-            int(bid)
-        except (TypeError, ValueError):
-            continue
-        out.append(it)
-    return out
-
-
-def _items_dict_from_snapshot(board_snapshot: Dict[str, Any]) -> Dict[str, Any]:
-    raw = (board_snapshot.get("game_state") or {}).get("items") or {}
-    return raw if isinstance(raw, dict) else {}
-
-
 def _early_round_vacant_metrics(board_snapshot: Dict[str, Any]) -> Dict[str, Any]:
-    items = _confirmed_items_from_snapshot(board_snapshot)
-    if not items:
-        return {
-            "max_anchor_box_id": -1,
-            "vacant_round_1_2": 0,
-            "vacant_round_3": 0,
-            "round_3_anchor_floor_exclusive": 0,
-            "known_quality_cell_count": 0,
-            "all_occupied_cell_count": 0,
-        }
-
-    # 与画板占位一致的几何并集；上届仍为已确认物品的最大锚点。
-    all_occ = _board_display_occupied_cells_from_snapshot(board_snapshot)
-    max_anchor = max(int(it["box_id"]) for it in items)
-
-    known_cells: set = set()
-    for it in items:
-        cells = _occupied_cells_item_board_display(it, board_snapshot)
-        q = it.get("quality")
-        if q is None:
-            continue
-        try:
-            int(q)
-        except (TypeError, ValueError):
-            continue
-        known_cells |= cells
-
-    span_hi = min(max_anchor, GRID_MAX_BOX_ID)
-    vacant_12 = 0
-    if span_hi >= 0:
-        for b in range(span_hi + 1):
-            r, c = b // GRID_COLS, b % GRID_COLS
-            if (r, c) not in all_occ:
-                vacant_12 += 1
-
-    r3_cap = (max_anchor // 10) * 10 if max_anchor >= 0 else 0
-    vacant_3 = 0
-    r3_hi = min(r3_cap, GRID_MAX_BOX_ID + 1)
-    for b in range(r3_hi):
-        r, c = b // GRID_COLS, b % GRID_COLS
-        if (r, c) not in all_occ:
-            vacant_3 += 1
-
-    return {
-        "max_anchor_box_id": max_anchor,
-        "vacant_round_1_2": vacant_12,
-        "vacant_round_3": vacant_3,
-        "round_3_anchor_floor_exclusive": r3_cap,
-        "known_quality_cell_count": len(known_cells),
-        "all_occupied_cell_count": len(all_occ),
-    }
+    return _vacant.early_round_vacant_metrics(board_snapshot)
 
 
 def _scam_span_vacant_deduction(board_snapshot: Dict[str, Any]) -> int:
-    items = _confirmed_items_from_snapshot(board_snapshot)
-    if not items:
-        return 1
-    all_occ = _board_display_occupied_cells_from_snapshot(board_snapshot)
-    max_anchor = max(int(it["box_id"]) for it in items)
-    if max_anchor < 0:
-        return 1
-    col = max_anchor % GRID_COLS
-    span_lo = max(0, max_anchor - col - GRID_COLS)
-    span_hi = min(max_anchor, GRID_MAX_BOX_ID)
-    n = 0
-    for b in range(span_lo, span_hi + 1):
-        r, c = b // GRID_COLS, b % GRID_COLS
-        if (r, c) not in all_occ:
-            n += 1
-    return n
+    return _vacant.scam_span_vacant_deduction(board_snapshot)
 
 
 def _sum_quality_footprint_cells(
@@ -436,77 +126,21 @@ def _sum_quality_footprint_cells(
     pricing: Optional[Dict[str, Any]] = None,
     map_id_normalized: Optional[int] = None,
 ) -> int:
-    """
-    某品质在地图上的占用格总数：已揭示 ``shape`` → w×h；
-    金/红（q5/q6）且无日志形状时，用「权重总价 / 该品质格均价」的等价格数（与空置加权扣减一致）；
-    其余未知轮廓按 1 格计。
-    """
-    n = 0
-    use_weighted_gr = (
-        quality in (5, 6)
-        and csv_cells_raw is not None
-        and pricing is not None
+    return _quality_stats.sum_quality_footprint_cells(
+        board_snapshot,
+        quality,
+        csv_cells_raw=csv_cells_raw,
+        pricing=pricing,
+        map_id_normalized=map_id_normalized,
     )
-    for _uid, it in _items_dict_from_snapshot(board_snapshot).items():
-        if not isinstance(it, dict):
-            continue
-        q = it.get("quality")
-        try:
-            if int(q) != quality:
-                continue
-        except (TypeError, ValueError):
-            continue
-        shape = it.get("shape")
-        if shape is not None:
-            w, h = _shape_wh_from_snapshot(shape)
-            n += w * h
-        elif use_weighted_gr:
-            w_eq = _weighted_cell_equiv_for_unknown_contour_item(
-                it,
-                board_snapshot,
-                csv_cells_raw,
-                pricing,
-                map_id_normalized,
-            )
-            if w_eq is not None:
-                n += max(1, int(round(w_eq)))
-            else:
-                n += 1
-        else:
-            n += 1
-    return n
 
 
 def _count_quality_items_all(board_snapshot: Dict[str, Any], quality: int) -> int:
-    k = 0
-    for _uid, it in _items_dict_from_snapshot(board_snapshot).items():
-        if not isinstance(it, dict):
-            continue
-        q = it.get("quality")
-        try:
-            if int(q) == quality:
-                k += 1
-        except (TypeError, ValueError):
-            continue
-    return k
+    return _quality_stats.count_quality_items_all(board_snapshot, quality)
 
 
 def _quality_has_unconfirmed_contour(board_snapshot: Dict[str, Any], quality: int) -> bool:
-    raw = (board_snapshot.get("game_state") or {}).get("items") or {}
-    for _uid, it in raw.items():
-        if not isinstance(it, dict):
-            continue
-        q = it.get("quality")
-        try:
-            if int(q) != quality:
-                continue
-        except (TypeError, ValueError):
-            continue
-        if not it.get("box_id_confirmed"):
-            return True
-        if it.get("shape") is None:
-            return True
-    return False
+    return _quality_stats.quality_has_unconfirmed_contour(board_snapshot, quality)
 
 
 def _map_skill_gold_red_suppressed_for_ambiguous_contour(
@@ -605,130 +239,13 @@ def _vacant_cell_unit(
     quality_group: str,
     pricing: Dict[str, Any],
     pricing_key: str,
-    default: float,
 ) -> int:
     if csv_by_group and quality_group in csv_by_group:
         return int(round(csv_by_group[quality_group]))
     raw = pricing.get(pricing_key)
     if raw is not None:
         return int(round(float(raw)))
-    return int(round(default))
-
-
-def _item_prices_csv_path_resolved() -> str:
-    here = os.path.dirname(os.path.abspath(__file__))
-    for parts in ITEM_PRICES_CSV_RELPATHS:
-        p = os.path.normpath(os.path.join(here, *parts))
-        if os.path.isfile(p):
-            return p
-    return ""
-
-
-def _load_item_prices_db() -> Tuple[Dict[int, Any], List[Any]]:
-    global _item_prices_cache
-    if _item_prices_cache is not None:
-        return _item_prices_cache
-    path = _item_prices_csv_path_resolved()
-    if not path:
-        _item_prices_cache = ({}, [])
-        return _item_prices_cache
-    try:
-        _item_prices_cache = item_db.load_csv(path)
-    except OSError:
-        _item_prices_cache = ({}, [])
-    return _item_prices_cache
-
-
-def _avg_cell_price_for_quality(
-    quality: int,
-    csv_cells_raw: Optional[Dict[str, float]],
-    pricing: Dict[str, Any],
-) -> float:
-    key = f"q{quality}"
-    if csv_cells_raw and key in csv_cells_raw:
-        return float(csv_cells_raw[key])
-    pk = f"vacant_unit_q{quality}"
-    raw = pricing.get(pk)
-    if raw is not None:
-        try:
-            return float(raw)
-        except (TypeError, ValueError):
-            pass
-    defaults = {
-        1: _DEFAULT_AVG_CELL_Q1,
-        2: _DEFAULT_AVG_CELL_Q2,
-        3: _DEFAULT_AVG_CELL_Q3,
-        4: _DEFAULT_UNIT_Q4,
-        5: _DEFAULT_UNIT_Q5,
-        6: _DEFAULT_UNIT_Q6,
-    }
-    return float(defaults.get(quality, _DEFAULT_UNIT_Q234))
-
-
-def _int_set_from_snapshot_field(raw: Any) -> Set[int]:
-    out: Set[int] = set()
-    if not isinstance(raw, list):
-        return out
-    for x in raw:
-        try:
-            out.add(int(x))
-        except (TypeError, ValueError):
-            continue
-    return out
-
-
-def _weighted_cell_equiv_for_unknown_contour_item(
-    it: Dict[str, Any],
-    board_snapshot: Dict[str, Any],
-    csv_cells_raw: Optional[Dict[str, float]],
-    pricing: Dict[str, Any],
-    map_id_normalized: Optional[int],
-) -> Optional[float]:
-    """
-    无日志 shape、已确认锚点：权重总价（或唯一候选原价）/ 该品质地图格均价 ⇒ 等价格数。
-    """
-    _ = board_snapshot
-    if not it.get("box_id_confirmed") or it.get("shape") is not None:
-        return None
-    csv_index, csv_items = _load_item_prices_db()
-    if not csv_items:
-        return None
-    try:
-        q = int(it["quality"])
-    except (KeyError, TypeError, ValueError):
-        return None
-    if q < 1 or q > 6:
-        return None
-    try:
-        cid_raw = it.get("item_cid")
-        item_cid_i = int(cid_raw) if cid_raw is not None else None
-    except (TypeError, ValueError):
-        item_cid_i = None
-    categories = _int_set_from_snapshot_field(it.get("categories"))
-    excl_q = _int_set_from_snapshot_field(it.get("excluded_qualities"))
-    excl_c = _int_set_from_snapshot_field(it.get("excluded_categories"))
-
-    best, count, unique, est, _ql = item_db.query_item(
-        shape=None,
-        quality=q,
-        categories=categories,
-        item_cid=item_cid_i,
-        csv_index=csv_index,
-        csv_items=csv_items,
-        excluded_categories=excl_c if excl_c else None,
-        excluded_qualities=excl_q if excl_q else None,
-        max_shape_wh=None,
-        map_category_weights=None,
-        map_id=map_id_normalized,
-    )
-    if best is None or count == 0:
-        return None
-    price = float(est) if est is not None else float(best.base_value)
-    u_cell = _avg_cell_price_for_quality(q, csv_cells_raw, pricing)
-    if u_cell <= 0:
-        return None
-    return price / u_cell
-
+    return 0
 
 def _unknown_contour_vacant_weighted_excess(
     board_snapshot: Dict[str, Any],
@@ -736,164 +253,33 @@ def _unknown_contour_vacant_weighted_excess(
     pricing: Dict[str, Any],
     map_id_normalized: Optional[int],
 ) -> Tuple[float, Dict[str, Any]]:
-    """
-    未知轮廓（无日志 shape）物品：权重总价 / 该品质地图格均价 ≈ 等价占位格数 w；
-    画板几何仅占锚格 1×1，线性空置中多算的部分为 max(0, w-1)。
-    返回所有此类物品的 sum(max(0,w-1))，供从 vac_n 扣除（类金红 vac_n_linear 扣格）。
-    """
-    csv_index, csv_items = _load_item_prices_db()
-    if not csv_items:
-        return 0.0, {}
-
-    raw_items = _items_dict_from_snapshot(board_snapshot)
-    per_item: List[Dict[str, Any]] = []
-    total_excess = 0.0
-    n_uc = 0
-
-    for uid, it in raw_items.items():
-        if not isinstance(it, dict):
-            continue
-        if not it.get("box_id_confirmed"):
-            continue
-        if it.get("shape") is not None:
-            continue
-        try:
-            q = int(it["quality"])
-        except (KeyError, TypeError, ValueError):
-            continue
-        if q < 1 or q > 6:
-            continue
-        n_uc += 1
-
-        w_cells = _weighted_cell_equiv_for_unknown_contour_item(
-            it,
-            board_snapshot,
-            csv_cells_raw,
-            pricing,
-            map_id_normalized,
-        )
-        if w_cells is None:
-            continue
-        price = w_cells * _avg_cell_price_for_quality(q, csv_cells_raw, pricing)
-        ex = max(0.0, w_cells - 1.0)
-        total_excess += ex
-        if len(per_item) < 48:
-            per_item.append(
-                {
-                    "uid": str(uid),
-                    "quality": q,
-                    "price_used": round(price, 4),
-                    "price_label": "weighted_equiv",
-                    "avg_cell_unit": round(_avg_cell_price_for_quality(q, csv_cells_raw, pricing), 4),
-                    "weighted_cell_equiv": round(w_cells, 6),
-                    "excess_over_one_cell": round(ex, 6),
-                }
-            )
-
-    if n_uc == 0:
-        return 0.0, {}
-
-    return total_excess, {
-        "early_unknown_contour_vacant_linear_adjust": True,
-        "unknown_contour_items": n_uc,
-        "weighted_cell_excess_sum": round(total_excess, 6),
-        "detail_per_item": per_item,
-    }
-
-
-def _quality_scan_hit_uids_by_value_from_snapshot(
-    board_snapshot: Dict[str, Any],
-) -> Dict[int, frozenset[str]]:
-    """
-    解析 ``game_state.scan_history`` 中 ``scan_type == quality`` 的记录。
-
-    同一 ``value`` 出现多次时取**最后一条**（与对局内追加顺序一致）。未出现过的品质档位不做键，
-    表示该档尚未通过「品质扫描」否定任何物品。
-    """
-    gs = board_snapshot.get("game_state")
-    if not isinstance(gs, dict):
-        return {}
-    rows = gs.get("scan_history") or []
-    if not isinstance(rows, list):
-        return {}
-    last: Dict[int, frozenset[str]] = {}
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        st = str(row.get("scan_type") or "").strip().lower()
-        if st != "quality":
-            continue
-        try:
-            v = int(row.get("value"))
-        except (TypeError, ValueError):
-            continue
-        if v < 1 or v > 6:
-            continue
-        hit_uids = row.get("hit_uids") or []
-        if not isinstance(hit_uids, list):
-            continue
-        last[v] = frozenset(str(x) for x in hit_uids)
-    return last
+    return _unknown_value.unknown_contour_vacant_weighted_excess(
+        board_snapshot, csv_cells_raw, pricing, map_id_normalized
+    )
 
 
 def _possible_qualities_from_scan_history(board_snapshot: Dict[str, Any]) -> frozenset[int]:
-    """
-    仅使用 ``game_state.scan_history`` 中的 ``quality`` 记录推断**空格（空置格）**仍可能的品质集合；
-    不读取 ``items`` 等其它对象。
-
-    某档位 ``v`` 一旦出现品质扫描记录（同一 ``value`` 多条时取最后一条，见
-    ``_quality_scan_hit_uids_by_value_from_snapshot``），则空格不可能是该档：空 ``hit_uids`` 表示该档在板上
-    无对应物件；非空时命中仅含已有 uid，空格无 uid，故不可能等于已用扫描「钉死」过该档的情形。
-
-    从未在 ``scan_history`` 中出现品质扫描的档位仍可能为空格品质。无 ``quality`` 扫描记录时返回全集
-    ``{1,…,6}``（对应 CSV 键 ``all``）。
-    """
-    quality_hits = _quality_scan_hit_uids_by_value_from_snapshot(board_snapshot)
-    all_q = frozenset(range(1, 7))
-    if not quality_hits:
-        return all_q
-    scanned_v = frozenset(v for v in quality_hits if 1 <= v <= 6)
-    return frozenset(q for q in all_q if q not in scanned_v)
+    return _scan_inference.possible_qualities_from_scan_history(board_snapshot)
 
 
 _possible_qualities_from_negative_constraints = _possible_qualities_from_scan_history
 
 
 def _csv_quality_group_from_possible_set(possible: frozenset[int]) -> Optional[str]:
-    """
-    将全局仍可能品质集合映射为 ``map_quality_avg_out.csv`` 中的 ``quality_group`` 键。
-
-    仅当 ``possible`` 为全集 ``{1,…,6}`` 时使用 ``all``；否则为按编号排序的 ``q1+q5+…``，须与 CSV 行完全一致。
-    """
-    if not possible:
-        return None
-    all_q = frozenset(range(1, 7))
-    if not possible <= all_q:
-        return None
-    if possible == all_q:
-        return "all"
-    return "+".join(f"q{i}" for i in sorted(possible))
+    return _scan_inference.csv_quality_group_from_possible_set(possible)
 
 
 def _vacant_early_unit_from_exclusions(
     *,
     board_snapshot: Dict[str, Any],
     csv_cells_raw: Optional[Dict[str, float]],
-    csv_cells: Optional[Dict[str, float]],
-    blends: Optional[Dict[str, float]],
     pricing: Dict[str, Any],
 ) -> Tuple[int, str, frozenset[int]]:
-    """早期回合：由 ``scan_history`` 品质扫描得到全局品质集合，**精确**对应 CSV 行取格均价；无键或缺行则为 0。"""
-    _ = blends, pricing
-    possible = _possible_qualities_from_scan_history(board_snapshot)
-    qg = _csv_quality_group_from_possible_set(possible)
-    if qg is None:
-        return 0, "", possible
-    use_blend = qg in ("q2+q3", "q3") and csv_cells is not None
-    src = csv_cells if use_blend else csv_cells_raw
-    if not src or qg not in src:
-        return 0, qg, possible
-    return int(round(float(src[qg]))), qg, possible
+    return _scan_inference.vacant_early_unit_from_exclusions(
+        board_snapshot=board_snapshot,
+        csv_cells_raw=csv_cells_raw,
+        pricing=pricing,
+    )
 
 
 def _latest_map_skill_entries(board_snapshot: Dict[str, Any]) -> Dict[int, Dict[str, Any]]:
@@ -963,44 +349,11 @@ def _max_quantity_price_from_avg_item_price(avg: Any) -> Optional[int]:
 
 
 def _sum_confirmed_contour_quality_price(board_snapshot: Dict[str, Any], quality: int) -> int:
-    s = 0
-    for _uid, it in _items_dict_from_snapshot(board_snapshot).items():
-        if not isinstance(it, dict):
-            continue
-        q = it.get("quality")
-        try:
-            if int(q) != quality:
-                continue
-        except (TypeError, ValueError):
-            continue
-        if not it.get("box_id_confirmed"):
-            continue
-        if it.get("shape") is None:
-            continue
-        pr = it.get("price")
-        if pr is None:
-            continue
-        try:
-            s += int(round(float(pr)))
-        except (TypeError, ValueError):
-            continue
-    return s
+    return _quality_stats.sum_confirmed_contour_quality_price(board_snapshot, quality)
 
 
 def _count_unconfirmed_contour_quality_items(board_snapshot: Dict[str, Any], quality: int) -> int:
-    n = 0
-    for _uid, it in _items_dict_from_snapshot(board_snapshot).items():
-        if not isinstance(it, dict):
-            continue
-        q = it.get("quality")
-        try:
-            if int(q) != quality:
-                continue
-        except (TypeError, ValueError):
-            continue
-        if not it.get("box_id_confirmed") or it.get("shape") is None:
-            n += 1
-    return n
+    return _quality_stats.count_unconfirmed_contour_quality_items(board_snapshot, quality)
 
 
 def _vacant_pts_floor_vs_avg_map_price_cap(
@@ -1038,7 +391,7 @@ def _lift_vac_pts_for_avg_price_map_skill(
     board_snapshot: Dict[str, Any],
     map_skills: Dict[int, Dict[str, Any]],
     skip_quality_extras: bool,
-    blends: Optional[Dict[str, float]],
+    csv_items_raw: Optional[Dict[str, float]],
     quality: int,
     default_item_unit: float,
 ) -> Tuple[int, Optional[Dict[str, Any]]]:
@@ -1051,8 +404,8 @@ def _lift_vac_pts_for_avg_price_map_skill(
     mq = _max_quantity_price_from_avg_item_price(ap) if ap is not None else None
     key = "q5_item" if quality == 5 else "q6_item"
     qit = (
-        float(blends[key])
-        if blends and float(blends.get(key) or 0) > 0
+        float(csv_items_raw[key])
+        if csv_items_raw and float(csv_items_raw.get(key) or 0) > 0
         else float(default_item_unit)
     )
     lifted, note = _vacant_pts_floor_vs_avg_map_price_cap(
@@ -1125,18 +478,23 @@ def compute_aisha_bid_from_board_snapshot(
     total_int = int(round(float(pricing["total"])))
     mid = map_id_from_board_snapshot(board_snapshot)
     mid_csv = item_db.normalize_map_id(mid)
-    csv_tab = load_map_quality_cells_by_map_id(snapshot_path_hint)
-    csv_cells_raw = csv_tab.get(mid_csv) if mid_csv is not None else None
-    csv_cells: Optional[Dict[str, float]] = dict(csv_cells_raw) if csv_cells_raw else None
-    blends = (
-        load_map_quality_blends_by_map_id(snapshot_path_hint).get(mid_csv)
-        if mid_csv is not None
-        else None
-    )
-    if csv_cells is not None and blends is not None:
-        csv_cells["q2+q3"] = blends["q2+q3_cell"]
-        csv_cells["q3"] = blends["q3_cell"]
+    raw_block = board_snapshot.get("raw_pricing") if isinstance(board_snapshot, dict) else None
+    raw_csv_cells = raw_block.get("csv_quality_groups_avg_per_cell") if isinstance(raw_block, dict) else None
+    raw_csv_items = raw_block.get("csv_quality_groups_avg_per_item") if isinstance(raw_block, dict) else None
+    csv_cells_raw = None
+    if isinstance(raw_csv_cells, dict) and raw_csv_cells:
+        try:
+            csv_cells_raw = {str(k): float(v) for k, v in raw_csv_cells.items()}
+        except (TypeError, ValueError):
+            csv_cells_raw = None
+    csv_items_raw = None
+    if isinstance(raw_csv_items, dict) and raw_csv_items:
+        try:
+            csv_items_raw = {str(k): float(v) for k, v in raw_csv_items.items()}
+        except (TypeError, ValueError):
+            csv_items_raw = None
     csv_hit = bool(csv_cells_raw)
+    map_quality_avg_csv = str(raw_block.get("map_quality_avg_csv") or "") if isinstance(raw_block, dict) else ""
 
     map_skills = _latest_map_skill_entries(board_snapshot)
     entry_gold_cells = map_skills.get(MAP_SKILL_TOTAL_GOLD_CELLS)
@@ -1218,8 +576,6 @@ def compute_aisha_bid_from_board_snapshot(
         unit, vacant_qg, possible_q = _vacant_early_unit_from_exclusions(
             board_snapshot=board_snapshot,
             csv_cells_raw=csv_cells_raw,
-            csv_cells=csv_cells,
-            blends=blends,
             pricing=pricing,
         )
         adj_notes.append(
@@ -1269,7 +625,7 @@ def compute_aisha_bid_from_board_snapshot(
 
         gold_early_extra_raw = 0
         if extra_g_early > 0:
-            uq5 = _vacant_cell_unit(csv_cells_raw, "q5", pricing, "vacant_unit_q5", _DEFAULT_UNIT_Q5)
+            uq5 = _vacant_cell_unit(csv_cells_raw, "q5", pricing, "vacant_unit_q5")
             add_g = int(round(extra_g_early * uq5))
             gold_early_extra_raw += add_g
             adj_notes.append(
@@ -1282,8 +638,8 @@ def compute_aisha_bid_from_board_snapshot(
             )
 
         q5_it_early = (
-            float(blends["q5_item"])
-            if blends and float(blends.get("q5_item") or 0) > 0
+            float(csv_items_raw["q5"])
+            if csv_items_raw and float(csv_items_raw.get("q5") or 0) > 0
             else 32629.7684
         )
         if ent019 is not None and not skip_gold_extras:
@@ -1304,7 +660,7 @@ def compute_aisha_bid_from_board_snapshot(
                 board_snapshot=board_snapshot,
                 map_skills=map_skills,
                 skip_quality_extras=skip_gold_extras,
-                blends=blends,
+                csv_items_raw=csv_items_raw,
                 quality=5,
                 default_item_unit=32629.7684,
             )
@@ -1320,7 +676,7 @@ def compute_aisha_bid_from_board_snapshot(
 
         red_early_extra_raw = 0
         if extra_r_early > 0:
-            uq6 = _vacant_cell_unit(csv_cells_raw, "q6", pricing, "vacant_unit_all_red", _DEFAULT_UNIT_Q6)
+            uq6 = _vacant_cell_unit(csv_cells_raw, "q6", pricing, "vacant_unit_all_red")
             add_rc = int(round(extra_r_early * uq6))
             red_early_extra_raw += add_rc
             adj_notes.append(
@@ -1338,8 +694,8 @@ def compute_aisha_bid_from_board_snapshot(
                 extra_r_items = max(0, declared_r - red_item_count_items)
                 if extra_r_items > 0:
                     q6_it = (
-                        float(blends["q6_item"])
-                        if blends and float(blends.get("q6_item") or 0) > 0
+                        float(csv_items_raw["q6"])
+                        if csv_items_raw and float(csv_items_raw.get("q6") or 0) > 0
                         else 68072.2211
                     )
                     add_r = int(round(extra_r_items * q6_it))
@@ -1355,7 +711,7 @@ def compute_aisha_bid_from_board_snapshot(
                 board_snapshot=board_snapshot,
                 map_skills=map_skills,
                 skip_quality_extras=skip_red_extras,
-                blends=blends,
+                csv_items_raw=csv_items_raw,
                 quality=6,
                 default_item_unit=68072.2211,
             )
@@ -1387,7 +743,7 @@ def compute_aisha_bid_from_board_snapshot(
             "vacant_unit_applied": unit,
             "early_round_detail": detail,
             "map_id": mid,
-            "map_quality_avg_csv": map_quality_csv_path_resolved(snapshot_path_hint),
+            "map_quality_avg_csv": map_quality_avg_csv,
             "map_quality_avg_hit": csv_hit,
             "map_skill_adjustments": adj_notes,
             "map_skill_gold_red_suppressed_ambiguous_contour": {
@@ -1421,11 +777,9 @@ def compute_aisha_bid_from_board_snapshot(
             base_v = 0
         vac_n = max(0, base_v - vac_reserve)
 
-    unit_q5 = _vacant_cell_unit(csv_cells_raw, "q5", pricing, "vacant_unit_q5", _DEFAULT_UNIT_Q5)
-    unit_q5_q6 = _vacant_cell_unit(
-        csv_cells_raw, "q5+q6", pricing, "vacant_unit_q5_q6", _DEFAULT_UNIT_Q5_Q6
-    )
-    unit_q6 = _vacant_cell_unit(csv_cells_raw, "q6", pricing, "vacant_unit_all_red", _DEFAULT_UNIT_Q6)
+    unit_q5 = _vacant_cell_unit(csv_cells_raw, "q5", pricing, "vacant_unit_q5")
+    unit_q5_q6 = _vacant_cell_unit(csv_cells_raw, "q5+q6", pricing, "vacant_unit_q5_q6")
+    unit_q6 = _vacant_cell_unit(csv_cells_raw, "q6", pricing, "vacant_unit_all_red")
 
     vacant_mode = "default"
     adj_late: List[Dict[str, Any]] = []
@@ -1457,7 +811,7 @@ def compute_aisha_bid_from_board_snapshot(
             board_snapshot=board_snapshot,
             map_skills=map_skills,
             skip_quality_extras=skip_gold_extras,
-            blends=blends,
+            csv_items_raw=csv_items_raw,
             quality=5,
             default_item_unit=32629.7684,
         )
@@ -1467,7 +821,7 @@ def compute_aisha_bid_from_board_snapshot(
             board_snapshot=board_snapshot,
             map_skills=map_skills,
             skip_quality_extras=skip_red_extras,
-            blends=blends,
+            csv_items_raw=csv_items_raw,
             quality=6,
             default_item_unit=68072.2211,
         )
@@ -1520,7 +874,7 @@ def compute_aisha_bid_from_board_snapshot(
             board_snapshot=board_snapshot,
             map_skills=map_skills,
             skip_quality_extras=skip_gold_extras,
-            blends=blends,
+            csv_items_raw=csv_items_raw,
             quality=5,
             default_item_unit=32629.7684,
         )
@@ -1530,7 +884,7 @@ def compute_aisha_bid_from_board_snapshot(
             board_snapshot=board_snapshot,
             map_skills=map_skills,
             skip_quality_extras=skip_red_extras,
-            blends=blends,
+            csv_items_raw=csv_items_raw,
             quality=6,
             default_item_unit=68072.2211,
         )
@@ -1568,7 +922,7 @@ def compute_aisha_bid_from_board_snapshot(
             board_snapshot=board_snapshot,
             map_skills=map_skills,
             skip_quality_extras=skip_gold_extras,
-            blends=blends,
+            csv_items_raw=csv_items_raw,
             quality=5,
             default_item_unit=32629.7684,
         )
@@ -1578,7 +932,7 @@ def compute_aisha_bid_from_board_snapshot(
             board_snapshot=board_snapshot,
             map_skills=map_skills,
             skip_quality_extras=skip_red_extras,
-            blends=blends,
+            csv_items_raw=csv_items_raw,
             quality=6,
             default_item_unit=68072.2211,
         )
@@ -1605,7 +959,7 @@ def compute_aisha_bid_from_board_snapshot(
             board_snapshot=board_snapshot,
             map_skills=map_skills,
             skip_quality_extras=skip_gold_extras,
-            blends=blends,
+            csv_items_raw=csv_items_raw,
             quality=5,
             default_item_unit=32629.7684,
         )
@@ -1631,7 +985,7 @@ def compute_aisha_bid_from_board_snapshot(
         "vacant_unit_q6": unit_q6,
         "vacant_pricing_mode": vacant_mode,
         "map_id": mid,
-        "map_quality_avg_csv": map_quality_csv_path_resolved(snapshot_path_hint),
+        "map_quality_avg_csv": map_quality_avg_csv,
         "map_quality_avg_hit": csv_hit,
         "map_skill_adjustments": adj_late,
         "random_avg_blend_ceiling_notes": bn_c,
@@ -1645,14 +999,15 @@ def compute_aisha_bid_from_board_snapshot(
 
 
 def build_snapshot_pricing_dict(
+    board_snapshot: Optional[Dict[str, Any]] = None,
     *,
-    total: float,
-    raw_vacant: Optional[int],
-    sum_gold_red_min_minus_weighted: float,
-    map_id: int,
-    current_round: int,
-    skill_logs: List[dict],
-    game_state_json: Dict[str, Any],
+    total: Optional[float] = None,
+    raw_vacant: Optional[int] = None,
+    sum_gold_red_min_minus_weighted: Optional[float] = None,
+    map_id: Optional[int] = None,
+    current_round: Optional[int] = None,
+    skill_logs: Optional[List[dict]] = None,
+    game_state_json: Optional[Dict[str, Any]] = None,
     snapshot_path_hint: Optional[str] = None,
     vacant_occupied_cell_count: Optional[int] = None,
 ) -> Dict[str, Any]:
@@ -1662,6 +1017,47 @@ def build_snapshot_pricing_dict(
     ``vacant_occupied_cell_count``：画板占位格数（含幽灵等）；若省略则从 ``game_state_json`` 单独推导日志物品占位，
     与界面 ``_build_occupied()`` 可能略有差异。
     """
+    if isinstance(board_snapshot, dict):
+        game_state_json = board_snapshot.get("game_state") or {}
+        skill_logs = list(board_snapshot.get("skill_logs") or [])
+        map_id = int(board_snapshot.get("map_id") or (game_state_json.get("map_id") or 0))
+        current_round = int(
+            board_snapshot.get("current_round") or (game_state_json.get("current_round") or 1)
+        )
+        raw = board_snapshot.get("raw_pricing") or {}
+        pricing_prev = board_snapshot.get("pricing") or {}
+        if total is None:
+            total = pricing_prev.get("known_items_total")
+        if total is None:
+            total = pricing_prev.get("total")
+        if raw_vacant is None:
+            raw_vacant = pricing_prev.get("vacant_geometric")
+        if sum_gold_red_min_minus_weighted is None:
+            sum_gold_red_min_minus_weighted = pricing_prev.get("sum_gold_red_min_minus_weighted")
+    else:
+        game_state_json = game_state_json or {}
+        skill_logs = list(skill_logs or [])
+        map_id = int(map_id or 0)
+        current_round = int(current_round or 1)
+        if total is None:
+            total = 0.0
+        if sum_gold_red_min_minus_weighted is None:
+            sum_gold_red_min_minus_weighted = 0.0
+        from .raw_pricing import build_raw_pricing_dict
+
+        raw = build_raw_pricing_dict(
+            map_id=map_id,
+            skill_logs=skill_logs,
+            snapshot_path_hint=snapshot_path_hint,
+        )
+
+    total = float(total or 0.0)
+    sum_gold_red_min_minus_weighted = float(sum_gold_red_min_minus_weighted or 0.0)
+    game_state_json = game_state_json or {}
+    skill_logs = list(skill_logs or [])
+    map_id = int(map_id or 0)
+    current_round = int(current_round or 1)
+
     if vacant_occupied_cell_count is not None:
         try:
             occ_n = max(0, int(vacant_occupied_cell_count))
@@ -1685,12 +1081,23 @@ def build_snapshot_pricing_dict(
         vacant_num = max(0, int(raw_vacant) - vacant_reserve)
         vacant_eff = vacant_num
 
-    u_orange, u_gr, u_red, csv_hit = vacant_unit_prices_for_map_id(int(map_id or 0), snapshot_path_hint)
+    raw_csv_cells = raw.get("csv_quality_groups_avg_per_cell") if isinstance(raw, dict) else None
+    if isinstance(raw_csv_cells, dict):
+        try:
+            csv_cells_for_est = {str(k): float(v) for k, v in raw_csv_cells.items()}
+        except (TypeError, ValueError):
+            csv_cells_for_est = {}
+    else:
+        csv_cells_for_est = {}
+    u_orange = int(round(float(csv_cells_for_est.get("q5", 0.0))))
+    u_gr = int(round(float(csv_cells_for_est.get("q5+q6", 0.0))))
+    u_red = int(round(float(csv_cells_for_est.get("q6", 0.0))))
+    csv_hit = bool(csv_cells_for_est)
     est_orange = total + vacant_num * u_orange
     est_gold_red = total + vacant_num * u_gr
     est_red = total + vacant_num * u_red
     est_floor = total + sum_gold_red_min_minus_weighted + vacant_num * u_orange
-    path_used = map_quality_csv_path_resolved(snapshot_path_hint)
+    path_used = str(raw.get("map_quality_avg_csv") or "") if isinstance(raw, dict) else ""
 
     pricing: Dict[str, Any] = {
         "total": total,
@@ -1714,13 +1121,17 @@ def build_snapshot_pricing_dict(
         "vacant_effective_count": vacant_eff,
     }
 
-    board_snap = {
+    board_snap: Dict[str, Any] = {
         "game_state": game_state_json,
         "skill_logs": list(skill_logs or []),
         "pricing": pricing,
         "current_round": int(current_round),
         "map_id": int(map_id or 0),
     }
+    if isinstance(board_snapshot, dict):
+        raw_block = board_snapshot.get("raw_pricing")
+        if isinstance(raw_block, dict):
+            board_snap["raw_pricing"] = raw_block
     pts, bid_meta = compute_aisha_bid_from_board_snapshot(board_snap, snapshot_path_hint=snapshot_path_hint)
     pricing["aisha_bid"] = bid_meta
     pricing["aisha_bid_points"] = pts
