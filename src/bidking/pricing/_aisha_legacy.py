@@ -473,11 +473,23 @@ def apply_aisha_vacant_red_floor_ceiling_pick(
 def compute_aisha_snapshot_bid_points(
     config: dict[str, Any], board_snapshot: dict[str, Any]
 ) -> tuple[int | None, dict[str, Any]]:
-    """从 ``pricing`` 读 getlog 主估价；优先 ``aisha_bid``（含 floor/ceiling 元数据），否则 ``aisha_bid_points``。"""
+    """从 ``pricing.points`` 读主估价（兼容旧 ``aisha_bid`` / ``aisha_bid_points`` 键）。"""
     _ = config
     pricing = board_snapshot.get("pricing")
     if not isinstance(pricing, dict) or pricing.get("total") is None:
         return None, {"reason": "missing_or_invalid_pricing_total"}
+
+    p_top = _coerce_aisha_bid_points(pricing.get("points"), round_float=True)
+    if p_top is not None:
+        meta: dict[str, Any] = {
+            "points": p_top,
+            "points_floor": pricing.get("points_floor"),
+            "points_ceiling": pricing.get("points_ceiling"),
+            "bid_points_source": "getlog_snapshot_pricing_points",
+        }
+        if p_top == 0:
+            return None, meta
+        return p_top, meta
 
     ab = pricing.get("aisha_bid")
     if isinstance(ab, dict) and ab.get("points") is not None:
@@ -493,10 +505,10 @@ def compute_aisha_snapshot_bid_points(
     p = _coerce_aisha_bid_points(pricing.get("aisha_bid_points"), round_float=True)
     if p is None:
         return None, {
-            "reason": "missing_pricing_aisha_bid",
-            "hint": "需 pricing.aisha_bid 或 pricing.aisha_bid_points",
+            "reason": "missing_pricing_points",
+            "hint": "需 pricing.points（或兼容字段 aisha_bid / aisha_bid_points）",
         }
-    meta: dict[str, Any] = {
+    meta = {
         "points": p,
         "bid_points_source": "getlog_snapshot_pricing_aisha_bid_points_only",
     }
@@ -506,7 +518,7 @@ def compute_aisha_snapshot_bid_points(
 
 
 def snapshot_bid_source_reason() -> str:
-    return "getlog board_snapshot pricing（aisha_bid / aisha_bid_points）"
+    return "getlog board_snapshot pricing（points）"
 
 
 def _items_dict_from_snapshot(board_snapshot: dict[str, Any]) -> dict[str, Any]:

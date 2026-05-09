@@ -6,7 +6,7 @@
 src/bidking/
 ├── interaction/  # 第1层 游戏交互 (window/ocr/input/observe/round_flow/text_patch)
 ├── parsing/      # 第2层 日志解析 + 数据 (events/state/processors/handlers)
-├── analysis/     # 第3层 数据分析 (snapshot/vacant/quality_stats/scan_inference/unknown_value/map_avg_csv)
+├── analysis/     # 第3层 数据分析 (snapshot/grid_overlay/quality_stats/scan_inference/unknown_value/map_avg_csv)
 ├── pricing/      # 第4层 出价策略 (ahmad/aisha/post_process/strategy)
 ├── ui/           # 第5层 tkinter UI 与画板
 ├── logsys/       # 第6层 日志 (app_log/perf_log/ocr_log/mouse_log/debug_dump)
