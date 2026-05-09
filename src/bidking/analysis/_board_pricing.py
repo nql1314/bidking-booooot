@@ -84,6 +84,22 @@ def _int_set_from_field(raw: Any) -> Set[int]:
     return out
 
 
+def _event_stats_q14_grid_counts_all_known(raw: Any) -> bool:
+    """
+    ``raw_pricing.event_stats`` 中 q1–q4 各档占用总格数均已得到（非 None）时，
+    可认为已由公共信息划定紫档及此前档位，空置金红估价区间与后期回合一致。
+    """
+    if not isinstance(raw, dict):
+        return False
+    st = raw.get("event_stats")
+    if not isinstance(st, dict):
+        return False
+    for k in ("q1_grid_count", "q2_grid_count", "q3_grid_count", "q4_grid_count"):
+        if st.get(k) is None:
+            return False
+    return True
+
+
 def _parse_shape_int(shape: Any) -> Optional[int]:
     if shape is None:
         return None
@@ -404,18 +420,18 @@ def build_snapshot_pricing_dict(
     u_gr = int(round(float(csv_cells_for_est.get("q5+q6", 0.0))))
     u_red = int(round(float(csv_cells_for_est.get("q6", 0.0))))
 
-    u_early, _qg, _pq = _scan_inference.vacant_early_unit_from_exclusions(
+    u_early, qg_early, pq_early = _scan_inference.vacant_early_unit_from_exclusions(
         board_snapshot=snap_full,
         csv_cells_raw=csv_cells_for_est if csv_cells_for_est else None,
         pricing={},
     )
 
-    rnd = int(current_round or 1)
     est_orange = float(total_f) + float(vacant_num) * float(u_orange)
     est_gold_red = float(total_f) + float(vacant_num) * float(u_gr)
     est_red = float(total_f) + float(vacant_num) * float(u_red)
 
-    if rnd <= 3:
+    q14_grid_known = _event_stats_q14_grid_counts_all_known(raw)
+    if not q14_grid_known:
         pts = float(total_f) + float(vacant_num) * float(u_early)
         pts_floor = pts
         pts_ceiling = pts
@@ -443,6 +459,8 @@ def build_snapshot_pricing_dict(
         "footprint_cells_weighted": float(footprint_sum),
         "vacant_source": vacant_src,
         "early_vacant_unit_from_scan": int(u_early),
+        "early_vacant_csv_group": str(qg_early or ""),
+        "early_vacant_possible_qualities": sorted(int(x) for x in pq_early),
         "map_quality_avg_hit": bool(csv_cells_for_est),
         "map_quality_avg_csv": str(raw.get("map_quality_avg_csv") or "") if isinstance(raw, dict) else "",
         "ahmad_points": int(ahmad_points),

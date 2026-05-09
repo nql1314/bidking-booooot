@@ -108,6 +108,7 @@ def process_map_skill_log(
         cast_round    : 发生回合
         raw           : 原始 JSON 条目
         uids          : HitBoxList 中解析到的物品 UID 列表
+        （轮廓类强制品质技能见 MAP_SKILL_FORCE_QUALITY：同步写入 GameState.scan_history）
         hit_count     : HitItemIndex（命中物品数）
         total_hit     : TotalHitBoxIndex（影响格数）
         avg_price     : AllHitItemAvgPrice
@@ -142,6 +143,10 @@ def process_map_skill_log(
             if force_quality is not None:
                 k.quality = force_quality
             ev['uids'].append(uid)
+
+        # 与英雄全图品质扫描相同：写入 scan_history，未命中 UID 追溯 excluded_qualities
+        if force_quality is not None:
+            state.record_scan('quality', force_quality, set(ev['uids']))
 
         events.append(ev)
     return events
