@@ -16,7 +16,7 @@ from ._common import configure_logging, install_snapshot_file_writer, load_all
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
-        description="BidKing artistic bot — Ahmad path (OCR + global premium)",
+        description="BidKing bot — 统一交互循环；ahmad_premium 可走 OCR 或 board_snapshot，由配置决定",
     )
     parser.add_argument(
         "--app-log",

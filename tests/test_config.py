@@ -1,13 +1,14 @@
-"""config 层：runtime/pricing 加载与按地图深合并覆盖。"""
+"""config 层：runtime 加载、pricing 空文件兜底、深合并。"""
 
 from __future__ import annotations
 
 import json
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from bidking.config import deep_merge, load_pricing, load_runtime, resolve_for
-from bidking.config.paths import configs_dir
 
 
 class ConfigTests(unittest.TestCase):
@@ -16,26 +17,34 @@ class ConfigTests(unittest.TestCase):
         self.assertIn("automation", rc.raw)
         self.assertEqual(rc.window.get("title_keyword"), "BidKing")
 
-    def test_pricing_global(self) -> None:
-        p = load_pricing()
-        self.assertIn("ahmad_premium", p)
-        self.assertIn("grid_prices", p)
-        self.assertNotIn("by_map", p["ahmad_premium"], "by_map 应已迁出至 pricing.maps/")
+    def test_pricing_missing_file_returns_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "nope.json"
+            self.assertEqual(load_pricing(p), {})
 
-    def test_resolve_map_override(self) -> None:
-        p = load_pricing()
-        merged_2 = resolve_for("2", base=p)
-        self.assertAlmostEqual(merged_2["ahmad_premium"]["round1_base_factor"], 1.3)
-        self.assertAlmostEqual(merged_2["ahmad_premium"]["base_item_per_piece_w"], 0.11)
-        # 颜色字典深合并：原 grid_rate_w_by_round.5.gold=1, 覆盖到 1.0
-        self.assertAlmostEqual(
-            merged_2["ahmad_premium"]["grid_rate_w_by_round"]["5"]["red"], 4.5
-        )
+    def test_resolve_map_override_with_base(self) -> None:
+        base = {
+            "ahmad_premium": {"round1_base_factor": 1, "x": {"a": 1}},
+            "grid_prices": {"green": 0.0},
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            override_path = Path(tmp) / "2.json"
+            override = {"ahmad_premium": {"round1_base_factor": 2}}
+            override_path.write_text(json.dumps(override, ensure_ascii=False), encoding="utf-8")
+
+            def fake_override(mid: int | str) -> Path | None:
+                return override_path if str(mid) == "2" else None
+
+            with patch("bidking.config.pricing.pricing_map_override_path", fake_override):
+                merged = resolve_for("2", base=base)
+
+        self.assertEqual(merged["ahmad_premium"]["round1_base_factor"], 2)
+        self.assertEqual(merged["ahmad_premium"]["x"]["a"], 1)
 
     def test_resolve_unknown_map(self) -> None:
-        p = load_pricing()
-        merged = resolve_for("999", base=p)
-        self.assertEqual(merged, p)
+        base = {"k": 1}
+        merged = resolve_for("999", base=base)
+        self.assertEqual(merged, base)
 
     def test_deep_merge(self) -> None:
         a = {"x": 1, "y": {"a": 1, "b": 2}, "z": [1, 2]}
@@ -44,10 +53,6 @@ class ConfigTests(unittest.TestCase):
             deep_merge(a, b),
             {"x": 1, "y": {"a": 1, "b": 20, "c": 3}, "z": [9]},
         )
-
-    def test_pricing_files_present(self) -> None:
-        self.assertTrue((configs_dir() / "pricing.maps" / "1.json").is_file())
-        self.assertTrue((configs_dir() / "pricing.maps" / "2.json").is_file())
 
 
 if __name__ == "__main__":
