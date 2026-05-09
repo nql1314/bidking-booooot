@@ -155,6 +155,148 @@ def _merge_with_min_from_avg(
     return _max_optional_int(existing, inferred)
 
 
+_RATIO_INFER_TOL = 1e-4
+
+
+def _is_positive_finite_float(x: Any) -> bool:
+    if not isinstance(x, (int, float)):
+        return False
+    try:
+        v = float(x)
+    except (TypeError, ValueError):
+        return False
+    return v > 0 and v == v
+
+
+def _near_int(x: float, tol: float = _RATIO_INFER_TOL) -> bool:
+    if x != x or x <= 0:
+        return False
+    r = round(x)
+    return abs(x - r) <= tol
+
+
+def _as_int_count(v: Any) -> Optional[int]:
+    """非负件数/格数；``None`` 或非法为未知。"""
+    if v is None:
+        return None
+    try:
+        i = int(v)
+    except (TypeError, ValueError):
+        return None
+    return i if i >= 0 else None
+
+
+def _infer_tier_count_grid_price(
+    d: Dict[str, Any],
+    *,
+    count_k: str,
+    grid_k: str,
+    avg_grid_k: str,
+    avg_price_k: Optional[str],
+    total_price_k: Optional[str],
+) -> None:
+    """在 ``count``、``grid_count``、``grid_avg``、``price_avg``、``price_total`` 间做保守补全（只填 ``None`` 缺项）。
+
+    关系：``grid_count ≈ count * grid_avg``，``price_total ≈ count * price_avg``（与 HitBox 聚合一致）。
+    除法仅在商接近正整数时写入，乘法在 ``round`` 后与乘积足够接近时写入整数总价/总格。
+    """
+    for _ in range(8):
+        changed = False
+        n = _as_int_count(d.get(count_k))
+        G = _as_int_count(d.get(grid_k))
+        ag = d.get(avg_grid_k)
+        ap = d.get(avg_price_k) if avg_price_k else None
+        T = _as_int_count(d.get(total_price_k)) if total_price_k else None
+
+        if d.get(avg_grid_k) is None and n and G and n > 0:
+            d[avg_grid_k] = float(G) / float(n)
+            changed = True
+            continue
+
+        if d.get(grid_k) is None and n and n > 0 and _is_positive_finite_float(ag):
+            prod = float(n) * float(ag)
+            if _near_int(prod):
+                d[grid_k] = int(round(prod))
+                changed = True
+                continue
+
+        if d.get(count_k) is None and G and G > 0 and _is_positive_finite_float(ag):
+            q = float(G) / float(ag)
+            if _near_int(q) and int(round(q)) > 0:
+                d[count_k] = int(round(q))
+                changed = True
+                continue
+
+        if total_price_k and avg_price_k:
+            if d.get(total_price_k) is None and n and n > 0 and _is_positive_finite_float(ap):
+                prod = float(n) * float(ap)
+                if _near_int(prod):
+                    d[total_price_k] = int(round(prod))
+                    changed = True
+                    continue
+
+            if d.get(avg_price_k) is None and n and n > 0 and T is not None and T > 0:
+                d[avg_price_k] = float(T) / float(n)
+                changed = True
+                continue
+
+            if d.get(count_k) is None and T is not None and T > 0 and _is_positive_finite_float(ap):
+                q = float(T) / float(ap)
+                if _near_int(q) and int(round(q)) > 0:
+                    d[count_k] = int(round(q))
+                    changed = True
+                    continue
+
+        if not changed:
+            break
+
+
+def _finalize_tier_min_bounds(
+    d: Dict[str, Any],
+    *,
+    count_k: str,
+    grid_k: str,
+    avg_grid_k: str,
+    avg_price_k: str,
+    count_min_k: str,
+    grid_min_k: str,
+) -> None:
+    """由已知件数、总格、均价/均格分数下界合并得到 ``count_min`` / ``grid_min``。"""
+    n = _as_int_count(d.get(count_k))
+    G = _as_int_count(d.get(grid_k))
+    ag = d.get(avg_grid_k)
+    ap = d.get(avg_price_k)
+
+    base_grid: Optional[int] = None
+    if n is not None and n > 0:
+        if G is not None:
+            base_grid = max(1, int(n), int(G))
+        else:
+            base_grid = max(1, int(n))
+
+    base_count: Optional[int] = None
+    if G is not None:
+        if n is not None:
+            base_count = max(1, int(n))
+        else:
+            base_count = 1
+
+    cm = _max_optional_int(
+        base_count,
+        _merge_with_min_from_avg(n, ap, from_price=True),
+    )
+    cm = _merge_with_min_from_avg(cm, ag, from_price=False)
+
+    gm = _max_optional_int(
+        base_grid,
+        _merge_with_min_from_avg(G, ag, from_price=False),
+    )
+    gm = _merge_with_min_from_avg(gm, ap, from_price=True)
+
+    d[count_min_k] = cm
+    d[grid_min_k] = gm
+
+
 def _shape_cell_count(slot_type: Any) -> int:
     if slot_type is None:
         return 0
@@ -323,27 +465,20 @@ def build_raw_pricing_dict(
         )
 
     q3_grid_avg = _safe_float_field(skill_entries.get(_SKILL_Q3_GRID_AVG), "AllHitItemAvgBoxIndex")
-    q3_grid_count = _merge_with_min_from_avg(None, q3_grid_avg)
     
     q4_grid_avg = _safe_float_field(_skill_entry_for_any(skill_entries, SKILL_CID_Q4_AVG_GRID), "AllHitItemAvgBoxIndex")
     q4_price_avg = _safe_float_field(_skill_entry_for_any(skill_entries, SKILL_CID_Q4_AVG_PRICE), "AllHitItemAvgPrice")
     q4_grid_count = _safe_int_field(skill_entries.get(MAP_SKILL_TOTAL_PURPLE_CELLS), "AllHitItemAvgBoxIndex")
-    q4_count_min = _merge_with_min_from_avg(q4_count, q4_price_avg, from_price=True)
-    q4_grid_min = _merge_with_min_from_avg(q4_grid_count, q4_grid_avg)
 
 
     q5_grid_avg = _safe_float_field(skill_entries.get(MAP_SKILL_AVG_GOLD_CELLS), "AllHitItemAvgBoxIndex")
     q5_grid_count = _safe_int_field(skill_entries.get(MAP_SKILL_TOTAL_GOLD_CELLS), "TotalHitBoxIndex")
-    q5_grid_min = _merge_with_min_from_avg(q5_grid_count, q5_grid_avg)
     q5_price_avg = _safe_float_field(skill_entries.get(MAP_SKILL_AVG_GOLD_PRICE), "AllHitItemAvgPrice")
-    q5_count_min = _merge_with_min_from_avg(q5_count, q5_price_avg, from_price=True)
     q5_price_total = _safe_int_field(skill_entries.get(MAP_SKILL_GOLD_TOTAL_PRICE), "HitItemTotalPrice")
 
     q6_grid_avg = _safe_float_field(skill_entries.get(MAP_SKILL_AVG_RED_CELLS), "AllHitItemAvgBoxIndex")
     q6_grid_count = _safe_int_field(skill_entries.get(MAP_SKILL_TOTAL_RED_CELLS), "TotalHitBoxIndex")
-    q6_grid_min = _merge_with_min_from_avg(q6_grid_count, q6_grid_avg)
     q6_price_avg = _safe_float_field(skill_entries.get(MAP_SKILL_AVG_RED_PRICE), "AllHitItemAvgPrice")
-    q6_count_min = _merge_with_min_from_avg(q6_count, q6_price_avg, from_price=True)
     q6_price_total = _safe_int_field(skill_entries.get(MAP_SKILL_RED_TOTAL_PRICE), "HitItemTotalPrice")
 
 
@@ -353,30 +488,32 @@ def build_raw_pricing_dict(
         "total_grid_avg": total_grid_avg,
         "total_price_min": total_price_min,
         "q1_count": None,
+        "q1_grid_count": None,
         "q2_count": None,
+        "q2_grid_count": None,
         "q12_count": q12_count,
         "q3_count": None,
-        "q3_grid_count": q3_grid_count,
+        "q3_grid_count": None,
         "q3_grid_avg": q3_grid_avg,
         "q4_count": q4_count,
         "q4_grid_count": q4_grid_count,
         "q4_grid_avg": q4_grid_avg,
-        "q4_count_min": q4_count_min,
-        "q4_grid_min": q4_grid_min,
+        "q4_count_min": None,
+        "q4_grid_min": None,
         "q4_price_avg": q4_price_avg,
         "q4_price_total": None,
         "q5_count": q5_count,
-        "q5_count_min": q5_count_min,
+        "q5_count_min": None,
         "q5_grid_count": q5_grid_count,
         "q5_grid_avg": q5_grid_avg,
-        "q5_grid_min": q5_grid_min,
+        "q5_grid_min": None,
         "q5_price_avg": q5_price_avg,
         "q5_price_total": q5_price_total,
         "q6_count": q6_count,
-        "q6_count_min": q6_count_min,
+        "q6_count_min": None,
         "q6_grid_count": q6_grid_count,
         "q6_grid_avg": q6_grid_avg,
-        "q6_grid_min": q6_grid_min,
+        "q6_grid_min": None,
         "q6_price_avg": q6_price_avg,
         "q6_price_total": q6_price_total,
     }
@@ -389,16 +526,18 @@ def build_raw_pricing_dict(
         if q == 1:
             if direct["q1_count"] in (None, 0):
                 direct["q1_count"] = int(agg["count"])
+            if not direct["q1_grid_count"] and agg["total_cells"]:
+                direct["q1_grid_count"] = int(agg["total_cells"])
         if q == 2:
             if direct["q2_count"] in (None, 0):
                 direct["q2_count"] = int(agg["count"])
+            if not direct["q2_grid_count"] and agg["total_cells"]:
+                direct["q2_grid_count"] = int(agg["total_cells"])
         if q == 3:
             if direct["q3_count"] in (None, 0):
                 direct["q3_count"] = int(agg["count"])
             if not direct["q3_grid_count"] and agg["total_cells"]:
                 direct["q3_grid_count"] = int(agg["total_cells"])
-            if direct["q3_grid_avg"] is None and agg["avg_cells"] is not None:
-                direct["q3_grid_avg"] = float(agg["avg_cells"])
         if q == 4:
             if direct["q4_count"] in (None, 0):
                 direct["q4_count"] = int(agg["count"])
@@ -433,16 +572,28 @@ def build_raw_pricing_dict(
             if direct["q6_price_avg"] is None and agg["avg_price"] is not None:
                 direct["q6_price_avg"] = float(agg["avg_price"])
 
+    for _pfx in ("q4_", "q5_", "q6_"):
+        _infer_tier_count_grid_price(
+            direct,
+            count_k=f"{_pfx}count",
+            grid_k=f"{_pfx}grid_count",
+            avg_grid_k=f"{_pfx}grid_avg",
+            avg_price_k=f"{_pfx}price_avg",
+            total_price_k=f"{_pfx}price_total",
+        )
+        _finalize_tier_min_bounds(
+            direct,
+            count_k=f"{_pfx}count",
+            grid_k=f"{_pfx}grid_count",
+            avg_grid_k=f"{_pfx}grid_avg",
+            avg_price_k=f"{_pfx}price_avg",
+            count_min_k=f"{_pfx}count_min",
+            grid_min_k=f"{_pfx}grid_min",
+        )
+
     # ── 3) 综合整理：分档零一致性 ─────────────────────────────────────────
-    _apply_tier_zero_coherence(
-        direct,
-        count_k="q3_count",
-        grid_k="q3_grid_count",
-        avg_grid_k="q3_grid_avg",
-        avg_price_k=None,
-        total_price_k=None,
-    )
-    for count_k, grid_k, avg_grid_k, avg_price_k, total_price_k, also in (
+    for count_k, grid_k, avg_grid_k, avg_price_k, total_price_k, also_zero in (
+        ("q3_count", "q3_grid_count", "q3_grid_avg", None, None, ()),
         (
             "q4_count",
             "q4_grid_count",
@@ -475,7 +626,7 @@ def build_raw_pricing_dict(
             avg_grid_k=avg_grid_k,
             avg_price_k=avg_price_k,
             total_price_k=total_price_k,
-            also_zero=also,
+            also_zero=also_zero,
         )
 
     if direct["q1_count"] is not None and direct["q2_count"] is not None:
