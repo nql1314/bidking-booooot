@@ -1,0 +1,4 @@
+[console_scripts]
+bidking-aisha = bidking.runner.aisha_main:main
+bidking-bot = bidking.runner.bot_main:main
+bidking-viewer = bidking.runner.viewer_main:main
