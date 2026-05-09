@@ -1,22 +1,16 @@
 #!/usr/bin/env python3
 """Fresh BidKing automation loop.
 
-This script intentionally ignores the old auto-loop logic.  It follows the
-user-provided flow exactly:
-- Wait until central OCR sees a round number.
-- Wait a fixed delay, use the leftmost tool, wait for animation.
-- OCR central info, calculate a bid, input it, confirm.
-- If OCR sees "对局结束", run the fixed post-round transition clicks.
+- 整窗 / 区域 OCR 识别大厅、结束、回合等界面状态；
+- 固定流程：道具 → 截图 OCR → :func:`compute_price` → 输入出价 → 确认；
+- 若 OCR 见到「对局结束」等，执行固定的局后点击链。
 """
 
 from __future__ import annotations
 
-import random
 import argparse
 import json
-import math
 import re
-import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -29,53 +23,18 @@ from PIL import Image, ImageOps
 
 ROOT = Path(__file__).resolve().parent
 
-from ._bid_history_parser import (  # noqa: E402
-    coerce_valid_lobby_player_count,
-    get_max_other_players_last_bid_from_image,
-    read_multiplayer_layout_for_count,
-    resolve_lobby_player_count_for_opponent_bid,
+from .board_snapshot_util import (  # noqa: E402
+    clear_board_snapshot_file,
+    current_round_from_snapshot,
+    game_uid_from_snapshot,
+    load_board_snapshot_for_loop,
 )
-from ._central_info_parser import merge_patch, parse_central_info  # noqa: E402
 from .window import capture_window_frame, find_window, scale_point  # noqa: E402
 from ..logsys.app_log import append_app_log, log_timestamp, set_app_log_file  # noqa: E402
 from ..logsys.perf_log import perf_log, perf_log_elapsed  # noqa: E402
-from ..pricing.ahmad import compute_ahmad_premium_w, compute_value_anchor_ceiling_w  # noqa: E402
-from ..pricing._constraint_solver import (  # noqa: E402
-    as_non_neg_float,
-    as_non_neg_int,
-    get_color_constraint,
-    normalize_role,
-    validate_input,
-)
-
-ROUND_RULES = {
-    1: {"multiplier": 2.0, "pace": 0.42, "label": "两倍出价第二直接获得"},
-    2: {"multiplier": 1.6, "pace": 0.56, "label": "1.6 倍出价第二直接获得"},
-    3: {"multiplier": 1.3, "pace": 0.77, "label": "1.3 倍出价第二直接获得"},
-    4: {"multiplier": 1.1, "pace": 0.91, "label": "1.1 倍出价第二直接获得"},
-    5: {"multiplier": 1.0, "pace": 1.00, "label": "价高者得"},
-}
 
 # 参考客户端 1920×1080：出价状态文案区（「已出价」/「弃权」等）
 DEFAULT_BID_CONFIRM_REGION = {"left": 704, "top": 962, "width": 303, "height": 75}
-
-
-def advisor_evaluate_for_bid(data: dict[str, Any]) -> dict[str, Any]:
-    """供出价前复用 flat_solve 与 observed_low；仅服务 ahmad_premium 流程。"""
-    from ..pricing.ahmad import COLORS_BPGR, solved_ahmad_flat_solve
-
-    errors = validate_input(data)
-    summary = {"observed_low_price": as_non_neg_float(data.get("observed_low_price"))}
-    if errors:
-        return {"errors": errors, "warns": [], "summary": summary}
-    max_count = as_non_neg_int(data.get("max_count")) or 60
-    avg_tolerance = as_non_neg_float(data.get("avg_tolerance")) or 0.05
-    total_all = as_non_neg_int(data.get("total_all"))
-    if total_all is None:
-        return {"errors": ["缺少 total_all（总藏品数）"], "warns": [], "summary": summary}
-    constraints = {color: get_color_constraint(data, color) for color in COLORS_BPGR}
-    solved, warns = solved_ahmad_flat_solve(data, int(total_all), constraints, max_count, avg_tolerance)
-    return {"errors": [], "warns": warns, "summary": summary, "solved": solved}
 
 try:
     import ctypes
@@ -248,204 +207,16 @@ def apply_pyautogui_from_config(config: dict[str, Any]) -> None:
     pyautogui.PAUSE = float(safety.get("move_pause_seconds", 0.08))
 
 
-def resolve_path(config_path: Path, raw_path: str | None, default_name: str) -> Path:
-    if not raw_path:
-        return config_path.parent / default_name
-    path = Path(raw_path)
-    if path.is_absolute():
-        return path
-    # runtime.json 位于 configs/ 时，勿把 "configs/pricing.json" 拼成 configs/configs/pricing.json
-    parts = path.parts
-    if parts and parts[0] == "configs" and config_path.parent.name == "configs":
-        path = Path(*parts[1:]) if len(parts) > 1 else Path(default_name)
-    return config_path.parent / path
-
-
-def default_advisor_input() -> dict[str, Any]:
-    return {
-        "round": 1,
-        "my_role": "ahmad",
-        "total_all": None,
-        "avg_grid_all": None,
-        "count_green": None,
-        "count_white": None,
-        "min_count_green": 0,
-        "min_count_white": 0,
-        "max_count": 60,
-        "max_show": 20,
-        "avg_tolerance": 0.05,
-        "grid_price_green": 0.0,
-        "grid_price_white": 0.0,
-        "grid_price_blue": 0.0,
-        "grid_price_purple": 0.28,
-        "grid_price_gold": 1.13,
-        "grid_price_red": 4.77,
-        "total_grid_rounding": "round",
-        "constraints": {
-            "blue": {"avg": None, "count": None, "grid": None, "min_count": None},
-            "purple": {"avg": None, "count": None, "grid": None, "min_count": None},
-            "gold": {"avg": None, "count": None, "grid": None, "min_count": None},
-            "red": {"avg": None, "count": None, "grid": None, "min_count": None},
-        },
-        "category_weights": {f"cat{index}": 1 for index in range(1, 11)},
-        "rank_signal": {
-            "my_rank": 2,
-            "players": 4,
-            "pressure": 0.55,
-            "suspected_bluff": 0.35,
-        },
-        "style": {
-            "risk_bias": "balanced",
-            "need_comeback": False,
-        },
-        "selected_mode": "ahmad_premium",
-    }
-
-
-def apply_price_config(data: dict[str, Any], price_config: dict[str, Any]) -> dict[str, Any]:
-    grid_prices = price_config.get("grid_prices", {})
-    for color in ("green", "white", "blue", "purple", "gold", "red"):
-        if color in grid_prices:
-            data[f"grid_price_{color}"] = float(grid_prices[color])
-    if "avg_tolerance" in price_config:
-        data["avg_tolerance"] = float(price_config["avg_tolerance"])
-    if "category_weights" in price_config:
-        data["category_weights"] = dict(price_config["category_weights"])
-    if "burst_limit" in price_config:
-        data["burst_limit"] = float(price_config["burst_limit"])
-    if "round_rules" in price_config:
-        data["round_rules"] = dict(price_config["round_rules"])
-    return data
-
-
-def build_advisor_input(config: dict[str, Any], text: str, round_no: int, price_config: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
-    advisor = config.get("advisor", {})
-    parsed = parse_central_info(text)
-    data = default_advisor_input()
-    data = apply_price_config(data, price_config)
-    data["round"] = int(round_no)
-    data["my_role"] = advisor.get("role", "ahmad")
-    sel_mode = str(config.get("automation", {}).get("selected_mode", "ahmad_premium")).strip().lower()
-    if sel_mode in ("normal", "express"):
-        sel_mode = "ahmad_premium"
-    data["selected_mode"] = sel_mode
-    sm = config.get("automation", {}).get("selected_map")
-    if sm is None:
-        sm = config.get("automation", {}).get("default_map", "4")
-    data["selected_map"] = str(sm)
-    data["avg_grid_all"] = advisor.get("avg_grid_all")
-    data["total_grid_rounding"] = advisor.get("total_grid_rounding", "round")
-    green_count = advisor.get("green_count")
-    white_count = advisor.get("white_count")
-    data["count_green"] = None if green_count in (None, "") else int(green_count)
-    data["count_white"] = None if white_count in (None, "") else int(white_count)
-    merged = merge_patch(data, parsed)
-    merged["round"] = int(round_no)
-    return merged, parsed
-
-
-def merge_parsed_memory(current: dict[str, Any] | None, new_patch: dict[str, Any]) -> dict[str, Any]:
-    if not current:
-        return json.loads(json.dumps(new_patch, ensure_ascii=False))
-
-    merged = json.loads(json.dumps(current, ensure_ascii=False))
-    current_round = current.get("round")
-    new_round = new_patch.get("round")
-    try:
-        cr_i = int(current_round) if current_round is not None else None
-        nr_i = int(new_round) if new_round is not None else None
-    except (TypeError, ValueError):
-        cr_i, nr_i = None, None
-    # 新一局：中央轮次从 ≥2 回到 1（与主循环「round1 且曾处理过更高轮」一致）；清本场才出现的随机均价
-    if cr_i is not None and nr_i == 1 and cr_i >= 2:
-        merged.pop("random_pick_count", None)
-        merged.pop("random_pick_avg_price", None)
-    same_round = (
-        current_round is not None and new_round is not None and int(current_round) == int(new_round)
-    )
-    sticky_scalar_fields = {
-        "total_all",
-        "total_grid_all",
-        "wg_total",
-        "count_green",
-        "count_white",
-        "avg_grid_all",
-        # 竞拍中央信息里「随机选择 n 件平均价值」整场通常只出现一次；跨轮保留供 ahmad_premium random_avg 使用
-        "random_pick_count",
-        "random_pick_avg_price",
-    }
-    sticky_constraint_fields = {"count", "grid", "avg"}
-    if not same_round:
-        for key in list(merged.keys()):
-            if key in ("constraints", "parsed_facts", "unparsed_lines", "round"):
-                continue
-            if key.startswith("avg_price_") or key.startswith("total_price_"):
-                merged.pop(key, None)
-                continue
-            if key in {
-                "observed_low_price",
-                "mixed_type_count",
-                "mixed_type_avg_grid_price",
-            }:
-                merged.pop(key, None)
-    for key, value in new_patch.items():
-        if key in ("parsed_facts", "unparsed_lines"):
-            continue
-        if key == "constraints":
-            merged.setdefault("constraints", {})
-            for color, fields in value.items():
-                merged["constraints"].setdefault(color, {})
-                for field, field_value in fields.items():
-                    if field_value is not None and (same_round or field in sticky_constraint_fields):
-                        merged["constraints"][color][field] = field_value
-        else:
-            if value is not None and (same_round or key in sticky_scalar_fields):
-                merged[key] = value
-
-    merged_facts = list(current.get("parsed_facts") or [])
-    merged_facts.extend(new_patch.get("parsed_facts") or [])
-    merged["parsed_facts"] = merged_facts
-
-    merged_unparsed = list(current.get("unparsed_lines") or [])
-    merged_unparsed.extend(new_patch.get("unparsed_lines") or [])
-    merged["unparsed_lines"] = merged_unparsed
-    return merged
-
-
-def sanitize_parsed_patch_for_memory(parsed_patch: dict[str, Any], round_no: int | None) -> dict[str, Any]:
-    patch = json.loads(json.dumps(parsed_patch or {}, ensure_ascii=False))
-    if patch.get("round") is not None and round_no is not None and int(patch.get("round")) != int(round_no):
-        return {"parsed_facts": [], "unparsed_lines": []}
-
-    current_round = int(round_no) if round_no is not None else None
-    if current_round is not None:
-        patch["round"] = current_round
-    return patch
-
-
-def build_advisor_input_from_patch(config: dict[str, Any], parsed_patch: dict[str, Any], round_no: int, price_config: dict[str, Any]) -> dict[str, Any]:
-    advisor = config.get("advisor", {})
-    data = default_advisor_input()
-    data = apply_price_config(data, price_config)
-    data["round"] = int(round_no)
-    data["my_role"] = advisor.get("role", "ahmad")
-    sel_mode = str(config.get("automation", {}).get("selected_mode", "ahmad_premium")).strip().lower()
-    if sel_mode in ("normal", "express"):
-        sel_mode = "ahmad_premium"
-    data["selected_mode"] = sel_mode
-    sm = config.get("automation", {}).get("selected_map")
-    if sm is None:
-        sm = config.get("automation", {}).get("default_map", "4")
-    data["selected_map"] = str(sm)
-    data["avg_grid_all"] = advisor.get("avg_grid_all")
-    data["total_grid_rounding"] = advisor.get("total_grid_rounding", "round")
-    green_count = advisor.get("green_count")
-    white_count = advisor.get("white_count")
-    data["count_green"] = None if green_count in (None, "") else int(green_count)
-    data["count_white"] = None if white_count in (None, "") else int(white_count)
-    merged = merge_patch(data, parsed_patch)
-    merged["round"] = int(round_no)
-    return merged
+def compute_price(
+    config: dict[str, Any],
+    *,
+    round_no: int,
+    observation: Observation | None = None,
+    knowledge_patch: dict[str, Any] | None = None,
+) -> int:
+    """出价计算入口占位：由后续策略实现替换；当前恒定返回 10000。"""
+    _ = config, round_no, observation, knowledge_patch
+    return 10000
 
 
 def normalize_text(text: str) -> str:
@@ -556,43 +327,12 @@ def classify_bid_confirm_status(ocr_text: str) -> str:
 
 
 def reset_capture_scan_session(sess: dict[str, Any] | None) -> None:
-    """新对局/大厅等时机重置：最少价值缓存、对手价己方席位缓存。"""
+    """新对局/大厅等时机重置扫描会话（对手价网格 OCR 已停用时仅保留占位键）。"""
     if sess is None:
         return
     sess.clear()
-    sess["min_price_cached_points"] = None
-    sess["min_price_central_trigger_count_prev"] = 0
     sess["opp_lobby_key"] = None
     sess["opp_self_slot"] = None
-
-
-def _min_price_trigger_phrases(config: dict[str, Any]) -> list[str]:
-    cap = config.get("capture", {}) or {}
-    raw = cap.get("min_price_scan_trigger_phrases", ["随机显示"])
-    if isinstance(raw, str) and raw.strip():
-        return [raw.strip()]
-    if isinstance(raw, (list, tuple)):
-        return [str(x).strip() for x in raw if str(x).strip()]
-    return ["随机显示"]
-
-
-def _count_min_price_triggers_in_central(central_text: str, phrases: list[str]) -> int:
-    """统计各触发词在中央 OCR 文本中的出现次数之和（``str.count``，非重叠）。"""
-    if not central_text or not phrases:
-        return 0
-    total = 0
-    for p in phrases:
-        if p:
-            total += central_text.count(p)
-    return total
-
-
-def _opponent_price_only_rescan_enabled(config: dict[str, Any]) -> bool:
-    cap = config.get("capture", {}) or {}
-    raw = cap.get("opponent_bid_price_only_rescan_enabled")
-    if raw is None:
-        return True
-    return bool(raw)
 
 
 def ensure_output_dir(config: dict[str, Any], config_path: Path) -> Path:
@@ -634,17 +374,6 @@ def scaled_region_box(region: dict[str, Any], config: dict[str, Any], image_widt
     return int(left), int(top), int(right), int(bottom)
 
 
-def read_min_price_text_from_frame(config: dict[str, Any], frame: Image.Image) -> tuple[str, tuple[int, int, int, int]]:
-    """OCR `capture.min_price_region` on an already-captured client-area RGB image."""
-    region = config.get("capture", {}).get("min_price_region")
-    if not region:
-        return "", (0, 0, 0, 0)
-    box = scaled_region_box(region, config, frame.width, frame.height)
-    crop = frame.crop(box)
-    text = rapidocr_once(ImageOps.grayscale(crop).convert("RGB"))
-    return text, box
-
-
 def read_bid_confirm_region_text_from_frame(
     config: dict[str, Any], frame: Image.Image
 ) -> tuple[str, tuple[int, int, int, int]]:
@@ -659,233 +388,6 @@ def read_bid_confirm_region_text_from_frame(
     return text, box
 
 
-def read_opponent_last_bid_from_frame(
-    config: dict[str, Any],
-    frame: Image.Image,
-    *,
-    round_no: int | None = None,
-    lobby_player_count: int | None = None,
-    config_path: Path | None = None,
-    known_self_slot_index: int | None = None,
-) -> tuple[int | None, int | None]:
-    """按 ``capture.bid_history_multiplayer`` 与当前轮次 OCR 各席价格区，用角色名+称号排除己方后取最高价。
-
-    ``lobby_player_count`` 若传入则须为 2/4/5；否则按 ``automation.maps[selected_map].player_count`` →
-    ``advisor.lobby_player_count`` 解析。轮次 ``round_no`` 用于选取各席 ``rounds`` 中对应价格区键 ``"1"``…``"4"``；
-    可与中央情报轮次不同（例如起手读 ``max(1, 当前轮-1)`` 列以取上一轮对手出价）。
-
-    若 ``known_self_slot_index`` 有效，则跳过各席身份 OCR，只对 ``n-1`` 个对手价区 OCR（同轮复用）。
-
-    若传入 ``config_path`` 且 ``debug.save_crops`` / ``debug.save_ocr_text`` 之一为真，将各席 OCR 裁剪与文本写入 ``runs``（见 parser 命名规则）。
-
-    返回 ``(max_other_bid, self_slot_index)``；后者仅在完整身份识别成功或快速路径传入的已知席位时给出。
-    """
-    adv = config.get("advisor", {}) or {}
-    capture = config.get("capture", {}) or {}
-    if lobby_player_count is not None:
-        lobby_count = coerce_valid_lobby_player_count(lobby_player_count)
-        if lobby_count is None:
-            return None, None
-    else:
-        lobby_count = resolve_lobby_player_count_for_opponent_bid(config)
-        if lobby_count is None:
-            return None, None
-    players = read_multiplayer_layout_for_count(capture, lobby_count)
-    if not players:
-        return None, None
-    ref = config.get("window", {}).get("reference_client_size", {}) or {}
-    rw = max(1, int(ref.get("width") or 1920))
-    rh = max(1, int(ref.get("height") or 1080))
-    name = str(adv.get("character_name") or "艾哈迈德")
-    raw_titles = adv.get("character_titles", adv.get("my_titles"))
-    titles: list[str] | None = None
-    if isinstance(raw_titles, str) and raw_titles.strip():
-        titles = [raw_titles.strip()]
-    elif isinstance(raw_titles, (list, tuple)):
-        titles = [str(t).strip() for t in raw_titles if str(t).strip()]
-    dbg = config.get("debug", {}) or {}
-    save_crops = bool(dbg.get("save_crops", True))
-    save_ocr = bool(dbg.get("save_ocr_text", True))
-    runs_dir: Path | None = None
-    if config_path is not None and (save_crops or save_ocr):
-        runs_dir = ensure_output_dir(config, config_path)
-    mp = get_max_other_players_last_bid_from_image(
-        frame,
-        lobby_player_count=lobby_count,
-        current_round=round_no,
-        players=players,
-        my_character_name=name,
-        my_titles=titles,
-        reference_size=(rw, rh),
-        ocr_fn=lambda im: rapidocr_once(ImageOps.grayscale(im).convert("RGB")),
-        debug_runs_dir=runs_dir,
-        debug_save_crops=save_crops,
-        debug_save_ocr_text=save_ocr,
-        known_self_slot_index=known_self_slot_index,
-    )
-    return mp.max_other_last_bid, mp.self_slot_index
-
-
-def read_min_price_text(config: dict[str, Any], config_path: Path) -> tuple[str, tuple[int, int, int, int]]:
-    """Bring game window forward, capture client, OCR lowest-price region."""
-    t0 = time.perf_counter()
-    bring_window_to_front(config)
-    t_cap = time.perf_counter()
-    frame, _info = capture_window_frame(config)
-    perf_log_elapsed("read_min_price_text capture_window_frame", t_cap)
-    text, box = read_min_price_text_from_frame(config, frame)
-    runs_dir = ensure_output_dir(config, config_path)
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
-    if bool(config.get("debug", {}).get("save_crops", True)) and box != (0, 0, 0, 0):
-        crop = frame.crop(box)
-        crop.save(runs_dir / f"{timestamp}_min_price_region.png")
-    if bool(config.get("debug", {}).get("save_ocr_text", True)) and text:
-        (runs_dir / f"{timestamp}_min_price_region.txt").write_text(text, encoding="utf-8")
-    perf_log_elapsed("read_min_price_text 总计(含 OCR)", t0)
-    return text, box
-
-
-def _observe_opponent_last_bid_block(
-    config: dict[str, Any],
-    config_path: Path,
-    label: str,
-    *,
-    frame: Image.Image,
-    bid_round_no: int | None,
-    opponent_bid_lobby_count: int | None,
-    scan_session: dict[str, Any] | None,
-) -> int | None:
-    """对手价网格 OCR；先于中央区完整解析与底价 OCR 调用。"""
-    lobby_resolved: int | None = None
-    if opponent_bid_lobby_count is not None:
-        lobby_resolved = coerce_valid_lobby_player_count(opponent_bid_lobby_count)
-    else:
-        lobby_resolved = resolve_lobby_player_count_for_opponent_bid(config)
-    known_self_slot: int | None = None
-    if scan_session is not None and _opponent_price_only_rescan_enabled(config):
-        lobby_key = int(lobby_resolved) if lobby_resolved is not None else 0
-        prev_lobby = scan_session.get("opp_lobby_key")
-        if prev_lobby is not None and prev_lobby != lobby_key:
-            scan_session["opp_self_slot"] = None
-        scan_session["opp_lobby_key"] = lobby_key
-        known_self_slot = scan_session.get("opp_self_slot")
-    t_opp = time.perf_counter()
-    opponent_last_bid, slot_from_read = read_opponent_last_bid_from_frame(
-        config,
-        frame,
-        round_no=bid_round_no,
-        lobby_player_count=opponent_bid_lobby_count,
-        config_path=config_path,
-        known_self_slot_index=known_self_slot,
-    )
-    perf_log_elapsed(f"observe[{label}] read_opponent_last_bid_from_frame", t_opp)
-    if scan_session is not None and slot_from_read is not None:
-        scan_session["opp_self_slot"] = int(slot_from_read)
-    return opponent_last_bid
-
-
-def _observe_min_price_block(
-    config: dict[str, Any],
-    label: str,
-    *,
-    frame: Image.Image,
-    runs_dir: Path,
-    timestamp: str,
-    central_text: str,
-    scan_session: dict[str, Any] | None,
-) -> str:
-    """底价区 OCR；触发词统计使用 ``central_text``。"""
-    min_price_text = ""
-    min_price_box = (0, 0, 0, 0)
-    t_minp = time.perf_counter()
-    if scan_session is None:
-        min_price_text, min_price_box = read_min_price_text_from_frame(config, frame)
-        perf_log_elapsed(f"observe[{label}] read_min_price_text_from_frame", t_minp)
-    else:
-        phrases = _min_price_trigger_phrases(config)
-        cur_trig = _count_min_price_triggers_in_central(central_text or "", phrases)
-        prev_trig = int(scan_session.get("min_price_central_trigger_count_prev", 0) or 0)
-        increased = cur_trig > prev_trig
-        cached_pts = scan_session.get("min_price_cached_points")
-        if increased:
-            min_price_text, min_price_box = read_min_price_text_from_frame(config, frame)
-            perf_log_elapsed(f"observe[{label}] read_min_price_text_from_frame", t_minp)
-            pt = parse_min_price_ocr_to_int(min_price_text)
-            if pt is not None:
-                scan_session["min_price_cached_points"] = int(pt)
-                scan_session["min_price_central_trigger_count_prev"] = cur_trig
-        else:
-            if cur_trig > 0 and cached_pts is not None:
-                cp = int(cached_pts)
-                if cp > 0:
-                    min_price_text = str(cp)
-                perf_log_elapsed(f"observe[{label}] min_price_use_cache", t_minp)
-            else:
-                perf_log_elapsed(f"observe[{label}] min_price_skip_no_scan", t_minp)
-            if cur_trig == 0:
-                scan_session["min_price_cached_points"] = None
-            scan_session["min_price_central_trigger_count_prev"] = cur_trig
-    if (
-        min_price_text
-        and min_price_box != (0, 0, 0, 0)
-        and bool(config.get("debug", {}).get("save_crops", True))
-    ):
-        min_crop = frame.crop(min_price_box)
-        min_crop.save(runs_dir / f"{timestamp}_{label}_min_price.png")
-    if min_price_text and bool(config.get("debug", {}).get("save_ocr_text", True)):
-        (runs_dir / f"{timestamp}_{label}_min_price.txt").write_text(min_price_text, encoding="utf-8")
-    return min_price_text
-
-
-def _observe_finalize_round(
-    config: dict[str, Any],
-    config_path: Path,
-    label: str,
-    *,
-    t_obs: float,
-    frame: Image.Image,
-    runs_dir: Path,
-    timestamp: str,
-    image_path: Path | None,
-    central_text: str,
-    opponent_last_bid: int | None,
-    scan_session: dict[str, Any] | None,
-) -> tuple[Observation, str, int | None]:
-    """回合内：中央区 OCR 之后解析情报与底价 OCR；``opponent_last_bid`` 由调用方在中央区 OCR 之前算好。返回 ``(Observation, min_price_text, opponent_last_bid)``。"""
-
-    t_parse = time.perf_counter()
-    capture = CaptureResult(text=central_text, image_path=image_path, parsed=parse_central_info(central_text))
-    perf_log_elapsed(f"observe[{label}] parse_central_info", t_parse)
-    round_no = parse_round_number(central_text)
-
-    min_price_text = _observe_min_price_block(
-        config,
-        label,
-        frame=frame,
-        runs_dir=runs_dir,
-        timestamp=timestamp,
-        central_text=central_text,
-        scan_session=scan_session,
-    )
-
-    perf_log_elapsed(f"observe[{label}] 总计", t_obs)
-    return (
-        Observation(
-            capture=capture,
-            end_text="",
-            round_no=round_no,
-            end_prompt=False,
-            reward_continue=False,
-            failed_auction_settlement=False,
-            auction_lobby=False,
-            home_bid_button=False,
-            has_any_signal=False,
-        ),
-        min_price_text,
-        opponent_last_bid,
-    )
-
-
 def _observe_finalize_poll(
     label: str,
     *,
@@ -897,8 +399,8 @@ def _observe_finalize_poll(
 ) -> Observation:
     """主循环轮询：整窗 + home 信号；``end_text`` 为整窗 OCR 串。"""
     t_parse = time.perf_counter()
-    capture = CaptureResult(text=central_text, image_path=image_path, parsed=parse_central_info(central_text))
-    perf_log_elapsed(f"observe[{label}] parse_central_info", t_parse)
+    capture = CaptureResult(text=central_text, image_path=image_path, parsed={})
+    perf_log_elapsed(f"observe[{label}] capture_meta", t_parse)
     round_no = parse_round_number(central_text) or parse_round_number(full_window_text)
     parsed_facts = capture.parsed.get("parsed_facts") or []
     failed_settlement = has_failed_auction_settlement(full_window_text)
@@ -931,12 +433,9 @@ def observe_state_round(
     config_path: Path,
     label: str,
     *,
-    opponent_bid_round_no: int | None = None,
-    opponent_bid_lobby_count: int | None = None,
-    scan_session: dict[str, Any] | None = None,
     auction_round_no: int | None = None,
-) -> tuple[Observation, str, int | None]:
-    """回合内：先对手价网格 OCR；再满足 ``timing.round_detect_wait_seconds``（首轮加 ``round1_extra_wait_seconds``）后再截屏做中央区与底价 OCR。不 OCR home、不保留整窗合并文案。"""
+) -> Observation:
+    """回合内：整窗 OCR 识别轮次；不再做中央区结构化解析、对手价或底价区 OCR。"""
     t_obs = time.perf_counter()
     bring_window_to_front(config)
     t_cap = time.perf_counter()
@@ -950,7 +449,7 @@ def observe_state_round(
         frame.save(image_path)
 
     timing_cfg = config.get("timing", {}) or {}
-    target_pre_central = max(
+    target_pre = max(
         0.0,
         float(timing_cfg.get("round_detect_wait_seconds", 0.0) or 0.0)
         + (
@@ -959,56 +458,29 @@ def observe_state_round(
             else 0.0
         ),
     )
-    t_pre_central_budget = time.perf_counter()
-    bid_round_for_opponent = int(opponent_bid_round_no) if opponent_bid_round_no is not None else None
-    opponent_last_bid = _observe_opponent_last_bid_block(
-        config,
-        config_path,
-        label,
-        frame=frame,
-        bid_round_no=bid_round_for_opponent,
-        opponent_bid_lobby_count=opponent_bid_lobby_count,
-        scan_session=scan_session,
-    )
-    elapsed_toward_pre_central = time.perf_counter() - t_pre_central_budget
-    remaining_pre_central = max(0.0, target_pre_central - elapsed_toward_pre_central)
-    if remaining_pre_central > 0:
+    if target_pre > 0:
         t_pad = time.perf_counter()
-        sleep_interruptible(remaining_pre_central)
+        sleep_interruptible(target_pre)
         perf_log_elapsed(f"observe[{label}] round_detect_wait_pad", t_pad)
     frame, _info = capture_window_frame(config)
-    central_region = config.get("capture", {}).get("central_info_region")
     t_ocr = time.perf_counter()
+    ocr_text = rapidocr_once(ImageOps.grayscale(frame).convert("RGB"))
+    perf_log_elapsed(f"observe[{label}] OCR_full_window", t_ocr)
+    if bool(config.get("debug", {}).get("save_ocr_text", True)):
+        (runs_dir / f"{timestamp}_{label}_full_window.txt").write_text(ocr_text, encoding="utf-8")
 
-    if central_region:
-        central_box = scaled_region_box(central_region, config, frame.width, frame.height)
-        t_central = time.perf_counter()
-        central_crop = frame.crop(central_box)
-        central_text = rapidocr_once(ImageOps.grayscale(central_crop).convert("RGB"))
-        if bool(config.get("debug", {}).get("save_crops", True)):
-            central_crop.save(runs_dir / f"{timestamp}_{label}_central_info.png")
-        if bool(config.get("debug", {}).get("save_ocr_text", True)):
-            (runs_dir / f"{timestamp}_{label}_central_info.txt").write_text(central_text, encoding="utf-8")
-        perf_log_elapsed(f"observe[{label}] OCR_central_region", t_central)
-    else:
-        central_text = rapidocr_once(ImageOps.grayscale(frame).convert("RGB"))
-        perf_log_elapsed(f"observe[{label}] OCR_full_window_as_central_fallback", t_ocr)
-        if bool(config.get("debug", {}).get("save_ocr_text", True)):
-            (runs_dir / f"{timestamp}_{label}_full_window.txt").write_text(central_text, encoding="utf-8")
-    perf_log_elapsed(f"observe[{label}] round_ocr_done", t_ocr)
-
-    return _observe_finalize_round(
-        config,
-        config_path,
-        label,
-        t_obs=t_obs,
-        frame=frame,
-        runs_dir=runs_dir,
-        timestamp=timestamp,
-        image_path=image_path,
-        central_text=central_text,
-        opponent_last_bid=opponent_last_bid,
-        scan_session=scan_session,
+    round_no = parse_round_number(ocr_text)
+    perf_log_elapsed(f"observe[{label}] 总计", t_obs)
+    return Observation(
+        capture=CaptureResult(text=ocr_text, image_path=image_path, parsed={}),
+        end_text="",
+        round_no=round_no,
+        end_prompt=False,
+        reward_continue=False,
+        failed_auction_settlement=False,
+        auction_lobby=False,
+        home_bid_button=False,
+        has_any_signal=False,
     )
 
 
@@ -1057,11 +529,8 @@ def observe_state_poll(
 
 
 def apply_observation_memory(observation: Observation, knowledge_patch: dict[str, Any] | None) -> dict[str, Any] | None:
-    parsed = sanitize_parsed_patch_for_memory(observation.capture.parsed or {}, observation.round_no)
-    facts = parsed.get("parsed_facts") or []
-    if not facts:
-        return knowledge_patch
-    return merge_parsed_memory(knowledge_patch, parsed)
+    _ = observation
+    return knowledge_patch
 
 
 def save_round_debug_bundle(
@@ -1098,24 +567,6 @@ def save_round_debug_bundle(
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-
-
-def persist_last_submitted_price(
-    config_path: Path,
-    price: int | None,
-    runtime_config: dict[str, Any] | None = None,
-) -> None:
-    normalized_price = None if price is None else int(price)
-    if runtime_config is not None:
-        runtime_config.setdefault("pricing", {})
-        runtime_config["pricing"]["last_submitted_price"] = normalized_price
-    try:
-        config = load_json(config_path)
-    except Exception:
-        return
-    config.setdefault("pricing", {})
-    config["pricing"]["last_submitted_price"] = normalized_price
-    config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def virtual_screen_rect() -> tuple[int, int, int, int]:
@@ -1484,412 +935,132 @@ def run_map_selection_transition(config: dict[str, Any], selected_map: str) -> f
     return confirm_at
 
 
-def choose_rounding(value: float, rounding: str) -> int:
-    if rounding == "ceil_int":
-        return int(math.ceil(value))
-    if rounding == "round_int":
-        return int(round(value))
-    return int(math.floor(value))
-
-
-def parse_float_config(value: Any, default: float) -> float:
+def board_snapshot_file_missing(config: dict[str, Any]) -> bool:
+    """``board_snapshot`` 已启用且配置了 path，但磁盘上尚无该文件。"""
+    bs = config.get("board_snapshot") or {}
+    if not bs.get("enabled"):
+        return False
+    raw_path = str(bs.get("path") or "").strip()
+    if not raw_path:
+        return True
     try:
-        return float(value)
-    except Exception:
-        return float(default)
+        return not Path(raw_path).is_file()
+    except OSError:
+        return True
 
 
-def parse_int_config(value: Any, default: int) -> int:
-    try:
-        return int(float(value))
-    except Exception:
-        return int(default)
+def game_started_from_poll(
+    bs_data: dict[str, Any] | None,
+    observation: Observation,
+) -> bool:
+    """选图后轮询：快照回合或整窗 OCR 回合任一表明已进入竞拍。"""
+    if bs_data:
+        sr = current_round_from_snapshot(bs_data)
+        if sr is not None and int(sr) >= 1:
+            return True
+    rn = observation.round_no
+    return rn is not None and int(rn) >= 1
 
 
-def apply_observed_low_price_floor(result: dict[str, Any], price: int, rounding: str) -> tuple[int, str | None]:
-    summary = (result or {}).get("summary") or {}
-    observed_low_price = summary.get("observed_low_price")
-    if observed_low_price is None:
-        return int(price), None
-    try:
-        observed_low_price = float(observed_low_price)
-    except Exception:
-        return int(price), None
-    if observed_low_price <= 0:
-        return int(price), None
-    if observed_low_price > float(price):
-        raised = choose_rounding(observed_low_price * 1.25, rounding)
-        return int(max(price, raised)), f"observed_low_price={observed_low_price:.0f} -> raised={raised}"
-    return int(price), None
-
-
-def choose_bid_value_by_mode(config: dict[str, Any], result: dict[str, Any]) -> tuple[float | None, str]:
-    selected_risk = str(config.get("automation", {}).get("selected_risk", "均衡")).strip()
-    summary = (result or {}).get("summary") or {}
-    custom_factor = parse_float_config(config.get("automation", {}).get("custom_risk_factor"), 0.0)
-    if selected_risk in ("保守", "conservative", "floor_price"):
-        return summary.get("floor_price"), "保守=floor_price"
-    if selected_risk in ("激进", "aggressive", "avg_price_plus_25"):
-        avg_price = summary.get("avg_price")
-        return (float(avg_price) * 1.25 if avg_price is not None else None), "激进=avg_price*1.25"
-    if selected_risk in ("自定义", "custom", "custom_factor"):
-        avg_price = summary.get("avg_price")
-        return (float(avg_price) * (1.0 + custom_factor) if avg_price is not None else None), f"自定义=avg_price*(1+{custom_factor:.4f})"
-    return summary.get("avg_price"), "均衡=avg_price"
-
-
-def apply_bid_cap(config: dict[str, Any], final_price: int, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
-    automation = config.get("automation", {})
-    bid_cap = max(0, parse_int_config(automation.get("bid_cap_price"), 0))
-    if bid_cap <= 0:
-        payload["bid_cap"] = {"enabled": False, "cap_price": 0, "applied": False}
-        return int(final_price), payload
-    capped = min(int(final_price), bid_cap)
-    payload["bid_cap"] = {
+def _default_warehouse_auto_sort_settings() -> dict[str, Any]:
+    return {
         "enabled": True,
-        "cap_price": bid_cap,
-        "applied": capped != int(final_price),
-        "original_price": int(final_price),
+        "wait_after_warehouse_click_seconds": 5.0,
+        "wait_after_auto_sort_click_seconds": 5.0,
+        "warehouse_button_region": {"left": 71, "top": 992, "width": 111, "height": 53},
+        "auto_sort_region": {"left": 1436, "top": 1010, "width": 155, "height": 34},
     }
-    return int(capped), payload
 
 
-def apply_safe_guard(config: dict[str, Any], final_price: int, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
-    automation = config.get("automation", {})
-    safe_enabled = bool(automation.get("safe_guard_enabled", False))
-    safe_limit = max(0.0, parse_float_config(automation.get("safe_guard_max_increase_ratio"), 0.0))
-    previous_price = config.get("pricing", {}).get("last_submitted_price")
-    if not safe_enabled:
-        payload["safe_guard"] = {"enabled": False, "triggered": False}
-        return int(final_price), payload
-    try:
-        previous = int(previous_price) if previous_price not in (None, "") else None
-    except Exception:
-        previous = None
-    if previous is None or previous <= 0:
-        payload["safe_guard"] = {"enabled": True, "triggered": False, "previous_price": previous}
-        return int(final_price), payload
-    limit_price = int(math.floor(previous * (1.0 + safe_limit)))
-    triggered = final_price > limit_price
-    payload["safe_guard"] = {
-        "enabled": True,
-        "triggered": triggered,
-        "previous_price": previous,
-        "limit_price": limit_price,
-        "safe_limit_ratio": safe_limit,
-    }
-    if triggered:
-        payload["skip_submit"] = True
-        payload["reason"] = (
-            f"safe_guard blocked: {final_price} > {limit_price} "
-            f"(previous={previous}, ratio={safe_limit:.4f})"
-        )
-        return int(final_price), payload
-    return int(final_price), payload
-
-
-def resolve_round_multiplier(round_no: int, price_config: dict[str, Any]) -> float:
-    r = max(1, min(5, int(round_no)))
-    rr = price_config.get("round_rules") or {}
-    item = rr.get(str(r))
-    if isinstance(item, dict) and item.get("multiplier") is not None:
-        return float(item["multiplier"])
-    return float(ROUND_RULES.get(r, ROUND_RULES[5])["multiplier"])
-
-
-def apply_opponent_bid_adjustment(
-    config: dict[str, Any],
-    bid: int,
-    round_no: int,
-    o_prev: int | None,
-    price_config: dict[str, Any],
-    min_price_points: int | None = None,
-) -> tuple[int, str | None]:
-    au = config.get("automation", {})
-    omin = max(0, parse_int_config(au.get("opponent_bid_min"), 20000))
-    omax = max(0, parse_int_config(au.get("opponent_bid_max"), 300000))
-    sticky = parse_int_config(au.get("opponent_bid_sticky_ratio"), 0.1)
-    if int(round_no) < 2 or o_prev is None:
-        return int(bid), None
-
-    if o_prev < omin or o_prev > omax:
-        return int(bid), None
-    k_inc = parse_float_config(au.get("opponent_bid_k_increment"), 1.02)
-    mult = resolve_round_multiplier(round_no, price_config)
-    bid_f = float(bid)
-    adj = int(math.floor(float(o_prev) * k_inc * mult + 1000))
-    mp = as_non_neg_int(min_price_points)
-    bid_s =int(bid_f * (1 + sticky) + random.randint(500, 1500))
-    if round_no >= 2:
-        if bid_f > adj:
-            if round_no <= 3:
-                if mp is not None and mp > adj:
-                    return int(bid), None
-                return min(int(bid), adj), "opp_low"
-            return max(int((bid + adj)/2), adj), "opp_avg" 
-    if round_no >= 5:
-        return max(bid_s, int(o_prev *1.1 + random.randint(500, 1500))), "opp_final"
-    if round_no == 3:
-        return max(bid_s, int(o_prev * k_inc *(1 + sticky) + random.randint(500, 1500))), "opp_sticky"
-    if bid_f > float(o_prev):
-        return int(bid)+ random.randint(500, 1500), "opp_random"
-    return max(bid_s, int(o_prev * k_inc * 1/mult * 1.1 *(1 + sticky) + random.randint(500, 1500))), "opp_sticky"
-
-
-def compute_value_anchor_ceiling_points(
-    advisor_input: dict[str, Any],
-    price_config: dict[str, Any],
-    min_price_points: int | None,
-    price_multiplier: int,
-    rounding: str,
-    *,
-    local_solved: dict[str, Any] | None = None,
-) -> tuple[int | None, dict[str, Any]]:
-    ceiling_w = compute_value_anchor_ceiling_w(
-        advisor_input, price_config, min_price_points=min_price_points, local_solved=local_solved
-    )
-    if ceiling_w is None or ceiling_w <= 0:
-        return None, {"reason": "no_ceiling_computed"}
-    ceiling_pts = choose_rounding(float(ceiling_w) * float(price_multiplier), rounding)
-    ceiling_pts = max(1, int(ceiling_pts))
-    return ceiling_pts, {"ceiling_w": ceiling_w, "ceiling_points": ceiling_pts}
-
-
-def apply_price_post_processing(
-    config: dict[str, Any],
-    advisor_input: dict[str, Any],
-    price_config: dict[str, Any],
-    round_no: int,
-    min_price_points: int | None,
-    opponent_last_bid: int | None,
-    final_price: int,
-    payload: dict[str, Any],
-    *,
-    price_multiplier: int,
-    rounding: str,
-    value_anchor_local_solved: dict[str, Any] | None = None,
-) -> tuple[int, dict[str, Any]]:
-    t_post = time.perf_counter()
-    fin = int(final_price)
-    fin_before_opp = fin
-    t_va = time.perf_counter()
-    ceiling_pts, va_meta = compute_value_anchor_ceiling_points(
-        advisor_input,
-        price_config,
-        min_price_points,
-        price_multiplier,
-        rounding,
-        local_solved=value_anchor_local_solved,
-    )
-    perf_log_elapsed("post.compute_value_anchor_ceiling_points", t_va)
-
-    if not payload.get("fallback"):
-        fin_before_opp = fin
-        fin, opp_tag = apply_opponent_bid_adjustment(
-            config,
-            fin,
-            int(round_no),
-            opponent_last_bid,
-            price_config,
-            min_price_points=min_price_points,
-        )
-        if opp_tag:
-            payload["opponent_bid"] = {"applied": True, "tag": opp_tag, "before": fin_before_opp, "after": fin, "o_prev": opponent_last_bid,"ceiling_pts": ceiling_pts}
+def merge_warehouse_auto_sort_settings(config: dict[str, Any]) -> dict[str, Any]:
+    """合并 ``automation.aisha_warehouse_auto_sort``（保留配置键名以兼容旧档）。"""
+    defaults = _default_warehouse_auto_sort_settings()
+    raw = (config.get("automation") or {}).get("aisha_warehouse_auto_sort")
+    if not isinstance(raw, dict):
+        return defaults
+    out = dict(defaults)
+    for key, val in raw.items():
+        if key in ("warehouse_button_region", "auto_sort_region") and isinstance(val, dict):
+            base = dict(defaults[key]) if isinstance(defaults.get(key), dict) else {}
+            base.update(val)
+            out[key] = base
         else:
-            payload["opponent_bid"] = {"applied": False, "o_prev": opponent_last_bid, "ceiling_pts": ceiling_pts}
-    else:
-        payload["opponent_bid"] = {"applied": False, "skipped": "fallback"}
-    fin, payload = apply_ceiling_points(fin, fin_before_opp, ceiling_pts, payload, int(round_no))
-    fin, payload = apply_bid_cap(config, fin, payload)
-    fin, payload = apply_safe_guard(config, fin, payload)  
-    perf_log_elapsed("post.apply_price_post_processing 总计", t_post)
-    return fin, payload
-
-def apply_ceiling_points(fin: int, fin_before_opp: int, ceiling_pts: int | None, payload: dict[str, Any], round_no: int) -> tuple[int, dict[str, Any]]:
-    if ceiling_pts is None:
-        return int(fin), payload
-    if round_no >= 5 and fin <= ceiling_pts * 1.2:
-        return int(fin), payload
-    if round_no >= 3 and fin <= ceiling_pts * 1.1:
-        return int(fin), payload
-    return int(fin_before_opp), payload
-
-def parse_min_price_ocr_to_int(min_price_text: str) -> int | None:
-    """从 min_price_region OCR（界面「当前预估最低价格」等）解析最少价值整数（如「7,140」→ 7140）。"""
-    if not (min_price_text or "").strip():
-        return None
-    best: int | None = None
-    for m in re.finditer(r"[\d,]+", min_price_text):
-        chunk = m.group(0).replace(",", "")
-        if chunk.isdigit():
-            v = int(chunk)
-            if v > 0 and (best is None or v > best):
-                best = v
-    return best
+            out[key] = val
+    return out
 
 
-def compute_bid_price(
+def _click_client_region_center(
     config: dict[str, Any],
-    parsed_patch: dict[str, Any],
-    round_no: int,
-    price_config: dict[str, Any],
-    *,
-    min_price_ocr_text: str = "",
-    opponent_last_bid: int | None = None,
-) -> tuple[int, dict[str, Any]]:
-    pricing = config.get("pricing", {})
-    fallback = parse_int_config(pricing.get("fallback_bid_price"), 22223)
-    min_facts = int(pricing.get("min_useful_facts", 1))
-    multiplier = int(pricing.get("computed_price_multiplier", 10000))
-    rounding = str(pricing.get("rounding", "floor_int"))
-    mode = str(config.get("automation", {}).get("selected_mode", "ahmad_premium")).strip().lower()
-    if mode in ("normal", "express"):
-        mode = "ahmad_premium"
-    t_bid = time.perf_counter()
-    ocr_floor_reason: str | None = None
-    low_price_reason: str | None = None
-    price = 0
-    value = 0.0
-    source_reason = ""
-
-    parsed = parsed_patch
-    t0 = time.perf_counter()
-    advisor_input = build_advisor_input_from_patch(config, parsed_patch, round_no, price_config)
-    perf_log_elapsed(f"bid_price.build_advisor_input mode={mode}", t0)
-    facts = parsed.get("parsed_facts") or []
-    payload: dict[str, Any] = {
-        "fallback": False,
-        "reason": "",
-        "facts": len(facts),
-        "parsed": parsed,
-        "advisor_input": advisor_input,
-        "result": {},
-        "source_value": None,
-    }
-    mp_common = parse_min_price_ocr_to_int(min_price_ocr_text)
-    va_reuse_solved: dict[str, Any] | None = None
-
-    def _return_with_post(final: int) -> tuple[int, dict[str, Any]]:
-        out, pl = apply_price_post_processing(
-            config,
-            advisor_input,
-            price_config,
-            int(round_no),
-            mp_common,
-            opponent_last_bid,
-            int(final),
-            payload,
-            price_multiplier=multiplier,
-            rounding=rounding,
-            value_anchor_local_solved=va_reuse_solved,
-        )
-        va = pl.get("value_anchor") or {}
-        if va.get("applied"):
-            pl["reason"] = (pl.get("reason") or "") + f"; value_anchor_cap={va.get('ceiling_points')}"
-        ob = pl.get("opponent_bid") or {}
-        if ob.get("applied"):
-            pl["reason"] = (pl.get("reason") or "") + f"; opponent_bid={ob.get('tag')}"
-        return out, pl
-
-    if mode == "aisha_premium":
-        payload["fallback"] = True
-        payload["reason"] = "aisha_premium 请使用 fresh_aisha_bot.py（画板快照专用入口）"
-        return _return_with_post(fallback)
-
-    if len(facts) < min_facts:
-        payload["fallback"] = True
-        payload["reason"] = f"not enough parsed facts: {len(facts)}"
-        return _return_with_post(fallback)
-
-    t_ev = time.perf_counter()
-    result = advisor_evaluate_for_bid(advisor_input)
-    perf_log_elapsed(f"bid_price.evaluate mode={mode}", t_ev)
-    payload["result"] = result
-    errors = result.get("errors") or []
-
-    use_ahmad_premium = mode == "ahmad_premium" and normalize_role(advisor_input.get("my_role", "ahmad")) in (
-        "ahmad",
-        "none",
+    region: dict[str, Any],
+    label: str,
+) -> None:
+    ensure_not_stopped()
+    bring_window_to_front(config)
+    frame, _info = capture_window_frame(config)
+    left, top, right, bottom = scaled_region_box(region, config, frame.width, frame.height)
+    cx = (left + right) // 2
+    cy = (top + bottom) // 2
+    sx, sy = client_to_screen(config, {"x": cx, "y": cy})
+    dry_run = bool(config.get("safety", {}).get("dry_run", False))
+    pause = float(config.get("timing", {}).get("click_pause_seconds", 0.12))
+    log(
+        f"warehouse auto_sort: click {label} client_center=({cx},{cy}) -> screen=({sx},{sy})",
+        gui_verbose_only=True,
     )
-    if errors and not use_ahmad_premium:
-        payload["fallback"] = True
-        payload["reason"] = "; ".join(str(item) for item in errors)
-        return _return_with_post(fallback)
+    if not dry_run:
+        pyautogui.click(sx, sy)
+    sleep_interruptible(pause)
+    if bool(config.get("safety", {}).get("park_mouse_after_clicks", True)):
+        park_mouse_if_configured(config)
 
-    if use_ahmad_premium:
-        ocr_min_for_ap = mp_common
-        va_reuse_solved = result.get("solved")
-        t_ap = time.perf_counter()
-        value_w, source_reason, _ap_sig, ap_msgs, _base_w = compute_ahmad_premium_w(
-            advisor_input,
-            price_config,
-            min_price_points=ocr_min_for_ap,
-            local_solved=va_reuse_solved if isinstance(va_reuse_solved, dict) else None,
-        )
-        perf_log_elapsed("bid_price.compute_ahmad_premium_w", t_ap)
-        if value_w is None:
-            payload["fallback"] = True
-            payload["reason"] = f"ahmad_premium: {source_reason}; " + "; ".join(str(x) for x in ap_msgs)
-            return _return_with_post(fallback)
-        value = float(value_w)
-        payload["source_value"] = value
-        if ap_msgs:
-            source_reason += f" [advisor校验: {'; '.join(ap_msgs)}]"
-        if value <= 0:
-            payload["fallback"] = True
-            payload["reason"] = f"non-positive source value: {value}"
-            return _return_with_post(fallback)
-        price = choose_rounding(value * multiplier, rounding)
-        if price <= 0:
-            payload["fallback"] = True
-            payload["reason"] = f"non-positive final price: {price}"
-            return _return_with_post(fallback)
-        final_price, low_price_reason = apply_observed_low_price_floor(result, price, rounding)
-    else:
-        t_nb = time.perf_counter()
-        value, source_reason = choose_bid_value_by_mode(config, result)
-        perf_log_elapsed("bid_price.choose_bid_value_by_mode", t_nb)
-        if value is None:
-            payload["fallback"] = True
-            payload["reason"] = f"missing bid value: {source_reason}"
-            return _return_with_post(fallback)
-        value = float(value)
-        payload["source_value"] = value
-        if value <= 0:
-            payload["fallback"] = True
-            payload["reason"] = f"non-positive source value: {value}"
-            return _return_with_post(fallback)
-        price = choose_rounding(value * multiplier, rounding)
-        if price <= 0:
-            payload["fallback"] = True
-            payload["reason"] = f"non-positive final price: {price}"
-            return _return_with_post(fallback)
-        final_price, low_price_reason = apply_observed_low_price_floor(result, price, rounding)
 
-    if low_price_reason:
-        payload["reason"] = (
-            f"{source_reason}: {value:.4f}w * {multiplier} -> input={price}; {low_price_reason}; pre_post={final_price}"
+def run_warehouse_auto_sort(config: dict[str, Any]) -> None:
+    """主页：点仓库 → 等待 → 自动排序 → 等待 → ESC 回主界面。"""
+    wc = merge_warehouse_auto_sort_settings(config)
+    if not bool(wc.get("enabled", True)):
+        return
+    wh_region = wc.get("warehouse_button_region")
+    sort_region = wc.get("auto_sort_region")
+    if not isinstance(wh_region, dict) or not isinstance(sort_region, dict):
+        log("warehouse auto_sort: 区域配置无效，跳过")
+        return
+    w1 = max(0.0, float(wc.get("wait_after_warehouse_click_seconds", 5.0) or 0.0))
+    w2 = max(0.0, float(wc.get("wait_after_auto_sort_click_seconds", 5.0) or 0.0))
+    log("warehouse auto_sort: 进入仓库并自动排序", gui_verbose_only=True)
+    _click_client_region_center(config, wh_region, "warehouse_entry")
+    if w1 > 0:
+        sleep_interruptible(w1)
+    _click_client_region_center(config, sort_region, "auto_sort")
+    if w2 > 0:
+        sleep_interruptible(w2)
+    press_escape(config)
+    log("warehouse auto_sort: 已 ESC 返回主界面", gui_verbose_only=True)
+
+
+def run_aisha_loop(config_path: Path) -> None:
+    """兼容入口：清快照、强制 ``aisha_premium`` 后进入 :func:`run_loop`。"""
+    cfg0 = load_json(config_path)
+    if board_snapshot_file_missing(cfg0):
+        log(
+            "启动时未发现 board_snapshot 文件：按新一局处理；请先在游戏内开局，"
+            "画板监听写入快照后即可继续。"
         )
-    else:
-        payload["reason"] = f"{source_reason}: {value:.4f}w * {multiplier} -> pre_post={final_price}"
-    if ocr_floor_reason:
-        payload["reason"] += f"; {ocr_floor_reason}"
-    
-    final_price, payload = _return_with_post(int(final_price))
-    bid_cap_info = payload.get("bid_cap") or {}
-    if bid_cap_info.get("applied"):
-        payload["reason"] += f"; bid_cap={bid_cap_info.get('cap_price')}"
-    perf_log_elapsed("bid_price.compute_bid_price 本轮总计(成功路径)", t_bid)
-    return int(final_price), payload
+    run_loop(
+        config_path,
+        app_log_path=Path.cwd() / "fresh_aisha_bot.log",
+        clear_snapshot_on_start=True,
+        force_selected_mode="aisha_premium",
+    )
+
 
 def handle_round(
     config: dict[str, Any],
     config_path: Path,
-    price_config: dict[str, Any],
     round_no: int,
     knowledge_patch: dict[str, Any] | None,
     scan_session: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
+    _ = scan_session
     ensure_not_stopped()
     click_loot_overlay_dismiss_if_enabled(config)
     tool_rounds = {int(item) for item in config.get("automation", {}).get("tool_rounds", [1, 2])}
@@ -1902,75 +1073,36 @@ def handle_round(
             sleep_interruptible(seconds)
     else:
         log(f"round {round_no}: tool skipped by config", gui_verbose_only=True)
-    # Bid-history grid: the current round's column is often still empty right after
-    # round start; read the previous round's column for opponent_last_bid (round 1 -> col "1").
-    opponent_bid_grid_round = max(1, int(round_no) - 1)
-    observation, min_price_text, opponent_last_bid = observe_state_round(
+
+    observation = observe_state_round(
         config,
         config_path,
         f"round{round_no}_after_tool",
-        opponent_bid_round_no=opponent_bid_grid_round,
-        scan_session=scan_session,
         auction_round_no=int(round_no),
     )
     knowledge_patch = apply_observation_memory(observation, knowledge_patch)
-    effective_patch = knowledge_patch or observation.capture.parsed
-    price, details = compute_bid_price(
+    price = compute_price(
         config,
-        effective_patch,
-        round_no,
-        price_config,
-        min_price_ocr_text=min_price_text,
-        opponent_last_bid=opponent_last_bid,
+        round_no=int(round_no),
+        observation=observation,
+        knowledge_patch=knowledge_patch,
     )
-    summary = (details.get("result") or {}).get("summary") or {}
-    advisor_input = details.get("advisor_input") or build_advisor_input_from_patch(config, effective_patch, round_no, price_config)
-    if details.get("fallback"):
-        log(f"price fallback: {price}; reason={details.get('reason')}")
-    else:
-        log(
-            "price computed: "
-            f"{price}; {details.get('reason')}; "
-            f"facts={details.get('facts')} combo={summary.get('combo_count')}"
-        )
-    log(
-        "opponent_bid: "
-        + json.dumps(
-            {
-                "opponent_bid": details.get("opponent_bid"),
-            },
-            ensure_ascii=False,
-        )
-    )
-    if bool(config.get("debug", {}).get("print_ocr_snippet", False)):
-        log("ocr snippet: " + compact_text(observation.capture.text)[:160])
-    if bool(config.get("debug", {}).get("print_round_debug", True)):
-        # log(f"debug advisor input keys: {sorted(advisor_input.keys())}")
-        log(f"debug parsed facts: {len((effective_patch or {}).get('parsed_facts') or [])}")
+    log(f"compute_price -> {price}")
+    details = {"reason": "interaction.compute_price placeholder"}
     save_round_debug_bundle(
         config,
         config_path,
         round_no=round_no,
         raw_text=observation.capture.text,
-        knowledge_patch=effective_patch,
-        advisor_input=advisor_input,
+        knowledge_patch=knowledge_patch,
+        advisor_input={},
         details=details,
         final_price=price,
     )
-    if details.get("skip_submit"):
-        log(f"bid skipped: {details.get('reason')}")
-        return knowledge_patch
+    if bool(config.get("debug", {}).get("print_ocr_snippet", False)):
+        log("ocr snippet: " + compact_text(observation.capture.text)[:160])
     input_bid(config, price, config_path=config_path)
-    persist_last_submitted_price(config_path, price, config)
     return knowledge_patch
-
-
-def load_price_config(config: dict[str, Any], config_path: Path) -> dict[str, Any]:
-    price_path = resolve_path(config_path, config.get("advisor", {}).get("price_config_path"), "price_config.json")
-    if not price_path.exists():
-        log(f"warn: price config not found, using defaults: {price_path}")
-        return {}
-    return load_json(price_path)
 
 
 def handle_end_transition(
@@ -1989,26 +1121,39 @@ def handle_end_transition(
     return time.monotonic(), confirm_at
 
 
-def run_loop(config_path: Path) -> None:
+def run_loop(
+    config_path: Path,
+    *,
+    app_log_path: Path | None = None,
+    clear_snapshot_on_start: bool = False,
+    force_selected_mode: str | None = None,
+) -> None:
     # 与控制台同内容的运行日志；cwd 在脚本与 PyInstaller exe 下均为进程当前工作目录
-    set_app_log_file(Path.cwd() / "bidking_fresh_bot.log")
+    set_app_log_file(app_log_path or (Path.cwd() / "bidking_fresh_bot.log"))
     config = load_json(config_path)
     set_gui_log_verbose(bool((config.get("debug") or {}).get("gui_verbose", False)))
-    persist_last_submitted_price(config_path, None, config)
+    if clear_snapshot_on_start:
+        clear_board_snapshot_file(config)
+    if force_selected_mode:
+        config.setdefault("automation", {})["selected_mode"] = str(force_selected_mode)
     apply_pyautogui_from_config(config)
     lv = refresh_poll_loop_locals(config)
     selected_map = lv["selected_map"]
     max_runs = lv["max_runs"]
     prepare_target_window(config, center=True)
 
-    log("fresh bot started（按 F9 停止）")
+    log("BidKing bot 已启动（交互层；出价由 compute_price 注入）；按 F9 停止")
     log("mode: full-window OCR -> lobby/end/round handling", gui_verbose_only=True)
 
     handled_rounds: set[int] = set()
     knowledge_patch: dict[str, Any] | None = None
+    cached_game_uid: str | None = None
+    preflight_esc_before_next_map_select = True
+    await_non_lobby_after_preflight_esc = False
+    pending_game_start_deadline: float | None = None
+    startup_warehouse_sort_done = False
+    warehouse_sort_milestones_done: set[int] = set()
     scan_session: dict[str, Any] = {
-        "min_price_cached_points": None,
-        "min_price_central_trigger_count_prev": 0,
         "opp_lobby_key": None,
         "opp_self_slot": None,
     }
@@ -2035,9 +1180,11 @@ def run_loop(config_path: Path) -> None:
         loop_index += 1
         try:
             ensure_not_stopped()
-            # 与 GUI 写入的 config.json / price_config.json 同步，便于不停止脚本时调整参数
+            # 与 GUI 写入的 config.json 同步，便于不停止脚本时调整参数
             config = load_json(config_path)
             set_gui_log_verbose(bool((config.get("debug") or {}).get("gui_verbose", False)))
+            if force_selected_mode:
+                config.setdefault("automation", {})["selected_mode"] = str(force_selected_mode)
             apply_pyautogui_from_config(config)
             lv = refresh_poll_loop_locals(config)
             poll_seconds = lv["poll_seconds"]
@@ -2049,12 +1196,65 @@ def run_loop(config_path: Path) -> None:
             stuck_handled_threshold = lv["stuck_handled_threshold"]
             selected_map = lv["selected_map"]
             max_runs = lv["max_runs"]
-            price_config = load_price_config(config, config_path)
+            game_start_timeout_seconds = lv["game_start_timeout_seconds"]
+            mode_loop = str(
+                (config.get("automation") or {}).get("selected_mode", "ahmad_premium")
+            ).strip().lower()
+            if mode_loop in ("normal", "express"):
+                mode_loop = "ahmad_premium"
+
             observation = observe_state_poll(config, config_path, "poll")
             knowledge_patch = apply_observation_memory(observation, knowledge_patch)
-            round_no = observation.round_no
+
+            bs_cfg = config.get("board_snapshot") or {}
+            bs_enabled = bool(bs_cfg.get("enabled"))
+            bs_data = None
+            snap_round: int | None = None
+            if bs_enabled:
+                bs_data = load_board_snapshot_for_loop(config)
+                snap_round = current_round_from_snapshot(bs_data) if bs_data else None
+                round_no = snap_round if snap_round is not None else observation.round_no
+            else:
+                round_no = observation.round_no
+
+            if await_non_lobby_after_preflight_esc and not observation.auction_lobby:
+                await_non_lobby_after_preflight_esc = False
+
+            if pending_game_start_deadline is not None:
+                if game_started_from_poll(bs_data, observation):
+                    pending_game_start_deadline = None
+                elif time.monotonic() >= pending_game_start_deadline:
+                    log(
+                        f"loop {loop_index}: 选图后 {game_start_timeout_seconds:.0f}s 内未检测到开局，"
+                        "ESC 回主页后重试"
+                    )
+                    press_escape(config)
+                    preflight_esc_before_next_map_select = False
+                    await_non_lobby_after_preflight_esc = True
+                    pending_game_start_deadline = None
+                    last_lobby_at = 0.0
+                    sleep_interruptible(poll_seconds)
+                    continue
+
+            game_uid = game_uid_from_snapshot(bs_data) if bs_enabled else None
+            if (
+                bs_enabled
+                and game_uid is not None
+                and cached_game_uid is not None
+                and game_uid != cached_game_uid
+            ):
+                log(
+                    f"loop {loop_index}: 新局 game_uid {cached_game_uid!r} -> {game_uid!r}；重置回合状态"
+                )
+                handled_rounds.clear()
+                knowledge_patch = apply_observation_memory(observation, None)
+                reset_capture_scan_session(scan_session)
+            if bs_enabled and game_uid is not None:
+                cached_game_uid = game_uid
+
             log(
-                f"loop {loop_index}: observed round={round_no} "
+                f"loop {loop_index}: snap_round={snap_round} poll_round={observation.round_no} "
+                f"effective_round={round_no} "
                 f"end={observation.end_prompt} lobby={observation.auction_lobby} "
                 f"reward_continue={observation.reward_continue} "
                 f"failed_auction={observation.failed_auction_settlement} "
@@ -2089,6 +1289,7 @@ def run_loop(config_path: Path) -> None:
                 continue
 
             if observation.end_prompt:
+                pending_game_start_deadline = None
                 last_end_at, confirm_at = handle_end_transition(
                     config,
                     handled_rounds,
@@ -2099,9 +1300,9 @@ def run_loop(config_path: Path) -> None:
                 if confirm_at:
                     last_post_continue_confirm_at = confirm_at
                 completed_runs += 1
+                preflight_esc_before_next_map_select = True
                 knowledge_patch = None
                 reset_capture_scan_session(scan_session)
-                persist_last_submitted_price(config_path, None, config)
                 log(f"completed runs: {completed_runs}/{max_runs}")
                 if completed_runs >= max_runs:
                     log("target runs reached; exit")
@@ -2110,6 +1311,7 @@ def run_loop(config_path: Path) -> None:
                 continue
 
             if observation.reward_continue:
+                pending_game_start_deadline = None
                 if time.monotonic() - last_reward_continue_at >= reward_continue_debounce:
                     run_reward_continue_transition(config)
                     knowledge_patch = None
@@ -2121,12 +1323,13 @@ def run_loop(config_path: Path) -> None:
                 continue
 
             if observation.failed_auction_settlement:
+                pending_game_start_deadline = None
                 if time.monotonic() - last_failed_auction_at >= transition_debounce:
                     run_failed_auction_settlement_transition(config)
+                    preflight_esc_before_next_map_select = True
                     knowledge_patch = None
                     reset_capture_scan_session(scan_session)
                     handled_rounds.clear()
-                    persist_last_submitted_price(config_path, None, config)
                     last_failed_auction_at = time.monotonic()
                 else:
                     log(f"loop {loop_index}: failed auction settlement ignored by debounce", gui_verbose_only=True)
@@ -2135,14 +1338,36 @@ def run_loop(config_path: Path) -> None:
 
             if observation.auction_lobby:
                 if time.monotonic() - last_lobby_at >= transition_debounce:
-                    confirm_at = run_map_selection_transition(config, selected_map)
-                    if confirm_at:
-                        last_post_continue_confirm_at = confirm_at
-                    handled_rounds.clear()
-                    knowledge_patch = None
-                    reset_capture_scan_session(scan_session)
-                    persist_last_submitted_price(config_path, None, config)
-                    last_lobby_at = time.monotonic()
+                    if mode_loop == "aisha_premium" and preflight_esc_before_next_map_select:
+                        log(
+                            f"loop {loop_index}: auction lobby: 开局前先 ESC 回主界面，"
+                            "再由主页进入选图",
+                            gui_verbose_only=True,
+                        )
+                        press_escape(config)
+                        preflight_esc_before_next_map_select = False
+                        await_non_lobby_after_preflight_esc = True
+                        last_lobby_at = time.monotonic()
+                    elif mode_loop == "aisha_premium" and await_non_lobby_after_preflight_esc:
+                        log(
+                            f"loop {loop_index}: auction lobby: 已 ESC，"
+                            "等待退出大厅界面后再从主页进入选图",
+                            gui_verbose_only=True,
+                        )
+                        sleep_interruptible(poll_seconds)
+                        continue
+                    else:
+                        confirm_at = run_map_selection_transition(config, selected_map)
+                        if confirm_at:
+                            last_post_continue_confirm_at = confirm_at
+                            if mode_loop == "aisha_premium":
+                                pending_game_start_deadline = (
+                                    time.monotonic() + game_start_timeout_seconds
+                                )
+                        handled_rounds.clear()
+                        knowledge_patch = None
+                        reset_capture_scan_session(scan_session)
+                        last_lobby_at = time.monotonic()
                 else:
                     log(f"loop {loop_index}: auction lobby ignored by debounce", gui_verbose_only=True)
                 sleep_interruptible(poll_seconds)
@@ -2150,10 +1375,30 @@ def run_loop(config_path: Path) -> None:
 
             if observation.home_bid_button:
                 if time.monotonic() - last_home_bid_at >= transition_debounce:
+                    if mode_loop == "aisha_premium":
+                        wc = merge_warehouse_auto_sort_settings(config)
+                        if bool(wc.get("enabled", True)):
+                            need_wh_sort = False
+                            reason = ""
+                            if not startup_warehouse_sort_done:
+                                need_wh_sort = True
+                                reason = "开局首次回到主页"
+                            elif (
+                                completed_runs > 0
+                                and completed_runs % 5 == 0
+                                and completed_runs not in warehouse_sort_milestones_done
+                            ):
+                                need_wh_sort = True
+                                reason = f"已完成 {completed_runs} 局（每 5 局整理）"
+                            if need_wh_sort:
+                                log(f"warehouse auto_sort: 触发整理 ({reason})", gui_verbose_only=True)
+                                run_warehouse_auto_sort(config)
+                                startup_warehouse_sort_done = True
+                                if completed_runs > 0 and completed_runs % 5 == 0:
+                                    warehouse_sort_milestones_done.add(int(completed_runs))
                     run_home_bid_button_transition(config)
                     knowledge_patch = None
                     reset_capture_scan_session(scan_session)
-                    persist_last_submitted_price(config_path, None, config)
                     last_home_bid_at = time.monotonic()
                 else:
                     log(f"loop {loop_index}: home bid button ignored by debounce", gui_verbose_only=True)
@@ -2161,7 +1406,14 @@ def run_loop(config_path: Path) -> None:
                 continue
 
             if round_no is None:
-                log(f"loop {loop_index}: no round detected; waiting", gui_verbose_only=True)
+                if bs_enabled and not bs_data:
+                    log(
+                        f"loop {loop_index}: 尚无有效 board_snapshot 且无 OCR 回合；"
+                        "可先开局，等待画板写入快照",
+                        gui_verbose_only=True,
+                    )
+                else:
+                    log(f"loop {loop_index}: no round detected; waiting", gui_verbose_only=True)
                 sleep_interruptible(poll_seconds)
                 continue
 
@@ -2170,8 +1422,6 @@ def run_loop(config_path: Path) -> None:
                 handled_rounds.clear()
                 knowledge_patch = apply_observation_memory(observation, None)
                 reset_capture_scan_session(scan_session)
-                persist_last_submitted_price(config_path, None, config)
-
             if round_no not in handled_rounds:
                 stuck_already_handled_polls = 0
 
@@ -2190,16 +1440,15 @@ def run_loop(config_path: Path) -> None:
                     handled_rounds.clear()
                     knowledge_patch = None
                     reset_capture_scan_session(scan_session)
-                    persist_last_submitted_price(config_path, None, config)
                     sleep_interruptible(poll_seconds)
                     continue
                 log(f"loop {loop_index}: round {round_no} already handled; waiting", gui_verbose_only=True)
                 sleep_interruptible(poll_seconds)
                 continue
 
-            log(f"loop {loop_index}: round {round_no} detected", gui_verbose_only=True)
+            log(f"loop {loop_index}: round {round_no} -> handle_round", gui_verbose_only=True)
             knowledge_patch = handle_round(
-                config, config_path, price_config, round_no, knowledge_patch, scan_session
+                config, config_path, round_no, knowledge_patch, scan_session
             )
             handled_rounds.add(round_no)
 
@@ -2214,6 +1463,7 @@ def run_loop(config_path: Path) -> None:
             log("stopped by GUI")
             return
         except EndPromptDetected as exc:
+            pending_game_start_deadline = None
             last_end_at, confirm_at = handle_end_transition(
                 config,
                 handled_rounds,
@@ -2224,9 +1474,9 @@ def run_loop(config_path: Path) -> None:
             if confirm_at:
                 last_post_continue_confirm_at = confirm_at
             completed_runs += 1
+            preflight_esc_before_next_map_select = True
             knowledge_patch = None
             reset_capture_scan_session(scan_session)
-            persist_last_submitted_price(config_path, None, config)
             log(f"completed runs: {completed_runs}/{max_runs}")
             if completed_runs >= max_runs:
                 log("target runs reached; exit")
@@ -2273,36 +1523,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Fresh BidKing bot loop.")
     parser.add_argument("--config", default=str(ROOT / "config.json"))
     parser.add_argument("--print-clicks", action="store_true", help="Print converted screen click positions and exit.")
-    parser.add_argument(
-        "--ocr-min-price",
-        action="store_true",
-        help="OCR capture.min_price_region from the game window and print JSON, then exit.",
-    )
-    parser.add_argument(
-        "--ocr-min-price-image",
-        default="",
-        metavar="PATH",
-        help="With --ocr-min-price, read this image file instead of live capture (1920x1080 client screenshot).",
-    )
     args = parser.parse_args()
     config_path = Path(args.config).resolve()
     if args.print_clicks:
         print_click_positions(config_path)
-        return 0
-    if args.ocr_min_price:
-        config = load_json(config_path)
-        if args.ocr_min_price_image:
-            frame = Image.open(Path(args.ocr_min_price_image)).convert("RGB")
-            text, box = read_min_price_text_from_frame(config, frame)
-        else:
-            text, box = read_min_price_text(config, config_path)
-        print(
-            json.dumps(
-                {"crop_box": list(box), "text": text, "repr": repr(text)},
-                ensure_ascii=False,
-                indent=2,
-            )
-        )
         return 0
     else:
         config = load_json(config_path)
@@ -2322,6 +1546,33 @@ def main() -> int:
         config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
         reset_stop()
         run_loop(config_path)
+    return 0
+
+
+def main_aisha() -> int:
+    """交互式选择地图/次数后写入配置并启动 :func:`run_aisha_loop`（旧 ``_legacy_aisha.main``）。"""
+    parser = argparse.ArgumentParser(description="BidKing 艾莎兼容 CLI（fresh_aisha_bot）。")
+    parser.add_argument("--config", default=str(ROOT / "config.json"))
+    args = parser.parse_args()
+    config_path = Path(args.config).resolve()
+    config = load_json(config_path)
+    maps = config.get("automation", {}).get("maps", {})
+    default_map = str(config.get("automation", {}).get("default_map", "4"))
+    default_runs = int(config.get("automation", {}).get("default_runs", 1))
+    print("fresh_aisha_bot — 请选择地图：")
+    for key in ("1", "2", "3", "4", "5", "6", "7"):
+        item = maps.get(key, {})
+        print(f"{key}. {item.get('name', key)}")
+    map_input = input(f"地图编号 [默认 {default_map}]: ").strip() or default_map
+    runs_input = input(f"刷取次数 [默认 {default_runs}]: ").strip() or str(default_runs)
+    selected_runs = int(runs_input) if runs_input.isdigit() and int(runs_input) > 0 else default_runs
+    config.setdefault("automation", {})
+    config["automation"]["selected_map"] = map_input
+    config["automation"]["selected_runs"] = selected_runs
+    config["automation"]["selected_mode"] = "aisha_premium"
+    config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+    reset_stop()
+    run_aisha_loop(config_path)
     return 0
 
 

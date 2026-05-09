@@ -19,6 +19,7 @@ from ..parsing.constants import (
     MAP_SKILL_RANDOM6_AVG_PRICE,
     MAP_SKILL_RANDOM9_AVG_PRICE,
     MAP_SKILL_RED_ITEM_COUNT,
+    MAP_SKILL_TOTAL_PURPLE_CELLS,
     MAP_SKILL_TOTAL_GOLD_CELLS,
     MAP_SKILL_TOTAL_HIDDEN_CELLS,
     MAP_SKILL_TOTAL_RED_CELLS,
@@ -326,7 +327,7 @@ def build_raw_pricing_dict(
     
     q4_grid_avg = _safe_float_field(_skill_entry_for_any(skill_entries, SKILL_CID_Q4_AVG_GRID), "AllHitItemAvgBoxIndex")
     q4_price_avg = _safe_float_field(_skill_entry_for_any(skill_entries, SKILL_CID_Q4_AVG_PRICE), "AllHitItemAvgPrice")
-    q4_grid_count = _merge_with_min_from_avg(None, q4_grid_avg)
+    q4_grid_count = _safe_int_field(skill_entries.get(MAP_SKILL_TOTAL_PURPLE_CELLS), "AllHitItemAvgBoxIndex")
     q4_count_min = _merge_with_min_from_avg(q4_count, q4_price_avg, from_price=True)
     q4_grid_min = _merge_with_min_from_avg(q4_grid_count, q4_grid_avg)
 

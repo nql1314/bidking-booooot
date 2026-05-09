@@ -1,8 +1,7 @@
 """RapidOCR 单例（共用 onnx 引擎，避免重复初始化）。
 
-历史上 ``fresh_bidking_bot.rapidocr_once`` 与 ``bid_history_parser._default_ocr_engine``
-各自维护一份 RapidOCR 实例。本模块统一为单一单例，并把 ``_legacy_bot`` /
-``text_patch`` 的同名入口暴露出来。
+历史上 ``fresh_bidking_bot.rapidocr_once`` 等平台各处各自维护 RapidOCR 实例。
+本模块统一为单一单例；OCR 入口由 ``_legacy_bot.rapidocr_once`` 等使用。
 """
 
 from __future__ import annotations

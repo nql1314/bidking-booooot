@@ -29,6 +29,8 @@ def deep_merge(base: Mapping[str, Any], override: Mapping[str, Any]) -> Dict[str
 
 def load_pricing(path: Optional[Path | str] = None) -> Dict[str, Any]:
     p = Path(path) if path else pricing_path()
+    if not p.is_file():
+        return {}
     with p.open("r", encoding="utf-8") as fp:
         return json.load(fp)
 

@@ -108,7 +108,7 @@ MAP_SKILL_DESC: Dict[int, str] = {
     200002: "地图初始化技能",
     200005: "全场各类别每格均价",
     200009: "所有藏品格数",
-    200010: "紫色(Q=4)物品数量",
+    200010: "紫色总格",
     200011: "金色总占用格",
     200012: "红品质占用格数",
     200013: "紫色平均占用格",
@@ -116,7 +116,7 @@ MAP_SKILL_DESC: Dict[int, str] = {
     200015: "金色平均占用格",
     200016: "红色平均占用格",
     200017: "总藏品数量",
-    200018: "紫色品质数量",
+    200018: "紫色(Q=4)物品数量",
     200019: "金色(Q=5)物品数量",
     200020: "红色(Q=6)物品数量",
     200021: "随机揭示X件藏品",
@@ -152,7 +152,7 @@ OUTLINE_SKILL_QUALITY: Dict[int, int] = {**HERO_SKILL_QUALITY, **MAP_SKILL_FORCE
 # 总藏品件数
 SKILL_CID_TOTAL_ITEM_COUNT: Tuple[int, ...] = (200017, 1002040)
 # 紫色 Q4：件数、均格、均价（200010/200018 均为紫色件数类；1002042 为英雄「品质4平均格数」）
-SKILL_CID_Q4_ITEM_COUNT: Tuple[int, ...] = (200010, 200018)
+SKILL_CID_Q4_ITEM_COUNT: Tuple[int, ...] = (200018,)
 SKILL_CID_Q4_AVG_GRID: Tuple[int, ...] = (200013, 1002042)
 SKILL_CID_Q4_AVG_PRICE: Tuple[int, ...] = (200036,)
 # 全场藏品平均占格（均格）
@@ -160,6 +160,7 @@ SKILL_CID_ALL_ITEMS_AVG_GRID: Tuple[int, ...] = (200014,)
 
 # 艾莎 board_snapshot 出价（逻辑在 ``getlog.board_pricing``；旧注释曾指向 bidking-bot aisha_premium）引用的地图技能 ID
 MAP_SKILL_TOTAL_HIDDEN_CELLS = 200009     # 所有藏品格数（TotalHitBoxIndex）；未满前空置计数可据此、且可跳过诈骗格过滤
+MAP_SKILL_TOTAL_PURPLE_CELLS = 200010       # 地图紫格总数
 MAP_SKILL_TOTAL_GOLD_CELLS = 200011       # 地图金格总数
 MAP_SKILL_TOTAL_RED_CELLS = 200012        # 地图红格总数
 MAP_SKILL_AVG_GOLD_CELLS = 200015        # 金色平均占用格（快照估价见 bidking-bot aisha_premium）
