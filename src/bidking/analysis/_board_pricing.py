@@ -7,6 +7,13 @@
 
 不再维护独立的「艾莎 bid」分支；策略层直接消费 ``pricing.points`` / ``points_floor`` /
 ``points_ceiling``。
+
+当 ``raw_pricing.event_stats`` 提供 ``q4_grid_min`` / ``q5_grid_min`` / ``q6_grid_min`` 时，
+对 ``max(0, 最少格 - 已确认该档占位格)`` 按 CSV 单档 ``q4``/``q5``/``q6`` 格均价计入总价，
+并对空置单价项使用扣减后的有效空置格数（``pricing.vacant`` 仍为几何/有效空置原值）。
+
+已知轮廓且 CSV 为多候选（权重价）的物品：几何占位格在边际上视同空置，参与 ``空置格 × 空置单价``；
+但 ``total`` 已含该件权重价，故在 ``points`` / ``est_*`` 基底中扣除对应权重价，避免重复计价。
 """
 
 from __future__ import annotations
@@ -82,6 +89,90 @@ def _int_set_from_field(raw: Any) -> Set[int]:
         except (TypeError, ValueError):
             continue
     return out
+
+
+def _event_stat_grid_min_optional(st: Any, key: str) -> Optional[int]:
+    """``event_stats`` 中 ``q*_grid_min``：有值且非负时返回 int，否则不参与最少格扣减。"""
+    if not isinstance(st, dict):
+        return None
+    v = st.get(key)
+    if v is None:
+        return None
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        return None
+    return n if n >= 0 else None
+
+
+def _confirmed_tier_footprint_q456(
+    board_snapshot: Dict[str, Any],
+    *,
+    csv_cells_raw: Dict[str, float],
+) -> Tuple[int, int, int]:
+    """
+    合并物品表上 Q4/Q5/Q6 且 ``box_id_confirmed`` 的占位格数（与 :func:`_footprint_cells` 同源）。
+    """
+    mid = map_id_from_board_snapshot(board_snapshot)
+    mid_n = item_db.normalize_map_id(mid)
+    items = _grid_overlay.merged_items_dict(board_snapshot)
+    work = _pricing_work_board_snapshot(board_snapshot, items)
+    s4 = s5 = s6 = 0.0
+    for _uid, it in items.items():
+        if not isinstance(it, dict) or not it.get("box_id_confirmed"):
+            continue
+        q_raw = it.get("quality")
+        try:
+            q = int(q_raw) if q_raw is not None else None
+        except (TypeError, ValueError):
+            continue
+        if q not in (4, 5, 6):
+            continue
+        fp = _footprint_cells(it, work, csv_cells_raw, mid_n)
+        if q == 4:
+            s4 += fp
+        elif q == 5:
+            s5 += fp
+        else:
+            s6 += fp
+    return int(round(s4)), int(round(s5)), int(round(s6))
+
+
+def _tier_min_extra_value_and_cells(
+    event_stats: Any,
+    *,
+    confirmed_q4: int,
+    confirmed_q5: int,
+    confirmed_q6: int,
+    csv_cells: Dict[str, float],
+) -> Tuple[float, int]:
+    """
+    当 ``event_stats`` 给出紫/金/红 ``q*_grid_min`` 时：
+
+    - 每档额外价值 ``max(0, grid_min - 已确认占位格) * CSV 单档 q4/q5/q6 格均价``；
+    - ``grid_min`` 缺失（None）则该档不参与；``grid_min <= 已确认`` 则该档为 0。
+
+    返回 ``(extra_value_sum, cells_to_subtract_from_vacant_estimate)``。
+    """
+    if not isinstance(event_stats, dict):
+        return 0.0, 0
+    extra_val = 0.0
+    extra_cells = 0
+    for min_k, csv_k, confirmed in (
+        ("q4_grid_min", "q4", confirmed_q4),
+        ("q5_grid_min", "q5", confirmed_q5),
+        ("q6_grid_min", "q6", confirmed_q6),
+    ):
+        m = _event_stat_grid_min_optional(event_stats, min_k)
+        if m is None:
+            continue
+        need = int(m) - int(confirmed)
+        if need <= 0:
+            continue
+        u = float(csv_cells.get(csv_k, 0.0))
+        extra_val += float(need) * u
+        extra_cells += need
+    return extra_val, extra_cells
 
 
 def _event_stats_q14_grid_counts_all_known(raw: Any) -> bool:
@@ -234,6 +325,101 @@ def _item_value_and_footprint(
 
     fp = _footprint_cells(it, board_snapshot, csv_cells_raw, map_id_normalized)
     return val, fp
+
+
+def _sum_known_contour_weighted_price_and_geo_cells(
+    board_snapshot: Dict[str, Any],
+    *,
+    csv_cells_raw: Dict[str, float],
+) -> Tuple[float, int]:
+    """
+    已知轮廓（``shape`` 非空）且 ``query_item`` 为多候选（权重价）的物品：
+
+    返回 ``(sum(权重价), sum(几何格数))``，用于空置边际扩容并从 ``points`` 基底扣除权重价。
+    """
+    mid = map_id_from_board_snapshot(board_snapshot)
+    mid_n = item_db.normalize_map_id(mid)
+    items = _grid_overlay.merged_items_dict(board_snapshot)
+    csv_index, csv_items = _load_item_prices_db()
+    if not csv_items:
+        return 0.0, 0
+    weights = map_category_ratios(mid) or {}
+    sum_val = 0.0
+    sum_geo = 0
+    for _uid, it in items.items():
+        if not isinstance(it, dict):
+            continue
+        if not it.get("box_id_confirmed"):
+            continue
+        bid_raw = it.get("box_id")
+        if bid_raw is None:
+            continue
+        try:
+            int(bid_raw)
+        except (TypeError, ValueError):
+            continue
+
+        sh = _parse_shape_int(it.get("shape"))
+        if sh is None:
+            continue
+
+        cid_raw = it.get("item_cid")
+        try:
+            item_cid_i = int(cid_raw) if cid_raw is not None else None
+        except (TypeError, ValueError):
+            item_cid_i = None
+        price_raw = it.get("price")
+        if item_cid_i is not None and price_raw is not None:
+            continue
+
+        q_raw = it.get("quality")
+        try:
+            q = int(q_raw) if q_raw is not None else None
+        except (TypeError, ValueError):
+            q = None
+
+        cats = _int_set_from_field(it.get("categories"))
+        excl_q = _int_set_from_field(it.get("excluded_qualities"))
+        excl_c = _int_set_from_field(it.get("excluded_categories"))
+
+        best, count, unique, est, _label = query_item(
+            sh,
+            q,
+            cats,
+            item_cid_i,
+            csv_index,
+            csv_items,
+            excluded_categories=excl_c if excl_c else None,
+            excluded_qualities=excl_q if excl_q else None,
+            max_shape_wh=None,
+            map_category_weights=weights if weights else None,
+            map_id=mid_n,
+        )
+        if best is None or count == 0 or unique:
+            continue
+
+        w_est = est
+        if w_est is None and csv_items:
+            cand = list(csv_items)
+            cand = [i for i in cand if i.shape == sh]
+            if q is not None:
+                cand = [i for i in cand if i.quality == q]
+            if excl_q:
+                cand = [i for i in cand if i.quality not in excl_q]
+            if cats:
+                wc = [i for i in cand if all(c in i.category_tags for c in cats)]
+                if wc:
+                    cand = wc
+            if excl_c:
+                cand = [i for i in cand if not any(c in excl_c for c in i.category_tags)]
+            w_est = _weighted_est_price(cand, weights if weights else None, mid_n)
+        val = float(w_est) if w_est is not None else float(best.base_value)
+
+        w, h = _shape_wh_from_snapshot(sh)
+        geo = max(1, int(w) * int(h))
+        sum_val += val
+        sum_geo += geo
+    return sum_val, sum_geo
 
 
 def _shape_area_from_item(it: Dict[str, Any]) -> int:
@@ -426,19 +612,34 @@ def build_snapshot_pricing_dict(
         pricing={},
     )
 
-    est_orange = float(total_f) + float(vacant_num) * float(u_orange)
-    est_gold_red = float(total_f) + float(vacant_num) * float(u_gr)
-    est_red = float(total_f) + float(vacant_num) * float(u_red)
+    st_ev = raw.get("event_stats") if isinstance(raw, dict) else None
+    cq4, cq5, cq6 = _confirmed_tier_footprint_q456(snap_full, csv_cells_raw=csv_cells_for_est)
+    tier_extra_val, tier_extra_cells = _tier_min_extra_value_and_cells(
+        st_ev,
+        confirmed_q4=cq4,
+        confirmed_q5=cq5,
+        confirmed_q6=cq6,
+        csv_cells=csv_cells_for_est,
+    )
+    kcw_val, kcw_geo = _sum_known_contour_weighted_price_and_geo_cells(
+        snap_full, csv_cells_raw=csv_cells_for_est
+    )
+    vacant_adj = max(0, int(vacant_num) + int(kcw_geo) - int(tier_extra_cells))
+    vacant_pts_base = float(total_f) - float(kcw_val) + float(tier_extra_val)
+
+    est_orange = vacant_pts_base + float(vacant_adj) * float(u_orange)
+    est_gold_red = vacant_pts_base + float(vacant_adj) * float(u_gr)
+    est_red = vacant_pts_base + float(vacant_adj) * float(u_red)
 
     q14_grid_known = _event_stats_q14_grid_counts_all_known(raw)
     if not q14_grid_known:
-        pts = float(total_f) + float(vacant_num) * float(u_early)
+        pts = vacant_pts_base + float(vacant_adj) * float(u_early)
         pts_floor = pts
         pts_ceiling = pts
     else:
-        pts = float(total_f) + float(vacant_num) * float(u_early)
-        pts_floor = float(total_f) + float(vacant_num) * float(u_orange)
-        pts_ceiling = float(total_f) + float(vacant_num) * float(u_red)
+        pts = vacant_pts_base + float(vacant_adj) * float(u_early)
+        pts_floor = vacant_pts_base + float(vacant_adj) * float(u_orange)
+        pts_ceiling = vacant_pts_base + float(vacant_adj) * float(u_red)
 
     ahmad_points = _ahmad_points_from_raw_pricing(raw)
 
@@ -464,5 +665,7 @@ def build_snapshot_pricing_dict(
         "map_quality_avg_hit": bool(csv_cells_for_est),
         "map_quality_avg_csv": str(raw.get("map_quality_avg_csv") or "") if isinstance(raw, dict) else "",
         "ahmad_points": int(ahmad_points),
+        "known_contour_weighted_cells": int(kcw_geo),
+        "known_contour_weighted_price": float(kcw_val),
     }
     return pricing
