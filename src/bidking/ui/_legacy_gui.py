@@ -10,11 +10,12 @@ from tkinter import messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 
 from ..interaction import _legacy_bot as bot
-from ..config.paths import runtime_path
+from ..config.paths import config_overlay_path, runtime_path
+from ..config.pricing import deep_merge
 
 
 ROOT = Path(__file__).resolve().parent
-CONFIG_PATH = runtime_path()
+CONFIG_OVERLAY_PATH = config_overlay_path()
 
 MAP_KEYS = ("1", "2", "3", "4", "5", "6", "7")
 
@@ -43,8 +44,8 @@ def resolve_bot_runner(cfg: dict) -> str:
 def tip_text_for_bot_runner_label(label: str) -> str:
     key = BOT_RUNNER_LABEL_TO_KEY.get(label, "fresh_bidking_bot")
     if key == "fresh_aisha_bot":
-        return "艾莎入口：启动时清空 board_snapshot 文件；主循环与通用 bot 相同，出价由交互层 compute_price 占位。"
-    return "通用 bot：整窗 OCR + 固定流程；出价由交互层 compute_price 占位（当前恒为 10000）。"
+        return "艾莎入口：启动时清空 board_snapshot 文件；主循环与通用 bot 相同，出价由 pricing.compute_price 计算。"
+    return "通用 bot：整窗 OCR + 固定流程；出价由 pricing.compute_price（快照 pricing）驱动。"
 
 
 class GuiLogger:
@@ -69,7 +70,9 @@ class BidKingApp:
         self.original_log = bot.log
         bot.log = GuiLogger(self.append_log)
 
-        self.config = self.load_json(CONFIG_PATH)
+        self.runtime_base: dict = {}
+        self.overlay: dict = {}
+        self.reload_config_sources(initial=True)
 
         self.map_var = tk.StringVar()
         self.runs_var = tk.StringVar()
@@ -87,7 +90,16 @@ class BidKingApp:
         return json.loads(path.read_text(encoding="utf-8-sig"))
 
     def save_json(self, path: Path, data: dict) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def reload_config_sources(self, *, initial: bool = False) -> None:
+        rp = runtime_path()
+        self.runtime_base = self.load_json(rp) if rp.is_file() else {}
+        self.overlay = self.load_json(CONFIG_OVERLAY_PATH) if CONFIG_OVERLAY_PATH.is_file() else {}
+        self.config = deep_merge(self.runtime_base, self.overlay)
+        if not initial and hasattr(self, "config_json_text"):
+            self.refresh_config_json_editor_from_model()
 
     def build_ui(self) -> None:
         notebook = ttk.Notebook(self.root)
@@ -95,7 +107,7 @@ class BidKingApp:
         main = ttk.Frame(notebook, padding=12)
         notebook.add(main, text="自动化")
         config_page = ttk.Frame(notebook, padding=8)
-        notebook.add(config_page, text="主配置 (runtime.json)")
+        notebook.add(config_page, text="本地覆盖 (config.json)")
         self.build_config_json_tab(config_page)
 
         settings_box = ttk.LabelFrame(main, text="1. 选图与重复轮数", padding=10)
@@ -149,7 +161,7 @@ class BidKingApp:
     def build_config_json_tab(self, parent: ttk.Frame) -> None:
         bar = ttk.Frame(parent)
         bar.pack(fill="x")
-        ttk.Label(bar, text=f"文件: {CONFIG_PATH.name}").pack(side="left")
+        ttk.Label(bar, text=f"覆盖文件: {CONFIG_OVERLAY_PATH.name}（合并自 runtime.json + 本文件）").pack(side="left")
         ttk.Checkbutton(bar, text="编辑合法后自动保存", variable=self.config_json_auto_apply_var).pack(
             side="left", padx=(14, 0)
         )
@@ -170,7 +182,7 @@ class BidKingApp:
         self._config_editor_syncing = True
         try:
             self.config_json_text.delete("1.0", "end")
-            self.config_json_text.insert("1.0", json.dumps(self.config, ensure_ascii=False, indent=2))
+            self.config_json_text.insert("1.0", json.dumps(self.overlay, ensure_ascii=False, indent=2))
         finally:
             self._config_editor_syncing = False
 
@@ -199,9 +211,10 @@ class BidKingApp:
         parsed = json.loads(raw)
         if not isinstance(parsed, dict):
             raise ValueError("根节点必须是 JSON 对象")
-        self.config = parsed
+        self.overlay = parsed
+        self.config = deep_merge(self.runtime_base, self.overlay)
         if write_file:
-            self.save_json(CONFIG_PATH, self.config)
+            self.save_json(CONFIG_OVERLAY_PATH, self.overlay)
 
     def save_config_json_from_editor(self) -> None:
         try:
@@ -214,8 +227,7 @@ class BidKingApp:
 
     def reload_config_json_from_disk(self) -> None:
         try:
-            self.config = self.load_json(CONFIG_PATH)
-            self.refresh_config_json_editor_from_model()
+            self.reload_config_sources()
             self.load_into_form()
             self.config_json_status_var.set("已从磁盘加载")
         except OSError as exc:
@@ -235,7 +247,8 @@ class BidKingApp:
             raise ValueError(f"「主配置」JSON 无效: {exc}") from exc
         if not isinstance(parsed, dict):
             raise ValueError("「主配置」根节点必须是 JSON 对象")
-        self.config = parsed
+        self.overlay = parsed
+        self.config = deep_merge(self.runtime_base, self.overlay)
 
     def refresh_map_combo_from_config(self) -> None:
         if not hasattr(self, "map_combo"):
@@ -294,7 +307,15 @@ class BidKingApp:
         self.config["automation"]["selected_runs"] = runs_value
         self.config["automation"]["tool_rounds"] = selected_tool_rounds
 
-        self.save_json(CONFIG_PATH, self.config)
+        self.overlay.setdefault("automation", {})
+        self.overlay["automation"]["bot_runner"] = self.config["automation"]["bot_runner"]
+        self.overlay["automation"]["selected_mode"] = self.config["automation"]["selected_mode"]
+        self.overlay["automation"]["selected_map"] = self.config["automation"]["selected_map"]
+        self.overlay["automation"]["selected_runs"] = self.config["automation"]["selected_runs"]
+        self.overlay["automation"]["tool_rounds"] = self.config["automation"]["tool_rounds"]
+        self.overlay.setdefault("advisor", {})["role"] = self.config["advisor"]["role"]
+        self.config = deep_merge(self.runtime_base, self.overlay)
+        self.save_json(CONFIG_OVERLAY_PATH, self.overlay)
         self.refresh_config_json_editor_from_model()
 
     def start_bot(self) -> None:
@@ -319,9 +340,9 @@ class BidKingApp:
                 if rk == "fresh_aisha_bot":
                     from ..interaction._legacy_bot import run_aisha_loop
 
-                    run_aisha_loop(CONFIG_PATH)
+                    run_aisha_loop(CONFIG_OVERLAY_PATH)
                 else:
-                    bot.run_loop(CONFIG_PATH)
+                    bot.run_loop(CONFIG_OVERLAY_PATH)
             except bot.StopRequested:
                 self.append_log("GUI stop: stopped")
             except Exception:
