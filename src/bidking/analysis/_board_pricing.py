@@ -12,7 +12,7 @@
 对 ``max(0, 最少格 - 已确认该档占位格)`` 按 CSV 单档 ``q4``/``q5``/``q6`` 格均价计入总价，
 并对空置单价项使用扣减后的有效空置格数（``pricing.vacant`` 仍为几何/有效空置原值）。
 
-已知轮廓且 CSV 为多候选（权重价）的物品：几何占位格在边际上视同空置，参与 ``空置格 × 空置单价``；
+已知轮廓且品质未知、CSV 为多候选（权重价）的物品：几何占位格在边际上视同空置，参与 ``空置格 × 空置单价``；
 但 ``total`` 已含该件权重价，故在 ``points`` / ``est_*`` 基底中扣除对应权重价，避免重复计价。
 """
 
@@ -337,9 +337,10 @@ def _sum_known_contour_weighted_price_and_geo_cells(
     csv_cells_raw: Dict[str, float],
 ) -> Tuple[float, int]:
     """
-    已知轮廓（``shape`` 非空）且 ``query_item`` 为多候选（权重价）的物品：
+    已知轮廓（``shape`` 非空）、品质仍未知（``quality`` 为空），且 ``query_item`` 为多候选（权重价）的物品：
 
     返回 ``(sum(权重价), sum(几何格数))``，用于空置边际扩容并从 ``points`` 基底扣除权重价。
+    已确认品质的多候选不再计入，避免误扣 ``vacant_pts_base``、错抬空置格倍数。
     """
     mid = map_id_from_board_snapshot(board_snapshot)
     mid_n = item_db.normalize_map_id(mid)
@@ -381,6 +382,8 @@ def _sum_known_contour_weighted_price_and_geo_cells(
             q = int(q_raw) if q_raw is not None else None
         except (TypeError, ValueError):
             q = None
+        if q is not None:
+            continue
 
         cats = _int_set_from_field(it.get("categories"))
         excl_q = _int_set_from_field(it.get("excluded_qualities"))
