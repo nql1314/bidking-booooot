@@ -10,7 +10,7 @@ from tkinter import messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 
 from ..interaction import _legacy_bot as bot
-from ..config.paths import config_overlay_path, runtime_path
+from ..config.paths import config_overlay_path, pricing_map_overlay_path, runtime_path
 from ..config.pricing import deep_merge
 
 
@@ -62,8 +62,8 @@ class BidKingApp:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("竞拍之王助手")
-        self.root.geometry("780x820")
-        self.root.minsize(300, 720)
+        self.root.geometry("780x900")
+        self.root.minsize(300, 780)
 
         self.worker: threading.Thread | None = None
         self.stop_requested = False
@@ -78,6 +78,10 @@ class BidKingApp:
         self.runs_var = tk.StringVar()
         self.tool_round_vars: dict[int, tk.BooleanVar] = {}
         self.bot_runner_var = tk.StringVar(value=BOT_RUNNER_COMBO_VALUES[0])
+        self.fallback_bid_var = tk.StringVar(value="22223")
+        self.bid_cap_var = tk.StringVar(value="0")
+        self.safe_guard_enabled_var = tk.BooleanVar(value=False)
+        self.safe_guard_ratio_var = tk.StringVar(value="0")
         self.config_json_auto_apply_var = tk.BooleanVar(value=True)
         self._config_json_apply_after_id: str | None = None
         self._config_editor_syncing = False
@@ -117,6 +121,7 @@ class BidKingApp:
         self.map_combo = ttk.Combobox(settings_box, textvariable=self.map_var, state="readonly", width=20)
         self.refresh_map_combo_from_config()
         self.map_combo.grid(row=0, column=1, sticky="w", pady=4)
+        self.map_combo.bind("<<ComboboxSelected>>", self._on_map_combo_selected)
 
         ttk.Label(settings_box, text="重复次数").grid(row=1, column=0, sticky="w", pady=4)
         ttk.Entry(settings_box, textvariable=self.runs_var, width=10).grid(row=1, column=1, sticky="w", pady=4)
@@ -147,7 +152,29 @@ class BidKingApp:
             self.tool_round_vars[round_no] = var
             ttk.Checkbutton(tool_rounds_box, text=f"第{round_no}回合", variable=var).pack(side="left", padx=(0, 8))
 
-        tip_box = ttk.LabelFrame(main, text="4. 说明", padding=10)
+        price_box = ttk.LabelFrame(main, text="4. 出价参数（pricing / automation）", padding=10)
+        price_box.pack(fill="x", pady=(10, 0))
+        ttk.Label(
+            price_box,
+            text="以下写入 configs/pricing.maps/<地图编号>.json（与当前下拉所选地图对应）；"
+            "bid_ratio_by_round 等可在该文件或「本地覆盖」JSON 中编辑。",
+            wraplength=720,
+        ).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 6))
+
+        ttk.Label(price_box, text="兜底价").grid(row=1, column=0, sticky="w", pady=2)
+        ttk.Entry(price_box, textvariable=self.fallback_bid_var, width=12).grid(row=1, column=1, sticky="w", padx=(4, 16))
+
+        ttk.Label(price_box, text="封顶价").grid(row=1, column=2, sticky="w", pady=2)
+        ttk.Entry(price_box, textvariable=self.bid_cap_var, width=12).grid(row=1, column=3, sticky="w", padx=(4, 0))
+
+        ttk.Label(price_box, text="环比护栏").grid(row=2, column=0, sticky="w", pady=2)
+        ttk.Checkbutton(price_box, text="启用 safe_guard", variable=self.safe_guard_enabled_var).grid(
+            row=2, column=1, sticky="w"
+        )
+        ttk.Label(price_box, text="最大加价比例").grid(row=2, column=2, sticky="w", padx=(8, 0))
+        ttk.Entry(price_box, textvariable=self.safe_guard_ratio_var, width=10).grid(row=2, column=3, sticky="w", padx=(4, 0))
+
+        tip_box = ttk.LabelFrame(main, text="5. 说明", padding=10)
         tip_box.pack(fill="x", pady=(10, 0))
         self.tip_label = ttk.Label(tip_box, text=tip_text_for_bot_runner_label(BOT_RUNNER_COMBO_VALUES[0]))
         self.tip_label.pack(anchor="w")
@@ -260,11 +287,35 @@ class BidKingApp:
         except (KeyError, TypeError):
             self.map_combo["values"] = []
 
+    def _load_map_pricing_fields(self, map_key: str) -> None:
+        mp = pricing_map_overlay_path(map_key)
+        if mp.is_file():
+            data = self.load_json(mp)
+            pr = data.get("pricing") if isinstance(data.get("pricing"), dict) else {}
+            au = data.get("automation") if isinstance(data.get("automation"), dict) else {}
+        else:
+            pr = self.config.get("pricing") or {}
+            au = self.config.get("automation") or {}
+        self.fallback_bid_var.set(str(pr.get("fallback_bid_price", 22223)))
+        self.bid_cap_var.set(str(au.get("bid_cap_price", 0)))
+        self.safe_guard_enabled_var.set(bool(au.get("safe_guard_enabled", False)))
+        self.safe_guard_ratio_var.set(str(au.get("safe_guard_max_increase_ratio", 0.0)))
+
+    def _on_map_combo_selected(self, event: tk.Event | None = None) -> None:  # noqa: ARG002
+        mk = self.selected_map_key()
+        if mk:
+            self._load_map_pricing_fields(mk)
+
     def load_into_form(self) -> None:
-        default_map = str(self.config.get("automation", {}).get("default_map", "4"))
-        self.map_var.set(f"{default_map}. {self.config['automation']['maps'][default_map]['name']}")
-        self.runs_var.set(str(self.config.get("automation", {}).get("default_runs", 1)))
-        tool_rounds = {int(item) for item in self.config.get("automation", {}).get("tool_rounds", [1, 2])}
+        auto = self.config.get("automation") or {}
+        map_key = str(auto.get("selected_map") or auto.get("default_map", "4"))
+        maps = auto.get("maps") or {}
+        item = maps.get(map_key, {})
+        name = item.get("name", map_key)
+        self.map_var.set(f"{map_key}. {name}")
+        self.runs_var.set(str(auto.get("selected_runs") or auto.get("default_runs", 1)))
+        self._load_map_pricing_fields(map_key)
+        tool_rounds = {int(r) for r in auto.get("tool_rounds", [1, 2])}
         for round_no, var in self.tool_round_vars.items():
             var.set(round_no in tool_rounds)
         runner_key = resolve_bot_runner(self.config)
@@ -314,7 +365,41 @@ class BidKingApp:
         self.overlay["automation"]["selected_runs"] = self.config["automation"]["selected_runs"]
         self.overlay["automation"]["tool_rounds"] = self.config["automation"]["tool_rounds"]
         self.overlay.setdefault("advisor", {})["role"] = self.config["advisor"]["role"]
+
+        try:
+            fb = int(str(self.fallback_bid_var.get()).strip() or "22223")
+        except ValueError:
+            fb = 22223
+        try:
+            cap = int(str(self.bid_cap_var.get()).strip() or "0")
+        except ValueError:
+            cap = 0
+        try:
+            sgr = float(str(self.safe_guard_ratio_var.get()).strip() or "0")
+        except ValueError:
+            sgr = 0.0
+        sgr = max(0.0, sgr)
+
+        map_path = pricing_map_overlay_path(selected_map)
+        prior: dict = {}
+        if map_path.is_file():
+            prior = self.load_json(map_path)
+        map_doc = deep_merge(
+            prior,
+            {
+                "pricing": {"fallback_bid_price": fb},
+                "automation": {
+                    "bid_cap_price": cap,
+                    "safe_guard_enabled": bool(self.safe_guard_enabled_var.get()),
+                    "safe_guard_max_increase_ratio": sgr,
+                },
+            },
+        )
+        map_path.parent.mkdir(parents=True, exist_ok=True)
+        self.save_json(map_path, map_doc)
+
         self.config = deep_merge(self.runtime_base, self.overlay)
+        self.config = deep_merge(self.config, map_doc)
         self.save_json(CONFIG_OVERLAY_PATH, self.overlay)
         self.refresh_config_json_editor_from_model()
 

@@ -50,6 +50,11 @@ def pricing_path() -> Path:
     return configs_dir() / "pricing.json"
 
 
+def pricing_map_overlay_path(map_id: int | str) -> Path:
+    """``configs/pricing.maps/<map_id>.json`` 路径（文件不一定已存在，供 GUI 读写）。"""
+    return configs_dir() / "pricing.maps" / f"{map_id}.json"
+
+
 def pricing_map_override_path(map_id: int | str) -> Optional[Path]:
-    candidate = configs_dir() / "pricing.maps" / f"{map_id}.json"
+    candidate = pricing_map_overlay_path(map_id)
     return candidate if candidate.is_file() else None
