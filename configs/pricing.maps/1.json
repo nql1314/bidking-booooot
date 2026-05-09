@@ -1,5 +1,18 @@
 {
-  "ahmad_premium": {
-    "round1_base_factor": 1.1
+  "pricing": {
+    "fallback_bid_price": 22223
+  },
+  "automation": {
+    "default_map": "1",
+    "bid_cap_price": 250000,
+    "safe_guard_enabled": true,
+    "safe_guard_max_increase_ratio": 0.05,
+    "bid_ratio_by_round": {
+      "1": 0.6,
+      "2": 0.7,
+      "3": 0.8,
+      "4": 0.9,
+      "5": 1.0
+    }
   }
 }
