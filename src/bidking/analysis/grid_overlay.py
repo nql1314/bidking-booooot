@@ -9,15 +9,18 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Set, Tuple
 
 from ..parsing import item_db
-from ..parsing.constants import MAP_SKILL_TOTAL_HIDDEN_CELLS
 from . import unknown_value as _unknown_value
+from .scan_inference import possible_qualities_from_scan_history
 
 GRID_COLS = 10
 GRID_ROWS = 30
 GRID_MAX_BOX_ID = GRID_COLS * GRID_ROWS - 1
+
+# 快照 ``grid_overlay`` 中序列化的占位格（BoxId 列表，与 UI ``_build_occupied`` 一致）
+OCCUPIED_CELL_BIDS = "occupied_cell_bids"
 
 _item_prices_cache: Optional[Tuple[Dict[int, Any], List[Any]]] = None
 
@@ -127,60 +130,58 @@ def merged_items_dict(board_snapshot: Dict[str, Any]) -> Dict[str, Any]:
     return items
 
 
-def _merge_latest_map_skill_entries(skill_logs: List[dict]) -> Dict[int, dict]:
-    out: Dict[int, dict] = {}
-    for block in skill_logs or []:
-        if not isinstance(block, dict):
-            continue
-        gd = block.get("game_data") or {}
-        if not isinstance(gd, dict):
-            continue
-        for entry in gd.get("MapSkillLog") or []:
-            if not isinstance(entry, dict):
-                continue
-            try:
-                cid = int(entry.get("SkillCid") or 0)
-            except (TypeError, ValueError):
-                continue
-            if cid:
-                out[cid] = entry
-    return out
-
-
-def _ms_int_field(entry: dict, *keys: str) -> Optional[int]:
-    for k in keys:
-        v = entry.get(k)
-        if v is None:
-            continue
-        try:
-            return int(v)
-        except (TypeError, ValueError):
-            continue
-    return None
-
-
-def map_skill_total_hidden_cells_from_logs(skill_logs: List[dict]) -> Optional[int]:
-    ent = _merge_latest_map_skill_entries(skill_logs or []).get(MAP_SKILL_TOTAL_HIDDEN_CELLS)
-    if not ent:
+def total_grid_count_from_raw_pricing(raw_pricing: Any) -> Optional[int]:
+    """``raw_pricing["event_stats"]["total_grid_count"]``：与技能 200009 同源，用于日志未附带时的空置总数。"""
+    if not isinstance(raw_pricing, dict):
         return None
-    v = _ms_int_field(ent, "TotalHitBoxIndex", "HitItemIndex")
-    return v if v is not None and v > 0 else None
+    st = raw_pricing.get("event_stats")
+    if not isinstance(st, dict):
+        return None
+    v = st.get("total_grid_count")
+    if v is None:
+        return None
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        return None
+    return n if n > 0 else None
 
 
-def vacant_cells_from_map_skill_total_hidden(
-    skill_logs: List[dict],
+def map_skill_total_hidden_for_overlay(
+    board_snapshot: Optional[Dict[str, Any]],
+) -> Optional[int]:
+    """
+    200009 总藏品格数：仅读 ``board_snapshot["raw_pricing"].event_stats.total_grid_count``
+    （由 :func:`raw_pricing.build_raw_pricing_dict` 从日志汇总；本模块不解析 ``skill_logs``）。
+    """
+    if not board_snapshot:
+        return None
+    return total_grid_count_from_raw_pricing(board_snapshot.get("raw_pricing"))
+
+
+def map_skill_hidden_vacant(
+    total_hidden_cells: Optional[int],
     *,
     occupied_cell_count: int,
 ) -> Optional[int]:
-    total_h = map_skill_total_hidden_cells_from_logs(skill_logs)
-    if total_h is None:
+    """
+    地图技能 200009 已给出总藏品格数时：空置 = 总数 − 占位（占位由调用方传入，UI 用几何格数、定价用权重格数）。
+    ``total_hidden_cells`` 为空或非正时返回 ``None``（走几何前缀区逻辑）。
+    """
+    if total_hidden_cells is None:
+        return None
+    try:
+        th = int(total_hidden_cells)
+    except (TypeError, ValueError):
+        return None
+    if th <= 0:
         return None
     try:
         occ = int(occupied_cell_count)
     except (TypeError, ValueError):
         occ = 0
     occ = max(0, occ)
-    return max(0, total_h - occ)
+    return max(0, th - occ)
 
 
 def vacant_neighbor_occupied(row: int, col: int, occupied: set) -> bool:
@@ -294,50 +295,72 @@ def occupied_cells_in_empty_zone_prefix(occupied: set, limit: int) -> int:
     return n
 
 
-def empty_zone_ignore_fraud_filter(skill_logs: List[dict], occupied: set, limit: int) -> bool:
+def fraud_exclusion_eligible_from_scan(board_snapshot: Dict[str, Any]) -> bool:
     """
-    地图技能 200009 已揭示，且已知区内占位尚未达到该总数时，
-    空置计数与橘红层不应用诈骗格过滤；吃满后恢复诈骗规则。
+    扫描推断下「剩余未知品质」是否仅为金红（Q5/Q6）。
+
+    仅在此条件下对空置候选应用 ``fraud_empty_cells_in_zone_prefix`` 剔除（诈骗格）；
+    若仍可能为 Q1–Q4，则不剔除，避免早期误判。
     """
-    n = map_skill_total_hidden_cells_from_logs(skill_logs)
-    if n is None:
+    poss = possible_qualities_from_scan_history(board_snapshot)
+    if not poss:
         return False
-    o_zone = occupied_cells_in_empty_zone_prefix(occupied, limit)
-    return o_zone < n
+    return bool(poss <= frozenset({5, 6}))
+
+
+def empty_zone_ignore_fraud_filter(
+    occupied: set,
+    limit: int,
+    board_snapshot: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """
+    200009 总格数已知，且前缀区 ``0..limit`` 内占位格数尚未达到该总数时：不应用诈骗格剔除。
+    总数来自 ``board_snapshot["raw_pricing"]``（见 :func:`map_skill_total_hidden_for_overlay`）。
+    """
+    total_h = map_skill_total_hidden_for_overlay(board_snapshot)
+    if total_h is None:
+        return False
+    return occupied_cells_in_empty_zone_prefix(occupied, limit) < total_h
+
+
+def fraud_zone_cell_exclusion_enabled(
+    board_snapshot: Optional[Dict[str, Any]],
+    occupied: set,
+    limit: int,
+) -> bool:
+    """
+    是否对几何空置计数应用诈骗格过滤：200009 吃满后 **且** 扫描上仅剩金红候选时。
+    """
+    if not board_snapshot:
+        return False
+    if empty_zone_ignore_fraud_filter(occupied, limit, board_snapshot):
+        return False
+    return fraud_exclusion_eligible_from_scan(board_snapshot)
 
 
 def compute_overlay_vacant_dict(
     *,
-    current_round: int,
-    min_round_show_empty: int,
-    skill_logs: List[dict],
     occupied: set,
     max_box_id: int,
     vacant_manual_suppress: Set[Tuple[int, int]],
+    board_snapshot: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
-    写入 ``grid_overlay["vacant"]`` 的块；由 UI 在刷新 overlay 时调用。
+    写入 ``grid_overlay["vacant"]`` 的块；定价与 UI 共用同一套逻辑。
 
-    - ``effective_count``：与画板「空置」提示一致的有效格数；未到起始回合或无锚点时为 ``null``。
-    - ``geometric``：与 effective 相同含义下的几何值（技能路径与 effective 一致）。
-    - ``source``：``map_skill_total_hidden_minus_occupied`` | ``geometric_empty_zone`` | …
+    - **200009**：``raw_pricing.event_stats.total_grid_count`` 非空时，空置 = 总数 − ``len(occupied)``。
+    - **几何前缀区**：否则数 0..max(BoxId) 内空格；诈骗格剔除见 :func:`fraud_zone_cell_exclusion_enabled`。
+    - ``board_snapshot``：须含 ``raw_pricing``（及 ``game_state.scan_history`` 供金红候选判断）。
     """
-    if current_round < min_round_show_empty:
-        return {
-            "effective_count": None,
-            "geometric": None,
-            "source": "before_min_round",
-        }
-    skill_vacant = vacant_cells_from_map_skill_total_hidden(
-        skill_logs, occupied_cell_count=len(occupied)
-    )
-    if skill_vacant is not None:
-        sv = int(skill_vacant)
-        return {
-            "effective_count": sv,
-            "geometric": sv,
-            "source": "map_skill_total_hidden_minus_occupied",
-        }
+    total_h = map_skill_total_hidden_for_overlay(board_snapshot)
+    if total_h is not None:
+        sv = map_skill_hidden_vacant(total_h, occupied_cell_count=len(occupied))
+        if sv is not None:
+            return {
+                "effective_count": int(sv),
+                "geometric": int(sv),
+                "source": "map_skill_total_hidden_minus_occupied",
+            }
     if max_box_id < 0:
         return {
             "effective_count": None,
@@ -345,15 +368,15 @@ def compute_overlay_vacant_dict(
             "source": "no_confirmed_anchor",
         }
     limit = min(max_box_id, GRID_MAX_BOX_ID)
-    apply_fraud = not empty_zone_ignore_fraud_filter(skill_logs, occupied, limit)
     fraud_cells = fraud_empty_cells_in_zone_prefix(occupied, limit)
+    apply_fraud_excl = fraud_zone_cell_exclusion_enabled(board_snapshot, occupied, limit)
     count = 0
     for bid in range(limit + 1):
         row, col = bid // GRID_COLS, bid % GRID_COLS
         if (row, col) not in occupied:
             if (row, col) in vacant_manual_suppress:
                 continue
-            if apply_fraud and (row, col) in fraud_cells:
+            if apply_fraud_excl and (row, col) in fraud_cells:
                 continue
             count += 1
     return {
@@ -363,53 +386,175 @@ def compute_overlay_vacant_dict(
     }
 
 
-def resolve_pricing_vacant(
-    board_snapshot: Dict[str, Any],
+def _live_shape_wh(shape: Any) -> Tuple[int, int]:
+    if shape is None:
+        return 1, 1
+    s = str(shape)
+    if len(s) == 2:
+        try:
+            return int(s[0]), int(s[1])
+        except ValueError:
+            return 1, 1
+    return 1, 1
+
+
+def build_occupied_cells(
     *,
-    occupied_cell_count: int,
-) -> Tuple[int, Optional[int], str]:
+    items: Mapping[str, Any],
+    phantom_items: Mapping[str, Any],
+    manual_shapes: Mapping[str, Tuple[int, int, int, int]],
+    exclude_uid: str = "",
+    item_shape_wh: Optional[Callable[[str, Any], Tuple[int, int]]] = None,
+    item_origin: Optional[Callable[[str, Any], Tuple[int, int]]] = None,
+) -> Set[Tuple[int, int]]:
     """
-    供 ``build_snapshot_pricing_dict`` 使用：优先地图技能 200009，其次 ``grid_overlay.vacant``，
-    再次历史 ``pricing.vacant_geometric``，否则 0。逻辑集中在 :mod:`grid_overlay` 模块。
+    与 ``GridWindow._build_occupied`` 相同规则：已确认或手动画框的日志物品占矩形，
+    幽灵占手动矩形，未确认且无手动画框的日志物品至少占锚格。
+    若传入 ``item_shape_wh`` / ``item_origin``（界面侧 ``_effective_*``），则与画板绘制完全一致；
+    否则仅用 ``shape`` 字段与 BoxId 推断（快照回放等）。
     """
-    skill_logs = list(board_snapshot.get("skill_logs") or [])
-    skill_v = vacant_cells_from_map_skill_total_hidden(
-        skill_logs, occupied_cell_count=occupied_cell_count
-    )
-    if skill_v is not None:
-        sv = int(skill_v)
-        return sv, sv, "map_skill_total_hidden_minus_occupied"
+    occupied: Set[Tuple[int, int]] = set()
+    for uid, k in items.items():
+        if uid == exclude_uid:
+            continue
+        bid = getattr(k, "box_id", None)
+        if bid is None:
+            continue
+        if not getattr(k, "box_id_confirmed", False) and uid not in manual_shapes:
+            continue
+        if uid in manual_shapes:
+            w, h, dc, dr = manual_shapes[uid]
+        else:
+            if item_shape_wh is not None:
+                w, h = item_shape_wh(uid, k)
+            else:
+                w, h = _live_shape_wh(getattr(k, "shape", None))
+            if item_origin is not None:
+                dc, dr = item_origin(uid, k)
+            else:
+                ib = int(bid)
+                dc, dr = ib % GRID_COLS, ib // GRID_COLS
+        for ddr in range(h):
+            for ddc in range(w):
+                occupied.add((dr + ddr, dc + ddc))
+    for phid in phantom_items:
+        if phid == exclude_uid or phid not in manual_shapes:
+            continue
+        w, h, dc, dr = manual_shapes[phid]
+        for ddr in range(h):
+            for ddc in range(w):
+                occupied.add((dr + ddr, dc + ddc))
+    for uid, k in items.items():
+        if uid == exclude_uid:
+            continue
+        bid = getattr(k, "box_id", None)
+        if bid is None:
+            continue
+        if getattr(k, "box_id_confirmed", False) or uid in manual_shapes:
+            continue
+        b = int(bid)
+        occupied.add((b // GRID_COLS, b % GRID_COLS))
+    return occupied
 
+
+def snapshot_occupied_cells(board_snapshot: Dict[str, Any]) -> Set[Tuple[int, int]]:
+    """
+    画板占位格：优先 ``grid_overlay[occupied_cell_bids]``（快照写出时与 UI 一致），
+    否则回退 ``board_display_occupied_cells_merged``（兼容旧快照）。
+    """
+    overlay = board_snapshot.get("grid_overlay")
+    if isinstance(overlay, dict) and OCCUPIED_CELL_BIDS in overlay:
+        bids = overlay.get(OCCUPIED_CELL_BIDS)
+        if isinstance(bids, list):
+            out: Set[Tuple[int, int]] = set()
+            for b in bids:
+                try:
+                    bid = int(b)
+                except (TypeError, ValueError):
+                    continue
+                if bid < 0 or bid > GRID_MAX_BOX_ID:
+                    continue
+                out.add((bid // GRID_COLS, bid % GRID_COLS))
+            return out
+    return board_display_occupied_cells_merged(board_snapshot)
+
+
+def board_display_occupied_cells_merged(board_snapshot: Dict[str, Any]) -> set:
+    """
+    画板几何占位（与空置区计数一致）：基于 ``merged_items_dict``，
+    含手动画框补全的 ``shape``、幽灵物品等。
+    """
+    items = merged_items_dict(board_snapshot)
+    if not isinstance(items, dict) or not items:
+        return set()
+    occ: set = set()
+    for it in items.values():
+        if not isinstance(it, dict) or it.get("box_id") is None:
+            continue
+        try:
+            int(it["box_id"])
+        except (TypeError, ValueError):
+            continue
+        if it.get("box_id_confirmed"):
+            occ |= _occupied_cells_item_board_display(it, board_snapshot)
+    for it in items.values():
+        if not isinstance(it, dict) or it.get("box_id") is None:
+            continue
+        try:
+            bid = int(it["box_id"])
+        except (TypeError, ValueError):
+            continue
+        if it.get("box_id_confirmed"):
+            continue
+        occ.add((bid // GRID_COLS, bid % GRID_COLS))
+    return occ
+
+
+def max_anchor_box_id_merged(board_snapshot: Dict[str, Any]) -> int:
+    """已确认 BoxId 的物品在合并物品表上的最大锚点（无则 -1）。"""
+    items = merged_items_dict(board_snapshot)
+    max_b = -1
+    for it in items.values():
+        if not isinstance(it, dict) or not it.get("box_id_confirmed"):
+            continue
+        bid = it.get("box_id")
+        if bid is None:
+            continue
+        try:
+            b = int(bid)
+        except (TypeError, ValueError):
+            continue
+        max_b = max(max_b, b)
+    return max_b
+
+
+def vacant_manual_suppress_cells_from_snapshot(board_snapshot: Dict[str, Any]) -> Set[Tuple[int, int]]:
+    """``grid_overlay.vacant_manual_suppress_bids`` → ``(row, col)`` 集合。"""
     overlay = board_snapshot.get("grid_overlay") or {}
-    vb = overlay.get("vacant")
-    if isinstance(vb, dict):
-        ec = vb.get("effective_count")
-        if ec is None:
-            ec = vb.get("count")
-        if ec is not None:
-            try:
-                n = max(0, int(ec))
-            except (TypeError, ValueError):
-                n = 0
-            geo = vb.get("geometric")
-            try:
-                geo_i = int(geo) if geo is not None else n
-            except (TypeError, ValueError):
-                geo_i = n
-            return n, geo_i, str(vb.get("source") or "grid_overlay")
+    bids = overlay.get("vacant_manual_suppress_bids") or []
+    out: Set[Tuple[int, int]] = set()
+    if not isinstance(bids, list):
+        return out
+    for b in bids:
+        try:
+            bid = int(b)
+        except (TypeError, ValueError):
+            continue
+        r, c = bid // GRID_COLS, bid % GRID_COLS
+        out.add((r, c))
+    return out
 
-    prev = board_snapshot.get("pricing") if isinstance(board_snapshot.get("pricing"), dict) else {}
-    raw_g = prev.get("vacant_geometric")
-    try:
-        n = max(0, int(raw_g or 0))
-    except (TypeError, ValueError):
-        n = 0
-    geo_out: Optional[int]
-    try:
-        geo_out = int(raw_g) if raw_g is not None else None
-    except (TypeError, ValueError):
-        geo_out = None
-    return n, geo_out, "snapshot_pricing_fallback"
+
+def vacant_dict_from_board_snapshot(
+    board_snapshot: Dict[str, Any],
+) -> Dict[str, Any]:
+    """由完整画板快照计算 ``vacant`` 块；供 ``build_snapshot_pricing_dict`` 与工具链复用。"""
+    return compute_overlay_vacant_dict(
+        occupied=snapshot_occupied_cells(board_snapshot),
+        max_box_id=max_anchor_box_id_merged(board_snapshot),
+        vacant_manual_suppress=vacant_manual_suppress_cells_from_snapshot(board_snapshot),
+        board_snapshot=board_snapshot,
+    )
 
 
 def map_skill_hidden_cell_reserve_from_snapshot(board_snapshot: Dict[str, Any]) -> int:
@@ -497,55 +642,6 @@ def board_display_occupied_cells(board_snapshot: Dict[str, Any]) -> set:
         occ.add((bid // GRID_COLS, bid % GRID_COLS))
     return occ
 
-
-def early_round_vacant_metrics(board_snapshot: Dict[str, Any]) -> Dict[str, Any]:
-    items = confirmed_items_from_snapshot(board_snapshot)
-    if not items:
-        return {
-            "max_anchor_box_id": -1,
-            "vacant_round_1_2": 0,
-            "vacant_round_3": 0,
-            "round_3_anchor_floor_exclusive": 0,
-            "known_quality_cell_count": 0,
-            "all_occupied_cell_count": 0,
-        }
-    all_occ = board_display_occupied_cells(board_snapshot)
-    max_anchor = max(int(it["box_id"]) for it in items)
-    known_cells: set = set()
-    for it in items:
-        cells = _occupied_cells_item_board_display(it, board_snapshot)
-        q = it.get("quality")
-        if q is None:
-            continue
-        try:
-            int(q)
-        except (TypeError, ValueError):
-            continue
-        known_cells |= cells
-    span_hi = min(max_anchor, GRID_MAX_BOX_ID)
-    vacant_12 = 0
-    if span_hi >= 0:
-        for b in range(span_hi + 1):
-            r, c = b // GRID_COLS, b % GRID_COLS
-            if (r, c) not in all_occ:
-                vacant_12 += 1
-    r3_cap = (max_anchor // 10) * 10 if max_anchor >= 0 else 0
-    vacant_3 = 0
-    r3_hi = min(r3_cap, GRID_MAX_BOX_ID + 1)
-    for b in range(r3_hi):
-        r, c = b // GRID_COLS, b % GRID_COLS
-        if (r, c) not in all_occ:
-            vacant_3 += 1
-    return {
-        "max_anchor_box_id": max_anchor,
-        "vacant_round_1_2": vacant_12,
-        "vacant_round_3": vacant_3,
-        "round_3_anchor_floor_exclusive": r3_cap,
-        "known_quality_cell_count": len(known_cells),
-        "all_occupied_cell_count": len(all_occ),
-    }
-
-
 def scam_span_vacant_deduction(board_snapshot: Dict[str, Any]) -> int:
     items = confirmed_items_from_snapshot(board_snapshot)
     if not items:
@@ -565,23 +661,31 @@ def scam_span_vacant_deduction(board_snapshot: Dict[str, Any]) -> int:
     return n
 
 __all__ = [
+    "OCCUPIED_CELL_BIDS",
     "apply_manual_confirm_projection",
     "apply_manual_shapes_to_items",
+    "board_display_occupied_cells",
+    "board_display_occupied_cells_merged",
+    "build_occupied_cells",
     "cell_four_cardinal_neighbors_unoccupied",
     "column_downward_all_vacant",
     "compute_overlay_vacant_dict",
     "confirmed_items_from_snapshot",
     "empty_zone_ignore_fraud_filter",
     "fraud_empty_cells_in_zone_prefix",
-    "early_round_vacant_metrics",
-    "board_display_occupied_cells",
-    "map_skill_total_hidden_cells_from_logs",
+    "fraud_exclusion_eligible_from_scan",
+    "fraud_zone_cell_exclusion_enabled",
+    "map_skill_hidden_vacant",
     "map_skill_hidden_cell_reserve_from_snapshot",
+    "map_skill_total_hidden_for_overlay",
+    "max_anchor_box_id_merged",
     "merged_items_dict",
     "occupied_cells_in_empty_zone_prefix",
-    "resolve_pricing_vacant",
     "scam_span_vacant_deduction",
-    "vacant_cells_from_map_skill_total_hidden",
+    "snapshot_occupied_cells",
+    "total_grid_count_from_raw_pricing",
+    "vacant_dict_from_board_snapshot",
+    "vacant_manual_suppress_cells_from_snapshot",
     "vacant_neighbor_occupied",
     "vacant_side_effective_blocks",
 ]

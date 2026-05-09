@@ -21,12 +21,13 @@
   - 通过 queue.SimpleQueue 传信号给 UI 主线程
   - UI 主线程每 300ms 通过 root.after() 轮询队列，按需重绘
   - 新对局开始（S2C_33）时：若配置了快照路径则先备份至该路径同级 ``run/`` 再删除旧快照文件，随后清空并重置界面并写入新快照
-  - 所有状态写入均在 threading.Lock 保护下进行，防止迭代中途修改
+  - 日志监听与写快照均在 threading.RLock 保护下进行；``_refresh`` 结束时会写出 ``snapshot_path``
+   （含 ``grid_overlay`` 手画幽灵/轮廓/空置剔除等），手动画框与拖调轮廓也会触发刷新从而落盘
 
 看板角色（board_mode）：
-  - elsa：第4回合起在画板上用橘红标出「空置候选区」并计入顶部空置估价。
-  - raven：拉文无艾莎式第4回合扫描，上述逻辑推迟到第5回合起；状态栏附带铺板顺序提示。
-  - 地图技能 200009（所有藏品格数）：在已知区内已占位格数未达到该总数前，空置计数与橘红层**忽略诈骗格过滤**；吃满后恢复「几何空格 − 诈骗格」规则。
+  - elsa / raven：空置候选区（橘红）与顶部空置估价均由 ``grid_overlay`` 统一计算，无「第几回合起才显示」门槛。
+  - raven：状态栏附带铺板顺序提示。
+  - 地图技能 200009（所有藏品格数）：在已知区内已占位格数未达到该总数前，空置计数与橘红层**忽略诈骗格过滤**；吃满后且扫描上仅剩金红候选时，才对几何空置应用诈骗格剔除。
   - 诈骗格规则**仅用于**上述自动空置区（计数与初始橘红），**不限制**右键手动剔除/恢复空置标记。
   - 空置候选格：普通右键可手动剔除该格（不计空置、不铺橘红），再右键同一格可恢复。
 """
@@ -101,16 +102,12 @@ UNKNOWN_FG = '#ffffff'
 EMPTY_BG   = '#2a2a3a'
 GRID_LINE  = '#505060'
 
-# 艾莎：第4回合起显示空缺区域橘红覆盖层，并把该区域内空格计入空置估价。
-# 拉文：无艾莎第4回合全场品质扫描，第4回合不提示「空置=橙红候选区」；从第5回合
-#       全场品质已知、轮廓未知时起，与艾莎相同的空置提示与估价逻辑。
-# 200009 未吃满前：空置与橘红忽略「诈骗格」过滤；吃满后恢复诈骗格规则（仅影响自动区，不影响手动剔除）。
+# 空缺区域橘红覆盖层与空置计数：由 ``grid_overlay.compute_overlay_vacant_dict`` 统一计算；
+# 诈骗格剔除仅在扫描推断仅剩金红候选且 200009 吃满后生效（见 ``fraud_zone_cell_exclusion_enabled``）。
 EMPTY_ZONE_COLOR    = '#cc4400'   # 橘红
 EMPTY_ZONE_STIPPLE  = 'gray25'    # 约 25% 覆盖度，模拟半透明
-MIN_ROUND_SHOW_EMPTY = 4          # 艾莎看板
-MIN_ROUND_SHOW_EMPTY_RAVEN = 5    # 拉文看板
 
-# 看板角色：影响空置提示起始回合与界面文案
+# 看板角色：界面文案（拉文铺板提示）
 BOARD_MODE_ELSA = 'elsa'
 BOARD_MODE_RAVEN = 'raven'
 
@@ -321,7 +318,7 @@ class GridWindow:
         state       : 解析后的 GameState（含物品知识）
         csv_index   : item_id → CsvItem
         csv_items   : 全量 CsvItem 列表
-        board_mode  : ``elsa``（默认）或 ``raven``。拉文看板推迟空置橘红区与空置估价到第5回合起。
+        board_mode  : ``elsa``（默认）或 ``raven``（仅文案与铺板提示差异）。
         snapshot_path : 若传入非空字符串则用作快照路径；若省略则用模块常量 ``DEFAULT_BOARD_SNAPSHOT_PATH``（空字符串表示不写）。
         snapshot_export_overlay : 是否在快照中包含幽灵物品与手动轮廓（grid_overlay）。
     """
@@ -344,11 +341,6 @@ class GridWindow:
         self._log_path = log_path
         bm = (board_mode or BOARD_MODE_ELSA).strip().lower()
         self._board_mode = bm if bm in (BOARD_MODE_ELSA, BOARD_MODE_RAVEN) else BOARD_MODE_ELSA
-        self._min_round_show_empty = (
-            MIN_ROUND_SHOW_EMPTY_RAVEN
-            if self._board_mode == BOARD_MODE_RAVEN
-            else MIN_ROUND_SHOW_EMPTY
-        )
         if snapshot_path is None:
             sp = (DEFAULT_BOARD_SNAPSHOT_PATH or "").strip() or None
         elif isinstance(snapshot_path, str):
@@ -358,6 +350,7 @@ class GridWindow:
         self._snapshot_path = sp
         self._snapshot_export_overlay = bool(snapshot_export_overlay)
         self._skill_logs: List[dict] = []
+        self._last_raw_pricing: Optional[Dict[str, Any]] = None
         # 与顶栏「全红/全橙/金红/最低」悬浮提示同步的最近一次 pricing 字典
         self._last_pricing_for_tooltips: Optional[Dict[str, Any]] = None
         # 地图类别权重入口：category tag -> multiplier，默认由 item_db 使用 1.0。
@@ -397,8 +390,8 @@ class GridWindow:
         #   phantom_infer: 左键空格=普通(推断)；Ctrl+左键空格=金；Ctrl+右键空格=红（button 3）
         self._phantom_draw_state: Optional[dict] = None
 
-        # 线程安全：后台线程写 state，主线程读 state
-        self._lock:  threading.Lock     = threading.Lock()
+        # 线程安全：后台线程写 state，主线程读 state；用 RLock 以便在持锁的 poll 路径内可再入 _refresh→写快照
+        self._lock: threading.RLock = threading.RLock()
         self._queue: queue.SimpleQueue  = queue.SimpleQueue()
         # 'update' = 普通刷新, 'new_game' = 新对局（需重置整个界面）
         self._live_game_active: bool    = bool(state.uid)
@@ -420,19 +413,27 @@ class GridWindow:
         return ' [拉文看板]' if self._board_mode == BOARD_MODE_RAVEN else ''
 
     def _board_mode_info_suffix(self) -> str:
-        """状态栏补充：拉文规则与铺板顺序提示。"""
+        """状态栏补充：拉文铺板顺序提示。"""
         if self._board_mode != BOARD_MODE_RAVEN:
             return ''
-        r = self.state.current_round
-        if r < self._min_round_show_empty:
-            return (
-                f'   [拉文] 第{r}回合：空置格不标橙红候选区'
-                f'（第{self._min_round_show_empty}回合起与艾莎相同提示）'
-            )
         return (
             '   [拉文] 铺板建议：左键/Ctrl 幽灵操作见图例；'
             '「扩展日志物品」顺序：绿蓝→金→灰紫/未知→红，同增益按形状边际概率优先'
         )
+
+    def _vacant_scan_context_snapshot(self) -> dict:
+        """供空置/诈骗格判断：含 ``scan_history`` 与 ``raw_pricing``（200009 总格数仅来自后者）。"""
+        rp = self._last_raw_pricing
+        if rp is None:
+            rp = build_raw_pricing_dict(
+                map_id=int(self.state.map_id or 0),
+                skill_logs=list(self._skill_logs),
+                snapshot_path_hint=self._snapshot_path,
+            )
+        return {
+            "game_state": game_state_to_json(self.state),
+            "raw_pricing": rp,
+        }
 
     # ── 形状解析 ──────────────────────────────────────────────────────────
 
@@ -475,31 +476,16 @@ class GridWindow:
     def _build_occupied(self, exclude_uid: str = '') -> set:
         """
         返回所有已确认/手动定位/幽灵物品所占据的格子 (row, col) 集合。
-        exclude_uid 指定的物品会被排除在外（用于推断该物品自身的可用空间）。
-        已确认或手动画框的物品占满其矩形；BoxId 未确认且无手动画框的日志物品至少占锚格
-        （与画板绘制一致，避免「格子上已有物品却仍计空置/画橘红」）。
+        逻辑在 :func:`grid_overlay.build_occupied_cells`。
         """
-        occupied: set = set()
-        for uid, k in self.state.items.items():
-            if uid == exclude_uid or k.box_id is None:
-                continue
-            if not k.box_id_confirmed and uid not in self._manual_shapes:
-                continue
-            dc, dr = self._effective_display_origin(uid, k)
-            w, h = self._effective_shape_wh(uid, k)
-            for ddr in range(h):
-                for ddc in range(w):
-                    occupied.add((dr + ddr, dc + ddc))
-        # 幽灵物品（手动画框）
-        for phid in self._phantom_items:
-            if phid == exclude_uid or phid not in self._manual_shapes:
-                continue
-            w, h, dc, dr = self._manual_shapes[phid]
-            for ddr in range(h):
-                for ddc in range(w):
-                    occupied.add((dr + ddr, dc + ddc))
-        self._merge_unconfirmed_anchor_cells(occupied, skip_uid=exclude_uid)
-        return occupied
+        return _grid_overlay.build_occupied_cells(
+            items=self.state.items,
+            phantom_items=self._phantom_items,
+            manual_shapes=self._manual_shapes,
+            exclude_uid=exclude_uid,
+            item_shape_wh=self._effective_shape_wh,
+            item_origin=self._effective_display_origin,
+        )
 
     def _phantom_effective_quality(self, uid: str) -> Optional[int]:
         """幽灵用于筛选的品质：原推断为 None；显式 int；缺省为金 Q5。"""
@@ -746,7 +732,7 @@ class GridWindow:
 
     def _display_price_value(self, uid: str, k: ItemKnowledge) -> Optional[float]:
         """返回当前格子的精确价或期望价（与合并 ``items`` + ``grid_overlay`` 后的定价一致）。"""
-        return estimate_snapshot_item_price_for_uid(self._board_snapshot_base(), uid)
+        return estimate_snapshot_item_price_for_uid(self._make_board_snapshot(), uid)
 
     def _info_summary_text(self) -> str:
         """顶部状态栏：物品总格数、画版总格数（含空置）、均格；橙/红（含手画）。"""
@@ -866,8 +852,6 @@ class GridWindow:
 
     def _cell_is_vacant_manual_suppress_eligible(self, row: int, col: int) -> bool:
         """是否为「空置候选」格：可右键手动剔除/恢复；不受诈骗格规则限制。"""
-        if self.state.current_round < self._min_round_show_empty:
-            return False
         max_box_id = self._empty_zone_max_box_id()
         if max_box_id < 0:
             return False
@@ -884,23 +868,21 @@ class GridWindow:
         key = (row, col)
         if key in self._vacant_manual_suppress:
             self._vacant_manual_suppress.discard(key)
-            self._draw()
+            self._refresh()
             return
         if self._cell_is_vacant_manual_suppress_eligible(row, col):
             self._vacant_manual_suppress.add(key)
-            self._draw()
+            self._refresh()
 
     def _compute_empty_zone_count(self) -> Optional[int]:
         """空置有效格数：算法在 ``analysis.grid_overlay``，此处仅聚合 UI 状态并触发计算。"""
         occupied = self._occupied_for_draw if self._occupied_for_draw is not None \
             else self._build_occupied()
         d = _grid_overlay.compute_overlay_vacant_dict(
-            current_round=int(self.state.current_round or 1),
-            min_round_show_empty=self._min_round_show_empty,
-            skill_logs=list(self._skill_logs),
             occupied=occupied,
             max_box_id=self._empty_zone_max_box_id(),
             vacant_manual_suppress=set(self._vacant_manual_suppress),
+            board_snapshot=self._vacant_scan_context_snapshot(),
         )
         return d.get("effective_count")
 
@@ -935,20 +917,16 @@ class GridWindow:
     def _vacant_remaining_for_expand(self) -> Tuple[Optional[set], str]:
         """
         与橘红空置区一致：从 BoxId=0 到「已确认物品最大 BoxId」之间的未占位格。
-        仅在达到 _min_round_show_empty 后启用（与估价/覆盖层规则一致）。
         """
-        if self.state.current_round < self._min_round_show_empty:
-            return None, (
-                f"当前第 {self.state.current_round} 回合：扩展日志物品在第 "
-                f"{self._min_round_show_empty} 回合起可用（与空置区域规则一致）。"
-            )
         max_box_id = self._empty_zone_max_box_id()
         if max_box_id < 0:
             return None, "尚无 BoxId 已确认的物品，无法划定空置区域上界。"
         occupied = self._build_occupied()
         limit = min(max_box_id, GRID_COLS * GRID_ROWS - 1)
-        apply_fraud = not _grid_overlay.empty_zone_ignore_fraud_filter(
-            list(self._skill_logs), occupied, limit,
+        apply_fraud = _grid_overlay.fraud_zone_cell_exclusion_enabled(
+            self._vacant_scan_context_snapshot(),
+            occupied,
+            limit,
         )
         remaining: set = set()
         for bid in range(limit + 1):
@@ -962,15 +940,6 @@ class GridWindow:
                     continue
                 remaining.add((r, c))
         return remaining, ""
-
-    def _merge_unconfirmed_anchor_cells(self, occ: set, skip_uid: str = '') -> None:
-        """BoxId 未确认且无手动轮廓的物品，至少占用其锚格（避免扩展盖住他人格子）。"""
-        for uid, k in self.state.items.items():
-            if uid == skip_uid or k.box_id is None:
-                continue
-            if k.box_id_confirmed or uid in self._manual_shapes:
-                continue
-            occ.add((k.box_id // GRID_COLS, k.box_id % GRID_COLS))
 
     def _expand_rect_collides_others(
         self, dr: int, dc: int, w: int, h: int, exclude_uid: str,
@@ -1309,52 +1278,61 @@ class GridWindow:
             "received_at_unix": time.time(),
         })
 
-    def _board_snapshot_base(self) -> dict:
-        """构建不含 ``pricing`` 的画板快照，供 board_pricing 与单件估价复用。"""
+    def _make_board_snapshot(self) -> dict:
+        """不含 ``pricing`` 的画板快照：供定价、单件估价与写盘复用。"""
         gs = game_state_to_json(self.state)
         raw_pricing = build_raw_pricing_dict(
             map_id=int(self.state.map_id or 0),
             skill_logs=list(self._skill_logs),
             snapshot_path_hint=self._snapshot_path,
         )
+        self._last_raw_pricing = raw_pricing
+        occ = self._build_occupied()
         return {
             "game_state": gs,
             "skill_logs": list(self._skill_logs),
             "current_round": int(self.state.current_round or 1),
             "map_id": int(self.state.map_id or 0),
             "raw_pricing": raw_pricing,
-            "grid_overlay": self._grid_overlay_to_json(),
+            "grid_overlay": self._grid_overlay_to_json(raw_pricing, occupied_cells=occ),
         }
 
     def _build_pricing_snapshot_dict(self) -> dict:
         return build_snapshot_pricing_dict(
-            self._board_snapshot_base(),
+            self._make_board_snapshot(),
             snapshot_path_hint=self._snapshot_path,
         )
 
-    def _grid_overlay_to_json(self) -> dict:
-        occupied = self._occupied_for_draw if self._occupied_for_draw is not None \
-            else self._build_occupied()
+    def _grid_overlay_to_json(
+        self,
+        raw_pricing: Dict[str, Any],
+        *,
+        occupied_cells: Optional[set] = None,
+    ) -> dict:
+        if occupied_cells is None:
+            occupied = self._occupied_for_draw if self._occupied_for_draw is not None \
+                else self._build_occupied()
+        else:
+            occupied = occupied_cells
         return build_grid_overlay_export_dict(
+            game_state=self.state,
+            raw_pricing=raw_pricing,
             phantom_items=self._phantom_items,
             manual_shapes=self._manual_shapes,
             phantom_quality_pref=self._phantom_quality_pref,
             unknown_cell_quality_pref=self._unknown_cell_quality_pref,
             vacant_manual_suppress=self._vacant_manual_suppress,
-            current_round=int(self.state.current_round or 1),
-            min_round_show_empty=self._min_round_show_empty,
-            skill_logs=list(self._skill_logs),
             occupied_cells=occupied,
             max_box_id=max_confirmed_box_id_from_items(self.state.items),
         )
 
     def _emit_board_snapshot_unlocked(self) -> None:
-        """调用方须已持有 ``self._lock``。"""
+        """调用方须已持有 ``self._lock``（``RLock``，同线程可重入）。"""
         path = self._snapshot_path
         if not path:
             return
-        gs = game_state_to_json(self.state)
-        base = self._board_snapshot_base()
+        base = self._make_board_snapshot()
+        gs = base["game_state"]
         payload = {
             "schema_version": BOARD_SNAPSHOT_SCHEMA_VERSION,
             "written_at_unix": time.time(),
@@ -1423,6 +1401,7 @@ class GridWindow:
                         self.state = GameState()
                         self._live_game_active = True
                         self._skill_logs.clear()
+                        self._last_raw_pricing = None
                         handle_s2c33(data, self.state, self.csv_index, self.csv_items, silent)
                         self._append_skill_log_entry(event_type, data)
                         self._queue.put('new_game')
@@ -1469,7 +1448,6 @@ class GridWindow:
                     self._reset_for_new_game()
                 else:
                     self._refresh()
-                self._emit_board_snapshot_unlocked()
 
         # 继续调度下一次轮询
         self.root.after(300, self._poll_updates)
@@ -1512,6 +1490,9 @@ class GridWindow:
 
         self._info_text.set(self._info_summary_text())
         self._draw()
+        if self._snapshot_path:
+            with self._lock:
+                self._emit_board_snapshot_unlocked()
 
     def _validate_manual_confirmations(self) -> None:
         """校验所有物品的手动候选确认，冲突时自动清除。"""
@@ -1537,7 +1518,7 @@ class GridWindow:
         if n_empty is not None:
             lines.append(
                 f"提示：状态栏「空置 {n_empty} 格」与 ``grid_overlay.vacant`` 一致；"
-                "定价 ``pricing.vacant`` 由 ``analysis.grid_overlay.resolve_pricing_vacant`` 解析（200009 优先）。"
+                "定价 ``pricing.vacant`` 与 ``grid_overlay.vacant`` 均由 ``vacant_dict_from_board_snapshot`` 统一计算。"
             )
         else:
             lines.append(
@@ -2054,33 +2035,34 @@ class GridWindow:
                     anchor='nw', fill='#404050', font=('Consolas', 7),
                 )
 
-        # ── 1.5  空置提示回合后的空缺（橘红半透明覆盖，拉文为第5回合起） ─────
-        if self.state.current_round >= self._min_round_show_empty:
-            max_box_id = self._empty_zone_max_box_id()
-            if max_box_id >= 0:
-                vac_limit = min(max_box_id, GRID_COLS * GRID_ROWS - 1)
-                apply_fraud = not _grid_overlay.empty_zone_ignore_fraud_filter(
-                    list(self._skill_logs), self._occupied_for_draw, vac_limit,
-                )
-                for bid in range(vac_limit + 1):
-                    row = bid // GRID_COLS
-                    col = bid % GRID_COLS
-                    if (row, col) not in self._occupied_for_draw:
-                        if (row, col) in self._vacant_manual_suppress:
-                            continue
-                        if self._exclude_from_empty_zone_estimate(
-                            row, col, self._occupied_for_draw, vac_limit,
-                            apply_fraud_filter=apply_fraud,
-                        ):
-                            continue
-                        x1 = col * CELL_W
-                        y1 = row * CELL_H
-                        canvas.create_rectangle(
-                            x1, y1, x1 + CELL_W, y1 + CELL_H,
-                            fill=EMPTY_ZONE_COLOR,
-                            stipple=EMPTY_ZONE_STIPPLE,
-                            outline='',
-                        )
+        # ── 1.5  空置候选区（橘红半透明；诈骗格剔除与计数逻辑一致） ─────
+        max_box_id = self._empty_zone_max_box_id()
+        if max_box_id >= 0:
+            vac_limit = min(max_box_id, GRID_COLS * GRID_ROWS - 1)
+            apply_fraud_cells = _grid_overlay.fraud_zone_cell_exclusion_enabled(
+                self._vacant_scan_context_snapshot(),
+                self._occupied_for_draw,
+                vac_limit,
+            )
+            for bid in range(vac_limit + 1):
+                row = bid // GRID_COLS
+                col = bid % GRID_COLS
+                if (row, col) not in self._occupied_for_draw:
+                    if (row, col) in self._vacant_manual_suppress:
+                        continue
+                    if self._exclude_from_empty_zone_estimate(
+                        row, col, self._occupied_for_draw, vac_limit,
+                        apply_fraud_filter=apply_fraud_cells,
+                    ):
+                        continue
+                    x1 = col * CELL_W
+                    y1 = row * CELL_H
+                    canvas.create_rectangle(
+                        x1, y1, x1 + CELL_W, y1 + CELL_H,
+                        fill=EMPTY_ZONE_COLOR,
+                        stipple=EMPTY_ZONE_STIPPLE,
+                        outline='',
+                    )
 
         # ── 2. 物品格子（log 数据）────────────────────────────────────────
         for uid, k in self.state.items.items():
@@ -2387,13 +2369,13 @@ class GridWindow:
             self._phantom_items.pop(uid, None)
             self._manual_shapes.pop(uid, None)
             self._phantom_quality_pref.pop(uid, None)
-            self._draw()
+            self._refresh()
             return
         if uid is not None and uid in self.state.items:
             k = self.state.items[uid]
             if k.shape is None and uid in self._manual_shapes:
                 self._manual_shapes.pop(uid, None)
-                self._draw()
+                self._refresh()
                 return
         if uid is not None:
             return
@@ -2742,11 +2724,12 @@ class GridWindow:
                 use_infer_quality=use_infer,
             )
             self._phantom_draw_state = None
-            self._draw()
+            self._refresh()
         elif self._drag_state:
             if self._drag_state.get('button', 1) != btn:
                 return
             self._drag_state = None
+            self._refresh()
 
     def _find_item_at(self, row: int, col: int) -> Optional[str]:
         """返回覆盖 (row, col) 的物品 UID（含幽灵），无则 None。"""

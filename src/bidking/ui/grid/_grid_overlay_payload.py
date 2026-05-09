@@ -3,11 +3,11 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Set, Tuple, Union
+from typing import Any, Dict, Set, Tuple, Union
 
 from ...analysis import grid_overlay as _grid_overlay
-from ...analysis.snapshot import item_knowledge_to_json
-from ...parsing.state import ItemKnowledge
+from ...analysis.snapshot import game_state_to_json, item_knowledge_to_json
+from ...parsing.state import GameState, ItemKnowledge
 
 GRID_COLS = _grid_overlay.GRID_COLS
 
@@ -23,14 +23,13 @@ def max_confirmed_box_id_from_items(items: Dict[str, ItemKnowledge]) -> int:
 
 def build_grid_overlay_export_dict(
     *,
+    game_state: GameState,
+    raw_pricing: Dict[str, Any],
     phantom_items: Dict[str, ItemKnowledge],
     manual_shapes: Dict[str, Tuple[int, int, int, int]],
     phantom_quality_pref: Dict[str, Union[int, str]],
     unknown_cell_quality_pref: Dict[str, int],
     vacant_manual_suppress: Set[Tuple[int, int]],
-    current_round: int,
-    min_round_show_empty: int,
-    skill_logs: List[dict],
     occupied_cells: set,
     max_box_id: int,
 ) -> Dict[str, Any]:
@@ -45,13 +44,16 @@ def build_grid_overlay_export_dict(
         if isinstance(q, int) and 1 <= q <= 6
     }
     vacant_bids = sorted(r * GRID_COLS + c for r, c in vacant_manual_suppress)
+    occ_bids = sorted(r * GRID_COLS + c for r, c in occupied_cells)
+    vacant_ctx = {
+        "game_state": game_state_to_json(game_state),
+        "raw_pricing": raw_pricing,
+    }
     vacant_block = _grid_overlay.compute_overlay_vacant_dict(
-        current_round=int(current_round),
-        min_round_show_empty=int(min_round_show_empty),
-        skill_logs=list(skill_logs),
         occupied=occupied_cells,
         max_box_id=int(max_box_id),
         vacant_manual_suppress=set(vacant_manual_suppress),
+        board_snapshot=vacant_ctx,
     )
     return {
         "phantom_items": ph,
@@ -59,5 +61,6 @@ def build_grid_overlay_export_dict(
         "phantom_quality_pref": pref,
         "unknown_cell_quality_pref": uq_pref,
         "vacant_manual_suppress_bids": vacant_bids,
+        _grid_overlay.OCCUPIED_CELL_BIDS: occ_bids,
         "vacant": vacant_block,
     }
