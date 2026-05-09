@@ -1607,13 +1607,32 @@ class GridWindow:
         t_val = float(p.get("total") or 0)
         v_eff = int(p.get("vacant") or 0)
         pts = p.get("points")
+        qg = str(p.get("early_vacant_csv_group") or "").strip()
+        pq_raw = p.get("early_vacant_possible_qualities")
+        pq_list: List[int] = []
+        if isinstance(pq_raw, list):
+            for x in pq_raw:
+                try:
+                    pq_list.append(int(x))
+                except (TypeError, ValueError):
+                    continue
+            pq_list.sort()
         lines = [
             "早期空置单价（排除法）",
             "依据 scan_history 中 quality 扫描 → 空格仍可能的品质集合 → CSV 对应 quality_group 的格均价；"
             "无 quality 扫描时视为 all。",
-            f"U = ¥{u_int:,.0f} / 格（pricing.early_vacant_unit_from_scan）",
-            f"第 1–3 回合主价 points ≈ T + V×U = {t_val:,.0f} + {v_eff} × {u_int:,.0f}（与 pricing.points 一致）。",
         ]
+        if pq_list:
+            tiers = "、".join(str(x) for x in pq_list)
+            lines.append(f"仍可能品质档位组合：{tiers}")
+        if qg:
+            lines.append(f"CSV 均价分组键（对应 map_quality 表一行）：{qg}")
+        lines.extend(
+            [
+                f"U = ¥{u_int:,.0f} / 格（pricing.early_vacant_unit_from_scan）",
+                f"主价 points ≈ T + V×U = {t_val:,.0f} + {v_eff} × {u_int:,.0f}（与 pricing.points 一致）。",
+            ]
+        )
         if pts is not None:
             lines.append(f"当前 pricing.points = {pts!s}")
         return "\n".join(lines)
