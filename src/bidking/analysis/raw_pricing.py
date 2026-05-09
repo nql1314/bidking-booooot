@@ -137,6 +137,36 @@ def _min_total_price_from_avg(avg: Optional[float]) -> Optional[int]:
     return _min_total_from_avg(avg)
 
 
+_RANDOM_AVG_DEFAULT_HIT_COUNT: Dict[int, int] = {
+    MAP_SKILL_RANDOM3_AVG_PRICE: 3,
+    MAP_SKILL_RANDOM6_AVG_PRICE: 6,
+    MAP_SKILL_RANDOM9_AVG_PRICE: 9,
+}
+
+
+def _min_total_price_from_avg_times_hit_count(
+    avg: Optional[float],
+    hit_count: Optional[int],
+    *,
+    skill_cid: int,
+) -> Optional[int]:
+    """随机 3/6/9 均价 × ``HitItemIndex`` 命中件数 → 总价下界；件数缺失或非正时按技能默认 3/6/9。"""
+    if avg is None:
+        return None
+    n = hit_count
+    if n is None or n <= 0:
+        n = _RANDOM_AVG_DEFAULT_HIT_COUNT.get(int(skill_cid))
+    if n is None or n <= 0:
+        return None
+    try:
+        prod = float(avg) * float(n)
+    except (TypeError, ValueError):
+        return None
+    if prod <= 0 or prod != prod:
+        return None
+    return _min_total_from_avg(prod)
+
+
 def _max_optional_int(*vals: Optional[int]) -> Optional[int]:
     xs = [int(v) for v in vals if v is not None]
     return max(xs) if xs else None
@@ -494,14 +524,22 @@ def build_raw_pricing_dict(
     total_price_min = _min_total_price_from_avg(
         _first_float_from_skills(skill_entries, SKILL_CID_TOTAL_ITEM_COUNT, "AllHitItemAvgPrice")
     )
+    random_avg_price_min: Optional[int] = None
     for _rnd_cid in (
         MAP_SKILL_RANDOM3_AVG_PRICE,
         MAP_SKILL_RANDOM6_AVG_PRICE,
         MAP_SKILL_RANDOM9_AVG_PRICE,
     ):
+        ent = skill_entries.get(_rnd_cid)
+        avg_f = _safe_float_field(ent, "AllHitItemAvgPrice") if isinstance(ent, dict) else None
+        hc = _safe_int_field(ent, "HitItemIndex") if isinstance(ent, dict) else None
+        inferred = _min_total_price_from_avg_times_hit_count(
+            avg_f, hc, skill_cid=_rnd_cid
+        )
+        random_avg_price_min = _max_optional_int(random_avg_price_min, inferred)
         total_price_min = _max_optional_int(
             total_price_min,
-            _min_total_price_from_avg(_safe_float_field(skill_entries.get(_rnd_cid), "AllHitItemAvgPrice")),
+            inferred,
         )
 
     q3_grid_avg = _safe_float_field(skill_entries.get(_SKILL_Q3_GRID_AVG), "AllHitItemAvgBoxIndex")
@@ -527,6 +565,7 @@ def build_raw_pricing_dict(
         "total_grid_count": total_grid_count,
         "total_grid_avg": total_grid_avg,
         "total_price_min": total_price_min,
+        "random_avg_price_min": random_avg_price_min,
         "q1_count": None,
         "q1_grid_count": None,
         "q2_count": None,
