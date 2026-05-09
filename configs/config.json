@@ -1,30 +1,4 @@
 {
-  "window": {
-    "title_keyword": "BidKing",
-    "title_regex": "",
-    "process_name": "BidKing.exe",
-    "hwnd": 0,
-    "center_on_start": true,
-    "force_topmost_bump": true,
-    "reference_client_size": {
-      "width": 1920,
-      "height": 1080
-    }
-  },
-  "capture": {
-    "home_bid_button_region": {
-      "left": 1400,
-      "top": 880,
-      "width": 520,
-      "height": 190
-    },
-    "bid_confirm_region": {
-      "left": 704,
-      "top": 962,
-      "width": 303,
-      "height": 75
-    }
-  },
   "advisor": {
     "price_config_path": "price_config.json",
     "role": "aisha"
@@ -43,56 +17,8 @@
     "tool_rounds": [],
     "default_map": "1",
     "default_runs": 1,
-    "unknown_escape_cooldown_seconds": 2.0,
-    "post_confirm_escape_block_seconds": 60.0,
-    "maps": {
-      "1": {
-        "name": "快递盲盒堆",
-        "point": { "origin": "left_top", "x": 689, "y": 400 }
-      },
-      "2": {
-        "name": "废弃仓库",
-        "point": { "origin": "left_top", "x": 1185, "y": 315 }
-      },
-      "3": {
-        "name": "深海沉船",
-        "point": { "origin": "left_top", "x": 0, "y": 0 }
-      },
-      "4": {
-        "name": "沉船密封舱",
-        "point": { "origin": "left_top", "x": 0, "y": 0 }
-      },
-      "5": {
-        "name": "航运集装箱",
-        "point": { "origin": "left_top", "x": 641, "y": 755 }
-      },
-      "6": {
-        "name": "空置别墅",
-        "point": { "origin": "left_top", "x": 0, "y": 0 }
-      },
-      "7": {
-        "name": "幽静别墅",
-        "point": { "origin": "left_top", "x": 0, "y": 0 }
-      }
-    },
     "selected_map": "2",
-    "selected_runs": 1
-  },
-  "clicks": {
-    "mouse_park": { "x": 155, "y": 942 },
-    "tool_button": { "x": 630, "y": 970 },
-    "leftmost_tool": { "x": 290, "y": 960 },
-    "tool_confirm": { "x": 1190, "y": 655 },
-    "bid_button": { "x": 862, "y": 972 },
-    "bid_input_box": { "x": 1046, "y": 865 },
-    "bid_confirm": { "x": 1057, "y": 988 },
-    "end_reward_click": { "origin": "left_bottom", "x": 980, "y": 540 },
-    "end_close_click": { "origin": "left_bottom", "x": 1355, "y": 96 },
-    "continue_button": { "origin": "left_bottom", "x": 903, "y": 70 },
-    "post_continue_action": { "origin": "left_bottom", "x": 1634, "y": 413 },
-    "post_continue_confirm": { "origin": "left_bottom", "x": 1658, "y": 85 },
-    "home_bid_button": { "origin": "left_bottom", "x": 1634, "y": 139 },
-    "reward_continue_button": { "origin": "left_bottom", "x": 996, "y": 90 }
+    "selected_runs": 5
   },
   "debug": {
     "save_crops": false,

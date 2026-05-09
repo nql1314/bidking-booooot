@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from ..config.map_runtime_overlay import merged_runtime_with_map_pricing
 from .snapshot_io import current_round_from_snapshot, load_board_snapshot_if_enabled
 from ._multipliers import resolve_automation_bid_ratio
 from ._numeric import parse_int_config
@@ -31,20 +32,22 @@ def compute_price(
     回合倍数 → 对手调整 →
     ``points_ceiling`` 锚 → 人性化尾数 → 前两回合兜底 → bid_cap → safe_guard。
     """
+    effective_config = merged_runtime_with_map_pricing(config)
+
     if price_config is None:
-        price_config = load_price_config(config, config_path)
+        price_config = load_price_config(effective_config, config_path)
 
     bs = board_snapshot
     if bs is None:
-        bs_cfg = config.get("board_snapshot") or {}
+        bs_cfg = effective_config.get("board_snapshot") or {}
         if bool(bs_cfg.get("enabled")):
-            bs = load_board_snapshot_if_enabled(config)
+            bs = load_board_snapshot_if_enabled(effective_config)
 
     snap_round = current_round_from_snapshot(bs) if isinstance(bs, dict) else None
     effective_round = int(snap_round) if snap_round is not None else int(round_no)
 
-    role = resolve_strategy_role(config, bs)
-    fallback = parse_int_config((config.get("pricing") or {}).get("fallback_bid_price"), 22223)
+    role = resolve_strategy_role(effective_config, bs)
+    fallback = parse_int_config((effective_config.get("pricing") or {}).get("fallback_bid_price"), 22223)
 
     payload: dict[str, Any] = {
         "fallback": False,
@@ -74,7 +77,7 @@ def compute_price(
     pts, meta = compute_role_base(
         role,
         pricing,
-        config=config,
+        config=effective_config,
         board_snapshot=bs,
         effective_round=effective_round,
     )
@@ -90,7 +93,7 @@ def compute_price(
     )
 
     ratio, ratio_skipped_r5_hero = resolve_automation_bid_ratio(
-        config, effective_round, bs
+        effective_config, effective_round, bs
     )
     fin_before_ratio = fin
     fin = int(round(fin * ratio))
@@ -105,7 +108,7 @@ def compute_price(
     payload["bid_ratio"] = br
 
     fin, payload["opponent_bid"], fin_before_opp = apply_opponent_bid_adjustment(
-        config,
+        effective_config,
         fin,
         effective_round,
         price_config,
@@ -128,7 +131,7 @@ def compute_price(
     fin, payload = apply_early_round_fallback_floor(
         fin, effective_round, int(fallback), payload
     )
-    fin, payload = apply_bid_cap(config, fin, payload)
-    fin, payload = apply_safe_guard(config, fin, payload)
+    fin, payload = apply_bid_cap(effective_config, fin, payload)
+    fin, payload = apply_safe_guard(effective_config, fin, payload)
     payload["final_round_used"] = effective_round
     return int(fin), payload
