@@ -203,32 +203,6 @@ def solved_ahmad_flat_solve(
     return normalize_solved(out), warns
 
 
-def _ahmad_premium_rgb_x_sum(
-    constraints: Dict[str, ColorConstraint],
-    local_solved: Dict[str, dict],
-    *,
-    max_count: int,
-    high_total: int,
-    avg_tolerance: float,
-) -> int:
-    """紫/橙/红件数加总 x：公共信息有精确 count 或 min_count 时用该 n；否则有可行正件数计 1，否则 0。"""
-    s = 0
-    for color in COLORS_PREM_RGB:
-        c = constraints[color]
-        if c.count is not None:
-            s += int(c.count)
-            continue
-        if c.min_count is not None:
-            s += int(c.min_count)
-            continue
-        counts = local_solved.get(color, {}).get("counts") or []
-        if any(n > 0 for n in counts):
-            s += 1
-        elif color_has_feasible_positive_count(c, max_count, avg_tolerance):
-            s += 1
-    return s
-
-
 def ahmad_premium_placeholder_combo(
     data: dict,
     total_all: int,
@@ -455,7 +429,7 @@ def compute_ahmad_premium_w(
 
     估价取以下候选（凡有数据则参与）中的 **最大值**：
     - ``base + 蓝紫金红溢价``
-    - ``base + 最少价值``（``min_price_points`` 为界面 OCR 点数时换算为万后与 base 相加）
+    - ``base + 最少价值``（``min_price_points`` 为点数口径，通常来自快照 ``raw_pricing.event_stats.total_price_min``）
     - ``n * avg_w + base - n * unit_w``（中央信息出现「随机选择 n 件藏品平均价值约 a」时，``a`` 按点数转万）
 
     第 5 档且已知绿白总数 ``wg_total``（或绿、白件数可推）时，``base`` 改为

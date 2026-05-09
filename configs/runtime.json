@@ -45,288 +45,17 @@
   },
   "capture": {
     "mode": "window_client",
-    "central_info_region": {
-      "left": 490,
-      "top": 64,
-      "width": 724,
-      "height": 662
-    },
     "home_bid_button_region": {
       "left": 1400,
       "top": 880,
       "width": 520,
       "height": 190
     },
-    "min_price_region": {
-      "left": 1377,
-      "top": 915,
-      "width": 423,
-      "height": 59
-    },
     "bid_confirm_region": {
       "left": 704,
       "top": 962,
       "width": 303,
       "height": 75
-    },
-    "min_price_scan_trigger_phrases": [
-      "显示"
-    ],
-    "opponent_bid_price_only_rescan_enabled": true,
-    "opponent_bid_region": {
-      "left": 6,
-      "top": 102,
-      "width": 404,
-      "height": 433
-    },
-    "bid_history_multiplayer": {
-      "layouts": {
-        "2": [
-          {
-            "character_name": {
-              "left": 23,
-              "top": 282,
-              "width": 65,
-              "height": 30
-            },
-            "character_titles": {
-              "left": 189,
-              "top": 171,
-              "width": 80,
-              "height": 30
-            },
-            "rounds": {
-              "1": {
-                "left": 90,
-                "top": 290,
-                "width": 55,
-                "height": 30
-              },
-              "2": {
-                "left": 145,
-                "top": 290,
-                "width": 55,
-                "height": 30
-              },
-              "3": {
-                "left": 198,
-                "top": 290,
-                "width": 55,
-                "height": 30
-              },
-              "4": {
-                "left": 252,
-                "top": 290,
-                "width": 55,
-                "height": 30
-              }
-            }
-          },
-          {
-            "character_name": {
-              "left": 23,
-              "top": 486,
-              "width": 65,
-              "height": 30
-            },
-            "character_titles": {
-              "left": 189,
-              "top": 375,
-              "width": 80,
-              "height": 30
-            },
-            "rounds": {
-              "1": {
-                "left": 90,
-                "top": 486,
-                "width": 55,
-                "height": 30
-              },
-              "2": {
-                "left": 145,
-                "top": 486,
-                "width": 55,
-                "height": 30
-              },
-              "3": {
-                "left": 198,
-                "top": 486,
-                "width": 55,
-                "height": 30
-              },
-              "4": {
-                "left": 252,
-                "top": 486,
-                "width": 55,
-                "height": 30
-              }
-            }
-          }
-        ],
-        "4": [
-          {
-            "character_name": {
-              "left": 23,
-              "top": 282,
-              "width": 65,
-              "height": 30
-            },
-            "character_titles": {
-              "left": 189,
-              "top": 171,
-              "width": 80,
-              "height": 30
-            },
-            "rounds": {
-              "1": {
-                "left": 90,
-                "top": 290,
-                "width": 55,
-                "height": 30
-              },
-              "2": {
-                "left": 145,
-                "top": 290,
-                "width": 55,
-                "height": 30
-              },
-              "3": {
-                "left": 198,
-                "top": 290,
-                "width": 55,
-                "height": 30
-              },
-              "4": {
-                "left": 252,
-                "top": 290,
-                "width": 55,
-                "height": 30
-              }
-            }
-          },
-          {
-            "character_name": {
-              "left": 23,
-              "top": 486,
-              "width": 65,
-              "height": 30
-            },
-            "character_titles": {
-              "left": 189,
-              "top": 375,
-              "width": 80,
-              "height": 30
-            },
-            "rounds": {
-              "1": {
-                "left": 90,
-                "top": 486,
-                "width": 55,
-                "height": 30
-              },
-              "2": {
-                "left": 145,
-                "top": 486,
-                "width": 55,
-                "height": 30
-              },
-              "3": {
-                "left": 198,
-                "top": 486,
-                "width": 55,
-                "height": 30
-              },
-              "4": {
-                "left": 252,
-                "top": 486,
-                "width": 55,
-                "height": 30
-              }
-            }
-          },
-          {
-            "character_name": {
-              "left": 23,
-              "top": 686,
-              "width": 65,
-              "height": 30
-            },
-            "character_titles": {
-              "left": 189,
-              "top": 575,
-              "width": 80,
-              "height": 30
-            },
-            "rounds": {
-              "1": {
-                "left": 90,
-                "top": 686,
-                "width": 55,
-                "height": 30
-              },
-              "2": {
-                "left": 145,
-                "top": 686,
-                "width": 55,
-                "height": 30
-              },
-              "3": {
-                "left": 198,
-                "top": 686,
-                "width": 55,
-                "height": 30
-              },
-              "4": {
-                "left": 252,
-                "top": 686,
-                "width": 55,
-                "height": 30
-              }
-            }
-          },
-          {
-            "character_name": {
-              "left": 23,
-              "top": 886,
-              "width": 65,
-              "height": 30
-            },
-            "character_titles": {
-              "left": 189,
-              "top": 775,
-              "width": 80,
-              "height": 30
-            },
-            "rounds": {
-              "1": {
-                "left": 90,
-                "top": 886,
-                "width": 55,
-                "height": 30
-              },
-              "2": {
-                "left": 145,
-                "top": 886,
-                "width": 55,
-                "height": 30
-              },
-              "3": {
-                "left": 198,
-                "top": 886,
-                "width": 55,
-                "height": 30
-              },
-              "4": {
-                "left": 252,
-                "top": 886,
-                "width": 55,
-                "height": 30
-              }
-            }
-          }
-        ],
-        "5": []
-      }
     },
     "end_prompt_regions": [
       {
@@ -366,18 +95,7 @@
     "green_count": null,
     "white_count": null,
     "avg_grid_all": null,
-    "total_grid_rounding": "round",
-    "price_config_path": "pricing.json"
-  },
-  "pricing": {
-    "source": "avg_price",
-    "computed_price_unit": "w",
-    "computed_price_multiplier": 10000,
-    "rounding": "floor_int",
-    "fallback_bid_price": 66667,
-    "last_submitted_price": 21000,
-    "min_useful_facts": 1,
-    "sticky_increment_step": null
+    "total_grid_rounding": "round"
   },
   "board_snapshot": {
     "enabled": true,
@@ -395,14 +113,6 @@
     "default_runs": 1,
     "unknown_escape_cooldown_seconds": 2.0,
     "post_confirm_escape_block_seconds": 60.0,
-    "bid_ratio_by_round": {
-      "default": 0.95,
-      "1": 0.6,
-      "2": 0.6,
-      "3": 0.7,
-      "4": 0.9,
-      "5": 0.95
-    },
     "maps": {
       "1": {
         "name": "快递盲盒堆",
@@ -469,17 +179,7 @@
       }
     },
     "selected_map": "2",
-    "selected_runs": 1,
-    "selected_risk": "avg_price",
-    "custom_risk_factor": 0.0,
-    "safe_guard_enabled": false,
-    "safe_guard_max_increase_ratio": 0.5,
-    "bid_cap_price": 400000,
-    "opponent_bid_sticky_ratio": 0.05,
-    "opponent_bid_k_increment": 1.01,
-    "opponent_bid_defensive_bump": 300,
-    "opponent_bid_min": 20000,
-    "opponent_bid_max": 600000
+    "selected_runs": 1
   },
   "timing": {
     "poll_seconds": 1,

@@ -6,13 +6,13 @@ import argparse
 from pathlib import Path
 
 from ..config.paths import runtime_path
-from ..interaction import _legacy_aisha as _aisha
+from ..interaction._legacy_bot import run_aisha_loop
 from ._common import configure_logging, install_snapshot_file_writer, load_all
 
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
-        description="BidKing artistic bot — Aisha path (snapshot-driven)",
+        description="BidKing bot — 兼容入口，等价于强制 aisha_premium 的统一主循环",
     )
     parser.add_argument(
         "--app-log",
@@ -27,10 +27,7 @@ def main(argv: list[str] | None = None) -> None:
 
     cfg_path = runtime.source_path or runtime_path()
 
-    if hasattr(_aisha, "run_aisha_loop"):
-        _aisha.run_aisha_loop(cfg_path)
-    else:
-        raise SystemExit("interaction._legacy_aisha.run_aisha_loop 不可用，请检查迁移结果。")
+    run_aisha_loop(cfg_path)
 
 
 if __name__ == "__main__":

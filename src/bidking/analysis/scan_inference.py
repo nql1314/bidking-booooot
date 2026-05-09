@@ -41,9 +41,6 @@ def possible_qualities_from_scan_history(board_snapshot: Dict[str, Any]) -> froz
     return frozenset(q for q in all_q if q not in scanned_v)
 
 
-possible_qualities_from_negative_constraints = possible_qualities_from_scan_history
-
-
 def csv_quality_group_from_possible_set(possible: frozenset[int]) -> Optional[str]:
     if not possible:
         return None
@@ -72,7 +69,6 @@ def vacant_early_unit_from_exclusions(
 
 __all__ = [
     "csv_quality_group_from_possible_set",
-    "possible_qualities_from_negative_constraints",
     "possible_qualities_from_scan_history",
     "quality_scan_hit_uids_by_value",
     "vacant_early_unit_from_exclusions",

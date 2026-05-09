@@ -24,15 +24,12 @@ src/bidking/config/paths.py
 src/bidking/config/pricing.py
 src/bidking/config/runtime.py
 src/bidking/interaction/__init__.py
-src/bidking/interaction/_bid_history_parser.py
-src/bidking/interaction/_central_info_parser.py
-src/bidking/interaction/_legacy_aisha.py
+src/bidking/interaction/board_snapshot_util.py
 src/bidking/interaction/_legacy_bot.py
 src/bidking/interaction/input.py
 src/bidking/interaction/observe.py
 src/bidking/interaction/ocr.py
 src/bidking/interaction/round_flow.py
-src/bidking/interaction/text_patch.py
 src/bidking/interaction/window.py
 src/bidking/logsys/__init__.py
 src/bidking/logsys/app_log.py

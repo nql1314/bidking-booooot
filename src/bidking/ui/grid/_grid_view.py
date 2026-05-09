@@ -126,12 +126,6 @@ PHANTOM_GOLD_FG     = '#2a2410'
 PHANTOM_PINK_BG     = '#d67c8f'
 PHANTOM_PINK_BORDER = '#a63cd9'
 PHANTOM_PINK_FG     = '#3a1525'
-# 顶部空置倍率估价：合计 = 估算总价 + 空置格数×单价（未满「空置提示」起始回合则空置按 0）
-# 默认单价；当存在 ``map_quality_avg_out.csv`` 且 ``GameState.map_id`` 命中报表时，
-# 改用 CSV 中对应 ``quality_group`` 的 ``avg_price_per_cell``（全橙→q5，金红→q5+q6，全红→q6）。
-VACANT_UNIT_ALL_ORANGE = 10_000   # 全橙估价（CSV 缺省时）
-VACANT_UNIT_GOLD_RED = 17_000    # 金红估价（CSV 缺省时）
-VACANT_UNIT_ALL_RED = 56_000     # 全红估价（CSV 缺省时）
 
 # 与 bidking_fresh_bot ``price_config.json`` 的 ``round_rules.multiplier`` 默认一致（第 1–4 回合为「第二价秒杀」倍数）。
 _DEFAULT_ROUND_INSTANT_WIN_MULT: Dict[int, float] = {
@@ -210,9 +204,9 @@ def _archive_board_snapshot_then_unlink(snapshot_path: str) -> None:
         run_dir.mkdir(parents=True, exist_ok=True)
     except OSError:
         return
-    dest = run_dir / f"{stem}.log"
+    dest = run_dir / f"{stem}.json"
     if dest.exists():
-        dest = run_dir / f"{stem}_{int(time.time())}.log"
+        dest = run_dir / f"{stem}_{int(time.time())}.json"
     try:
         shutil.copy2(path, dest)
     except OSError:

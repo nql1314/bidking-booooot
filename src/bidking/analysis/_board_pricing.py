@@ -15,14 +15,9 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from ..parsing import item_db
 from ..parsing.item_db import _weighted_est_price, map_category_ratios, query_item
-from . import map_avg_csv as _map_avg_csv
 from . import scan_inference as _scan_inference
 from . import unknown_value as _unknown_value
 from . import grid_overlay as _grid_overlay
-
-_possible_qualities_from_negative_constraints = _scan_inference.possible_qualities_from_scan_history
-_csv_quality_group_from_possible_set = _scan_inference.csv_quality_group_from_possible_set
-_vacant_early_unit_from_exclusions = _scan_inference.vacant_early_unit_from_exclusions
 
 _item_prices_cache: Optional[Tuple[Dict[int, Any], List[Any]]] = None
 
@@ -40,11 +35,6 @@ def _load_item_prices_db() -> Tuple[Dict[int, Any], List[Any]]:
     except OSError:
         _item_prices_cache = ({}, [])
     return _item_prices_cache
-
-
-def set_map_quality_csv_override(path: Optional[str]) -> None:
-    """兼容入口，转发到 ``analysis.map_avg_csv``。"""
-    _map_avg_csv.set_map_quality_csv_override(path)
 
 
 def map_id_from_board_snapshot(board_snapshot: Dict[str, Any]) -> Optional[int]:
@@ -117,6 +107,33 @@ def _pricing_work_board_snapshot(board_snapshot: Dict[str, Any], items: Dict[str
     out = dict(board_snapshot)
     out["game_state"] = gs2
     return out
+
+
+def _ahmad_points_from_raw_pricing(raw: Any) -> int:
+    """
+    由 ``raw_pricing.event_stats`` 简单汇总（与画板快照中该段字段一致）。
+    缺失或非数字字段按 0。
+    """
+    if not isinstance(raw, dict):
+        return 0
+    st = raw.get("event_stats")
+    if not isinstance(st, dict):
+        return 0
+
+    def _nz(key: str) -> int:
+        v = st.get(key)
+        if v is None:
+            return 0
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return 0
+
+    tc = _nz("total_count")
+    q4 = _nz("q4_grid_min")
+    q5 = _nz("q5_grid_min")
+    q6 = _nz("q6_grid_min")
+    return tc * 1000 + q4 * 1000 + q5 * 10000 + q6 * 56000
 
 
 def _item_value_and_footprint(
@@ -387,7 +404,7 @@ def build_snapshot_pricing_dict(
     u_gr = int(round(float(csv_cells_for_est.get("q5+q6", 0.0))))
     u_red = int(round(float(csv_cells_for_est.get("q6", 0.0))))
 
-    u_early, _qg, _pq = _vacant_early_unit_from_exclusions(
+    u_early, _qg, _pq = _scan_inference.vacant_early_unit_from_exclusions(
         board_snapshot=snap_full,
         csv_cells_raw=csv_cells_for_est if csv_cells_for_est else None,
         pricing={},
@@ -406,6 +423,8 @@ def build_snapshot_pricing_dict(
         pts = float(total_f) + float(vacant_num) * float(u_early)
         pts_floor = float(total_f) + float(vacant_num) * float(u_orange)
         pts_ceiling = float(total_f) + float(vacant_num) * float(u_red)
+
+    ahmad_points = _ahmad_points_from_raw_pricing(raw)
 
     pricing: Dict[str, Any] = {
         "total": float(total_f),
@@ -426,5 +445,6 @@ def build_snapshot_pricing_dict(
         "early_vacant_unit_from_scan": int(u_early),
         "map_quality_avg_hit": bool(csv_cells_for_est),
         "map_quality_avg_csv": str(raw.get("map_quality_avg_csv") or "") if isinstance(raw, dict) else "",
+        "ahmad_points": int(ahmad_points),
     }
     return pricing
