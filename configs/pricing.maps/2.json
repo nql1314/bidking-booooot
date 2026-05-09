@@ -1,0 +1,18 @@
+{
+  "ahmad_premium": {
+    "round1_base_factor": 1.3,
+    "grid_rate_w": {
+      "purple": 0.15,
+      "gold": 1,
+      "red": 5.0
+    },
+    "grid_rate_w_by_round": {
+      "1": { "purple": 0.15, "gold": 0.5, "red": 4.0 },
+      "2": { "purple": 0.10, "gold": 0.4, "red": 4.0 },
+      "3": { "purple": 0.15, "gold": 0.6, "red": 4.2 },
+      "4": { "purple": 0.20, "gold": 0.8, "red": 4.4 },
+      "5": { "purple": 0.22, "gold": 1.0, "red": 4.5 }
+    },
+    "base_item_per_piece_w": 0.11
+  }
+}

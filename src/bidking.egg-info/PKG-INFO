@@ -1,0 +1,60 @@
+Metadata-Version: 2.4
+Name: bidking
+Version: 0.1.0
+Summary: BidKing: 分层架构的自动化竞拍机器人 + 画板看板
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: Pillow>=10.0.0
+Requires-Dist: numpy>=1.26.0
+Requires-Dist: opencv-python>=4.9.0
+Requires-Dist: pyautogui>=0.9.54
+Requires-Dist: rapidocr-onnxruntime>=1.3.24; python_version < "3.13"
+Requires-Dist: rapidocr>=2.0.0; python_version >= "3.13"
+Requires-Dist: onnxruntime>=1.18.0
+Requires-Dist: psutil>=5.9.8
+Provides-Extra: build
+Requires-Dist: pyinstaller>=6.20.0; extra == "build"
+Dynamic: license-file
+
+# bidking-booooot
+
+将历史项目 `bidking-bot`（自动化 + OCR + 出价循环）与 `bidking-master`（日志解析 + 画板/估价）整合到一个**分层架构**：
+
+```
+src/bidking/
+├── interaction/  # 第1层 游戏交互 (window/ocr/input/observe/round_flow/text_patch)
+├── parsing/      # 第2层 日志解析 + 数据 (events/state/processors/handlers)
+├── analysis/     # 第3层 数据分析 (snapshot/vacant/quality_stats/scan_inference/unknown_value/map_avg_csv)
+├── pricing/      # 第4层 出价策略 (ahmad/aisha/post_process/strategy)
+├── ui/           # 第5层 tkinter UI 与画板
+├── logsys/       # 第6层 日志 (app_log/perf_log/ocr_log/mouse_log/debug_dump)
+├── config/       # 第7层 配置 (runtime + pricing + 按地图覆盖)
+├── bridge/       # 跨层胶水：snapshot_store + 可选文件写出
+└── runner/       # 入口：bot_main / aisha_main / viewer_main
+```
+
+## 配置
+
+- `configs/runtime.json` —— 游戏必备：窗口/截图/OCR/automation/timing/clicks/debug
+- `configs/pricing.json` —— 全局默认价格策略
+- `configs/pricing.maps/<map_id>.json` —— 按地图深合并覆盖
+
+## 入口
+
+```powershell
+python -m bidking.runner.bot_main      # 艾哈迈德路径
+python -m bidking.runner.aisha_main    # 艾莎路径
+python -m bidking.runner.viewer_main   # 纯看板（tail / replay）
+```
+
+## 数据
+
+`data/` 下放 CSV/HTML 资源：`item_prices.csv`、`drop_table_weights.csv`、
+`calculator_data_merged.csv`、`map_quality_avg_out.csv`、
+`物品轮廓爆率推断器.html`。
+
+## 不在范围
+
+- 拉文（Raven）相关分支 —— `pricing/strategy.py` 仅保留接口位
+- PyInstaller 打包脚本 —— 后续再补
