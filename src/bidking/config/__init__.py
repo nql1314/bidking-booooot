@@ -7,10 +7,12 @@ from .paths import (
     runtime_path,
     config_overlay_path,
     pricing_path,
+    pricing_map_overlay_path,
     pricing_map_override_path,
 )
 from .runtime import RuntimeConfig, load_runtime
 from .pricing import load_pricing, resolve_for, deep_merge
+from .map_runtime_overlay import merged_runtime_with_map_pricing
 
 __all__ = [
     "project_root",
@@ -19,10 +21,12 @@ __all__ = [
     "runtime_path",
     "config_overlay_path",
     "pricing_path",
+    "pricing_map_overlay_path",
     "pricing_map_override_path",
     "RuntimeConfig",
     "load_runtime",
     "load_pricing",
     "resolve_for",
     "deep_merge",
+    "merged_runtime_with_map_pricing",
 ]

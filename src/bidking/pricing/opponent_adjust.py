@@ -264,7 +264,7 @@ def _apply_opponent_bid_adjustment_core(
     if bid_i > int(o_prev):
         return int(min(o_poss, (bid_i + int(o_prev)) / 2)), "opp_pre", r3_detail
 
-    return bid_i, "opp_sticky", r3_detail
+    return (bid_i + o_poss)/2, "opp_sticky", r3_detail
 
 
 def apply_opponent_bid_adjustment(

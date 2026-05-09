@@ -176,8 +176,89 @@ class EndPromptDetected(RuntimeError):
 
 def log(message: str, *, gui_verbose_only: bool = False) -> None:
     line = f"[{log_timestamp()}] {message}"
-    print(line, flush=True)
     append_app_log(line)
+    if gui_verbose_only and not _GUI_LOG_VERBOSE:
+        return
+    print(line, flush=True)
+
+
+def format_bid_details_line(details: dict[str, Any]) -> str:
+    """将 :func:`compute_price` 返回的 ``details`` 压成单行，便于控制台查看出价链路。"""
+    parts: list[str] = []
+    role = details.get("role")
+    if role:
+        parts.append(f"role={role}")
+    fr = details.get("final_round_used")
+    if fr is not None:
+        parts.append(f"eff_round={fr}")
+    if details.get("fallback"):
+        parts.append("fallback")
+    reason = str(details.get("reason") or "").strip()
+    if reason:
+        parts.append(f"reason={reason}" if len(reason) <= 140 else f"reason={reason[:137]}...")
+
+    bb = details.get("board_snapshot_bid")
+    if isinstance(bb, dict):
+        src = bb.get("bid_points_source")
+        if src:
+            parts.append(f"src={src}")
+        pts = bb.get("points")
+        if pts is not None:
+            parts.append(f"base_pts={pts}")
+        vac = bb.get("vacant_red_floor_ceiling_pick")
+        if isinstance(vac, dict) and vac.get("applied"):
+            parts.append(
+                f"vac_pick->{vac.get('chosen_points')} "
+                f"(infer_red={vac.get('has_red_inferred')})"
+            )
+
+    br = details.get("bid_ratio")
+    if isinstance(br, dict):
+        ratio_raw = br.get("ratio")
+        try:
+            ratio_f = float(ratio_raw) if ratio_raw is not None else 1.0
+        except (TypeError, ValueError):
+            ratio_f = 1.0
+        if abs(ratio_f - 1.0) > 1e-9:
+            parts.append(f"ratio x{ratio_raw} ({br.get('before')}->{br.get('after')})")
+        elif br.get("skipped_multiplier_opponent_hero_103_or_107"):
+            parts.append("ratio_skipped_r5_hero")
+
+    opp = details.get("opponent_bid")
+    if isinstance(opp, dict):
+        if opp.get("applied"):
+            parts.append(
+                f"opp {opp.get('tag')} o_prev={opp.get('o_prev')} "
+                f"{opp.get('before')}->{opp.get('after')}"
+            )
+        elif opp.get("o_prev") is not None:
+            parts.append(f"opp idle o_prev={opp.get('o_prev')}")
+
+    ceil = details.get("ceiling_points")
+    if isinstance(ceil, dict) and ceil.get("applied"):
+        extra = " clamped" if ceil.get("clamped") else ""
+        parts.append(f"ceil{extra} {ceil.get('before')}->{ceil.get('after')}")
+
+    ht = details.get("human_price_tail")
+    if isinstance(ht, dict):
+        parts.append(f"tail[{ht.get('pattern')}] {ht.get('before')}->{ht.get('after')}")
+
+    erf = details.get("early_round_fallback_floor")
+    if isinstance(erf, dict) and erf.get("applied"):
+        parts.append(f"early_floor {erf.get('before')}->{erf.get('after')}")
+
+    bc = details.get("bid_cap")
+    if isinstance(bc, dict) and bc.get("applied"):
+        parts.append(f"bid_cap->{bc.get('cap_price')}")
+
+    sg = details.get("safe_guard")
+    if isinstance(sg, dict) and sg.get("triggered"):
+        parts.append(f"safe_guard cap={sg.get('limit_price')}")
+
+    if details.get("skip_submit"):
+        parts.append("skip_submit")
+
+    return " | ".join(parts) if parts else "(empty details)"
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -1131,6 +1212,7 @@ def handle_round(
         knowledge_patch=knowledge_patch,
     )
     log(f"compute_price -> {price}")
+    log(f"bid details: {format_bid_details_line(details)}")
     if details.get("fallback"):
         log(f"price fallback: {price}; reason={details.get('reason')}")
     save_round_debug_bundle(
@@ -1144,7 +1226,10 @@ def handle_round(
         final_price=price,
     )
     if bool(config.get("debug", {}).get("print_ocr_snippet", False)):
-        log("ocr snippet: " + compact_text(observation.capture.text)[:160])
+        log(
+            "ocr snippet: " + compact_text(observation.capture.text)[:160],
+            gui_verbose_only=True,
+        )
     if details.get("skip_submit"):
         log(f"bid skipped: {details.get('reason')}")
         return knowledge_patch
