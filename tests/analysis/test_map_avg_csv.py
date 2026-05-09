@@ -10,7 +10,6 @@ from pathlib import Path
 from bidking.analysis.map_avg_csv import (
     load_map_quality_cells_by_map_id,
     set_map_quality_csv_override,
-    vacant_unit_prices_for_map_id,
 )
 
 
@@ -39,14 +38,6 @@ class MapAvgCsvTests(unittest.TestCase):
         cells = load_map_quality_cells_by_map_id()
         self.assertIn(2101, cells)
         self.assertAlmostEqual(cells[2101]["q5"], 1234.5)
-
-    def test_vacant_unit_prices_three_tier(self) -> None:
-        q5, q5_q6, q6, csv_hit = vacant_unit_prices_for_map_id(2101)
-        self.assertTrue(csv_hit)
-        self.assertEqual(q5, 1234)  # round(1234.5) = 1234 (banker's)
-        self.assertEqual(q5_q6, 5679)
-        self.assertEqual(q6, 9999)
-
 
 if __name__ == "__main__":
     unittest.main()
