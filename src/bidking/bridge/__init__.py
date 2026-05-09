@@ -8,7 +8,6 @@
                                                 |
                           bridge.snapshot_file -+-> board_snapshot.json (可选)
                                                 |
-                                                +-> pricing.strategy.compute_bid()
                                                 +-> ui.app 订阅刷新
 """
 
