@@ -1,24 +1,16 @@
 """艾莎策略：基于画板快照的估价。
 
-历史路径（``_aisha_legacy``）：从 ``board_snapshot.path`` 文件读 JSON 快照
-计算出价；新代码 **优先使用 in-process 快照** —— 直接消费 :mod:`bidking.bridge.snapshot_store`
-里的 dict，避免依赖外部 JSON 文件。
-
-文件读取链路保留作为 *可选* 调试通道，由 ``runtime.board_snapshot.write_mode``
-控制。
+消费 :mod:`bidking.analysis` 的 ``pricing.points`` / ``points_floor`` / ``points_ceiling``，
+不再单独维护 ``aisha_bid`` 元数据字典。
 """
 
 from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from ..analysis import (
-    build_snapshot_pricing_dict,
-    compute_aisha_bid_from_board_snapshot,
-)
+from ..analysis import build_snapshot_pricing_dict
 from . import _aisha_legacy as _legacy
 
-# 复用文件版历史 API（保留以兼容外部进程）
 read_board_snapshot_if_enabled = _legacy._read_board_snapshot_if_enabled
 is_aisha_premium_mode = _legacy.is_aisha_premium_mode
 clear_board_snapshot_file = getattr(_legacy, "clear_board_snapshot_file", None)
@@ -34,19 +26,33 @@ def compute_bid_from_snapshot(
     *,
     pricing_config: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """进程内入口：直接吃 :mod:`bidking.bridge.snapshot_store` 的 dict。
+    """进程内入口：直接吃快照 dict。
 
-    返回结构与历史 ``compute_aisha_bid_from_board_snapshot`` 一致：
-
-    - ``points`` / ``points_floor`` / ``points_ceiling``
-    - ``aisha_bid`` (即 ``points`` × 万)
-    - ``meta`` 子 dict（quality_group / unit_price 等）
+    返回 dict 含 ``points``、``aisha_bid``（与 ``points`` 同值，兼容旧 ``strategy`` 读键）、
+    ``points_floor`` / ``points_ceiling`` 及完整 ``pricing``。
     """
-    return compute_aisha_bid_from_board_snapshot(snapshot)
+    _ = pricing_config
+    pricing = snapshot.get("pricing")
+    if not isinstance(pricing, dict) or pricing.get("points") is None:
+        pricing = build_snapshot_pricing_dict(snapshot)
+    pts = pricing.get("points")
+    try:
+        pts_int = int(round(float(pts)))
+    except (TypeError, ValueError):
+        pts_int = 0
+    pf = pricing.get("points_floor")
+    pc = pricing.get("points_ceiling")
+    return {
+        "points": pts_int,
+        "points_floor": pf,
+        "points_ceiling": pc,
+        "aisha_bid": pts_int,
+        "pricing": pricing,
+    }
 
 
 def build_pricing_dict(snapshot: Dict[str, Any]) -> Dict[str, Any]:
-    """围绕 snapshot 算 ``est_orange/gold_red/red`` 等聚合估价 dict。"""
+    """围绕 snapshot 算 ``pricing`` 聚合估价 dict。"""
     return build_snapshot_pricing_dict(snapshot)
 
 

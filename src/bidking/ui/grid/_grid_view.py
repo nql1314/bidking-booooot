@@ -5,6 +5,11 @@
 用 tkinter 将当前对局物品按 BoxId / 形状渲染为 10×30 格子地图，
 支持鼠标点击弹窗查看该物品的所有候选列表。
 
+手动画框、幽灵品质偏好、手动确认 id 等写入快照的 ``grid_overlay``；
+与日志 ``game_state.items`` 的合并与定价投影由 ``analysis._board_pricing`` 在计算时完成。
+覆盖层与日志的同步（清轮廓、删重叠幽灵、扫描负向约束）在 ``_overlay_reconcile``；
+``grid_overlay`` JSON 组装在 ``_grid_overlay_payload``。
+
 布局规则（来自游戏协议）：
   - 网格：10 列 × 最多 30 行
   - BoxId = 行 × 10 + 列（行列均从 0 开始）
@@ -50,18 +55,22 @@ from ...parsing.item_db import (
     map_category_ratios,
     probability_source_label,
     query_item,
-    _weighted_est_price,
 )
 from ...parsing.log_source import extract_event
 from ...parsing.state import CsvItem, GameState, ItemKnowledge
 from ...analysis._board_pricing import (
     build_snapshot_pricing_dict,
-    map_skill_total_hidden_cells_from_logs,
-    vacant_cells_from_map_skill_total_hidden,
+    estimate_snapshot_item_price_for_uid,
 )
+from ...analysis import grid_overlay as _grid_overlay
 from ...analysis.raw_pricing import build_raw_pricing_dict
 from ._client_profile import load_client_settings_beside_snapshot, sanitize_aisha_client_payload
 from ...analysis.snapshot import game_state_to_json, item_knowledge_to_json
+from ._grid_overlay_payload import build_grid_overlay_export_dict, max_confirmed_box_id_from_items
+from ._overlay_reconcile import (
+    apply_scan_history_to_phantom_items,
+    reconcile_overlay_after_refresh,
+)
 
 # ─── 布局常量 ──────────────────────────────────────────────────────────────
 
@@ -736,67 +745,8 @@ class GridWindow:
         return None
 
     def _display_price_value(self, uid: str, k: ItemKnowledge) -> Optional[float]:
-        """返回当前格子的精确价或期望价，用于高价值标识。"""
-        if k.price is not None and k.item_cid:
-            return float(k.price)
-        manual_item = self._valid_manual_confirm_item(uid, k)
-        if manual_item is not None:
-            return float(manual_item.base_value)
-        best, _count, unique, est, _label = self._query_item_for_grid(uid, k)
-        if best is None:
-            return None
-        if unique:
-            return float(best.base_value)
-        return est
-
-    def _calc_grid_total_price(self) -> float:
-        """计算网格总价，纳入手动尺寸和手动画框物品。"""
-        total = 0.0
-        item_sources = (self.state.items, self._phantom_items)
-        for items in item_sources:
-            for uid, k in items.items():
-                if k.price is not None and k.item_cid:
-                    total += k.price
-                    continue
-                best, _count, unique, est, _label = self._query_item_for_grid(uid, k)
-                if best is None:
-                    continue
-                if unique:
-                    total += best.base_value
-                elif est is not None:
-                    total += est
-        return total
-
-    def _sum_gold_red_min_minus_weighted(self) -> float:
-        """
-        Σ(最低金红估算 − 金红加权)：对每个「多候选且权重计入总价」的物品，
-        在其候选中的 Q5/Q6 子集上取 min(base_value) 与掉落权重期望价的差；不足 2 个橙红候选时差为 0。
-        """
-        delta = 0.0
-        item_sources = (self.state.items, self._phantom_items)
-        for items in item_sources:
-            for uid, k in items.items():
-                if k.box_id is None:
-                    continue
-                if k.price is not None and k.item_cid:
-                    continue
-                _best, _count, unique, est, _label = self._query_item_for_grid(uid, k)
-                if unique or est is None:
-                    continue
-                candidates = self._candidate_items_for_grid(uid, k)
-                gr = [c for c in candidates if c.quality in (5, 6)]
-                if len(gr) < 2:
-                    continue
-                min_gr = min(c.base_value for c in gr)
-                w_gr = _weighted_est_price(
-                    gr,
-                    self._map_category_weights,
-                    self.state.map_id,
-                )
-                if w_gr is None:
-                    continue
-                delta += min_gr - w_gr
-        return delta
+        """返回当前格子的精确价或期望价（与合并 ``items`` + ``grid_overlay`` 后的定价一致）。"""
+        return estimate_snapshot_item_price_for_uid(self._board_snapshot_base(), uid)
 
     def _info_summary_text(self) -> str:
         """顶部状态栏：物品总格数、画版总格数（含空置）、均格；橙/红（含手画）。"""
@@ -887,119 +837,6 @@ class GridWindow:
             f"{self._board_mode_info_suffix()}"
         )
 
-    @staticmethod
-    def _vacant_neighbor_occupied(row: int, col: int, occupied: set) -> bool:
-        """邻居是否在网格外（视同阻挡）或已被物品/幽灵占用。"""
-        if not (0 <= row < GRID_ROWS and 0 <= col < GRID_COLS):
-            return True
-        return (row, col) in occupied
-
-    def _vacant_side_effective_blocks(
-        self, row: int, col: int, occupied: set, *, left: bool,
-    ) -> bool:
-        """
-        中间空格某一侧是否构成「有效夹挡」：网格边界、邻格已被占用，
-        或邻格为空且其正上方亦为空（连续空 ≡ 将该邻格视同占用，挡住中间格）。
-        左右独立判断，不必两侧同为连续空或同为物品。
-        """
-        if left:
-            if col <= 0:
-                return True
-            nc = col - 1
-        else:
-            if col >= GRID_COLS - 1:
-                return True
-            nc = col + 1
-        if self._vacant_neighbor_occupied(row, nc, occupied):
-            return True
-        if row > 0 and not self._vacant_neighbor_occupied(row - 1, nc, occupied):
-            return True
-        return False
-
-    @staticmethod
-    def _cell_four_cardinal_neighbors_unoccupied(
-        row: int, col: int, occupied: set,
-    ) -> bool:
-        """上下左右四格均在网内且未被物品/幽灵占用。"""
-        for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
-            nr, nc = row + dr, col + dc
-            if not (0 <= nr < GRID_ROWS and 0 <= nc < GRID_COLS):
-                return False
-            if (nr, nc) in occupied:
-                return False
-        return True
-
-    def _column_downward_all_vacant(
-        self, row: int, col: int, occupied: set,
-    ) -> bool:
-        """自 (row+1,col) 起至网格底，同列是否全部未占位。"""
-        for rr in range(row + 1, GRID_ROWS):
-            if (rr, col) in occupied:
-                return False
-        return True
-
-    def _compute_fraud_empty_cells(self, occupied: set, limit: int) -> Set[Tuple[int, int]]:
-        """
-        BoxId 0..limit 内应排除的空置候选（诈骗格）集合。
-        命中任一类即计入：列边界夹缝向下贯通、四向孤立且列向下贯通、原列尾左右夹挡。
-        """
-        fraud: Set[Tuple[int, int]] = set()
-        last_bid = limit
-
-        # 1) 临左右边界：内侧邻格已占，且整列向下延展无占（含正上方已占的情形，一律判诈骗）。
-        #    种子格起同列向下（在已知区内且未占位的格）一律视为诈骗。
-        for bid in range(last_bid + 1):
-            r, c = bid // GRID_COLS, bid % GRID_COLS
-            if (r, c) in occupied:
-                continue
-            if c != 0 and c != GRID_COLS - 1:
-                continue
-            inward_occ = (
-                (c == 0 and (r, 1) in occupied)
-                or (c == GRID_COLS - 1 and (r, GRID_COLS - 2) in occupied)
-            )
-            if not inward_occ:
-                continue
-            if not self._column_downward_all_vacant(r, c, occupied):
-                continue
-            for rr in range(r, GRID_ROWS):
-                if rr * GRID_COLS + c > last_bid:
-                    break
-                if (rr, c) not in occupied:
-                    fraud.add((rr, c))
-
-        # 2) 上下左右均未占，且同列向下延展亦未占 → 诈骗（与边界规则独立）
-        for bid in range(last_bid + 1):
-            r, c = bid // GRID_COLS, bid % GRID_COLS
-            if (r, c) in occupied:
-                continue
-            if not self._cell_four_cardinal_neighbors_unoccupied(r, c, occupied):
-                continue
-            if not self._column_downward_all_vacant(r, c, occupied):
-                continue
-            fraud.add((r, c))
-
-        # 3) 原包围规则：正上已占、正下格超出已知上界、左右有效夹挡（全范围扫描，不再限最近 21 格）
-        for bid in range(last_bid + 1):
-            r, c = bid // GRID_COLS, bid % GRID_COLS
-            if (r, c) in occupied:
-                continue
-            if not (r > 0 and (r - 1, c) in occupied):
-                continue
-            if r >= GRID_ROWS - 1:
-                continue
-            bid_below = (r + 1) * GRID_COLS + c
-            if bid_below <= last_bid:
-                continue
-            if not (
-                self._vacant_side_effective_blocks(r, c, occupied, left=True)
-                and self._vacant_side_effective_blocks(r, c, occupied, left=False)
-            ):
-                continue
-            fraud.add((r, c))
-
-        return fraud
-
     def _exclude_from_empty_zone_estimate(
         self,
         row: int,
@@ -1024,7 +861,7 @@ class GridWindow:
         memo_key = (limit, id(occupied))
         if self._empty_zone_fraud_memo != memo_key:
             self._empty_zone_fraud_memo = memo_key
-            self._empty_zone_fraud_cells = self._compute_fraud_empty_cells(occupied, limit)
+            self._empty_zone_fraud_cells = _grid_overlay.fraud_empty_cells_in_zone_prefix(occupied, limit)
         return (row, col) in self._empty_zone_fraud_cells
 
     def _cell_is_vacant_manual_suppress_eligible(self, row: int, col: int) -> bool:
@@ -1054,83 +891,18 @@ class GridWindow:
             self._draw()
 
     def _compute_empty_zone_count(self) -> Optional[int]:
-        """
-        「空置提示」起始回合之后、BoxId 0..最大锚点 内的空格数（不被物品/幽灵占据）。
-        - 200009 已揭示时优先：空置 = 收藏总格数 − 画板已有物品占位（与 ``board_pricing`` 一致）；
-        - 否则：200009 总藏品格数已揭示且已知区内占位尚未吃满前不计诈骗格；否则排除诈骗格。
-        """
-        if self.state.current_round < self._min_round_show_empty:
-            return None
+        """空置有效格数：算法在 ``analysis.grid_overlay``，此处仅聚合 UI 状态并触发计算。"""
         occupied = self._occupied_for_draw if self._occupied_for_draw is not None \
             else self._build_occupied()
-        skill_vacant = vacant_cells_from_map_skill_total_hidden(
-            self._skill_logs, occupied_cell_count=len(occupied)
+        d = _grid_overlay.compute_overlay_vacant_dict(
+            current_round=int(self.state.current_round or 1),
+            min_round_show_empty=self._min_round_show_empty,
+            skill_logs=list(self._skill_logs),
+            occupied=occupied,
+            max_box_id=self._empty_zone_max_box_id(),
+            vacant_manual_suppress=set(self._vacant_manual_suppress),
         )
-        if skill_vacant is not None:
-            return skill_vacant
-        max_box_id = self._empty_zone_max_box_id()
-        if max_box_id < 0:
-            return None
-        limit = min(max_box_id, GRID_COLS * GRID_ROWS - 1)
-        apply_fraud = not self._empty_zone_ignore_fraud_filter(occupied, limit)
-        count = 0
-        for bid in range(limit + 1):
-            row = bid // GRID_COLS
-            col = bid % GRID_COLS
-            if (row, col) not in occupied:
-                if (row, col) in self._vacant_manual_suppress:
-                    continue
-                if self._exclude_from_empty_zone_estimate(
-                    row, col, occupied, limit, apply_fraud_filter=apply_fraud,
-                ):
-                    continue
-                count += 1
-        return count
-
-    def _remove_overlapping_phantoms(self) -> None:
-        """删除与 log 已确认物品重叠的幽灵物品。"""
-        confirmed_occ: set = set()
-        for uid, k in self.state.items.items():
-            if k.box_id is None or not k.box_id_confirmed:
-                continue
-            dc, dr = self._effective_display_origin(uid, k)
-            w, h = self._effective_shape_wh(uid, k)
-            for ddr in range(h):
-                for ddc in range(w):
-                    confirmed_occ.add((dr + ddr, dc + ddc))
-        to_del = []
-        for phid in self._phantom_items:
-            if phid not in self._manual_shapes:
-                continue
-            w, h, dc, dr = self._manual_shapes[phid]
-            if any((dr + ddr, dc + ddc) in confirmed_occ
-                   for ddr in range(h) for ddc in range(w)):
-                to_del.append(phid)
-        for phid in to_del:
-            self._phantom_items.pop(phid, None)
-            self._manual_shapes.pop(phid, None)
-            self._phantom_quality_pref.pop(phid, None)
-
-    def _apply_scan_history_to_phantoms(self) -> None:
-        """
-        将全量扫描产生的负向约束同步到手动画框（幽灵）物品。
-
-        对每条 ``(scan_type, value, hit_uids)``：若本幽灵 ``phid`` **不在** ``hit_uids``（该次扫描未命中此轮廓），
-        则把 ``value`` 记入排除——品质类扫描写入 ``excluded_qualities``，品类扫描写入 ``excluded_categories``；
-        命中则**不**排除（该次扫描不能否定此物品为该品质/品类）。
-
-        写入快照后，早期 CSV 单价由 ``board_pricing._possible_qualities_from_negative_constraints``
-        读 ``game_state.scan_history`` 的 quality 记录推断（不合并物品 ``excluded_qualities``；
-        若无 quality 扫描则视为 1–6 皆可能 / ``all``）。
-        """
-        for phid, pk in self._phantom_items.items():
-            for scan_type, value, hit_uids in self.state._scan_history:
-                if phid in hit_uids:
-                    continue
-                if scan_type == 'category':
-                    pk.excluded_categories.add(value)
-                else:
-                    pk.excluded_qualities.add(value)
+        return d.get("effective_count")
 
     def _create_phantom(
         self,
@@ -1157,7 +929,7 @@ class GridWindow:
             self._phantom_quality_pref[phid] = 6
         elif default_phantom_quality is not None and 1 <= default_phantom_quality <= 5:
             self._phantom_quality_pref[phid] = default_phantom_quality
-        self._apply_scan_history_to_phantoms()
+        apply_scan_history_to_phantom_items(self._phantom_items, self.state)
         return True
 
     def _vacant_remaining_for_expand(self) -> Tuple[Optional[set], str]:
@@ -1175,7 +947,9 @@ class GridWindow:
             return None, "尚无 BoxId 已确认的物品，无法划定空置区域上界。"
         occupied = self._build_occupied()
         limit = min(max_box_id, GRID_COLS * GRID_ROWS - 1)
-        apply_fraud = not self._empty_zone_ignore_fraud_filter(occupied, limit)
+        apply_fraud = not _grid_overlay.empty_zone_ignore_fraud_filter(
+            list(self._skill_logs), occupied, limit,
+        )
         remaining: set = set()
         for bid in range(limit + 1):
             r, c = bid // GRID_COLS, bid % GRID_COLS
@@ -1507,28 +1281,6 @@ class GridWindow:
             max_box_id = max(max_box_id, k.box_id)
         return max_box_id
 
-    def _occupied_cells_in_empty_zone_prefix(self, occupied: set, limit: int) -> int:
-        """BoxId 0..limit（含）内已被物品/幽灵占用的格数。"""
-        n = 0
-        for (r, c) in occupied:
-            if not (0 <= r < GRID_ROWS and 0 <= c < GRID_COLS):
-                continue
-            if r * GRID_COLS + c > limit:
-                continue
-            n += 1
-        return n
-
-    def _empty_zone_ignore_fraud_filter(self, occupied: set, limit: int) -> bool:
-        """
-        地图技能 200009（所有藏品格数）已揭示，且已知区内占位尚未达到该总数时，
-        空置计数与橘红层不应用诈骗格过滤；吃满后恢复诈骗规则。
-        """
-        n = map_skill_total_hidden_cells_from_logs(self._skill_logs)
-        if n is None:
-            return False
-        o_zone = self._occupied_cells_in_empty_zone_prefix(occupied, limit)
-        return o_zone < n
-
     # ── Bot 快照 JSON ───────────────────────────────────────────────────────
 
     def _skill_log_game_data_subset(self, data: dict) -> dict:
@@ -1557,67 +1309,44 @@ class GridWindow:
             "received_at_unix": time.time(),
         })
 
-    def _build_pricing_snapshot_dict(self) -> dict:
+    def _board_snapshot_base(self) -> dict:
+        """构建不含 ``pricing`` 的画板快照，供 board_pricing 与单件估价复用。"""
         gs = game_state_to_json(self.state)
-        # 将手动确认候选（manual_confirm_item_id）投影到快照 game_state，确保 board_pricing
-        # 在计算金红占位/预留时使用精确 shape 与 quality，而不是未知轮廓的估算值。
-        items = gs.get("items")
-        if isinstance(items, dict):
-            for uid, row in items.items():
-                if not isinstance(row, dict):
-                    continue
-                cid = row.get("manual_confirm_item_id")
-                if not cid:
-                    continue
-                try:
-                    item = self.csv_index.get(int(cid))
-                except (TypeError, ValueError):
-                    item = None
-                if item is None:
-                    continue
-                row["item_cid"] = int(item.item_id)
-                row["quality"] = int(item.quality)
-                row["shape"] = int(item.shape)
-                row["price"] = int(item.base_value)
         raw_pricing = build_raw_pricing_dict(
             map_id=int(self.state.map_id or 0),
             skill_logs=list(self._skill_logs),
             snapshot_path_hint=self._snapshot_path,
         )
-        board_snapshot = {
+        return {
             "game_state": gs,
             "skill_logs": list(self._skill_logs),
             "current_round": int(self.state.current_round or 1),
             "map_id": int(self.state.map_id or 0),
             "raw_pricing": raw_pricing,
+            "grid_overlay": self._grid_overlay_to_json(),
         }
+
+    def _build_pricing_snapshot_dict(self) -> dict:
         return build_snapshot_pricing_dict(
-            board_snapshot,
+            self._board_snapshot_base(),
             snapshot_path_hint=self._snapshot_path,
-            total=float(self._calc_grid_total_price()),
-            raw_vacant=self._compute_empty_zone_count(),
-            sum_gold_red_min_minus_weighted=float(self._sum_gold_red_min_minus_weighted()),
         )
 
     def _grid_overlay_to_json(self) -> dict:
-        ph = {uid: item_knowledge_to_json(k) for uid, k in self._phantom_items.items()}
-        manual = {uid: [int(x) for x in tup] for uid, tup in self._manual_shapes.items()}
-        pref: Dict[str, Union[int, str]] = {}
-        for uid, v in self._phantom_quality_pref.items():
-            pref[uid] = v if isinstance(v, int) else str(v)
-        uq_pref = {
-            uid: int(q)
-            for uid, q in self._unknown_cell_quality_pref.items()
-            if isinstance(q, int) and 1 <= q <= 6
-        }
-        vacant_bids = sorted(r * GRID_COLS + c for r, c in self._vacant_manual_suppress)
-        return {
-            "phantom_items": ph,
-            "manual_shapes": manual,
-            "phantom_quality_pref": pref,
-            "unknown_cell_quality_pref": uq_pref,
-            "vacant_manual_suppress_bids": vacant_bids,
-        }
+        occupied = self._occupied_for_draw if self._occupied_for_draw is not None \
+            else self._build_occupied()
+        return build_grid_overlay_export_dict(
+            phantom_items=self._phantom_items,
+            manual_shapes=self._manual_shapes,
+            phantom_quality_pref=self._phantom_quality_pref,
+            unknown_cell_quality_pref=self._unknown_cell_quality_pref,
+            vacant_manual_suppress=self._vacant_manual_suppress,
+            current_round=int(self.state.current_round or 1),
+            min_round_show_empty=self._min_round_show_empty,
+            skill_logs=list(self._skill_logs),
+            occupied_cells=occupied,
+            max_box_id=max_confirmed_box_id_from_items(self.state.items),
+        )
 
     def _emit_board_snapshot_unlocked(self) -> None:
         """调用方须已持有 ``self._lock``。"""
@@ -1625,6 +1354,7 @@ class GridWindow:
         if not path:
             return
         gs = game_state_to_json(self.state)
+        base = self._board_snapshot_base()
         payload = {
             "schema_version": BOARD_SNAPSHOT_SCHEMA_VERSION,
             "written_at_unix": time.time(),
@@ -1633,14 +1363,23 @@ class GridWindow:
             "current_round": gs["current_round"],
             "game_state": gs,
             "skill_logs": list(self._skill_logs),
-            "pricing": self._build_pricing_snapshot_dict(),
+            "raw_pricing": base["raw_pricing"],
+            "pricing": build_snapshot_pricing_dict(
+                base,
+                snapshot_path_hint=self._snapshot_path,
+            ),
         }
         client_raw = load_client_settings_beside_snapshot(self._snapshot_path)
         client_out = sanitize_aisha_client_payload(client_raw)
         if client_out:
             payload["aisha_client"] = client_out
+        go = base.get("grid_overlay") or {}
         if self._snapshot_export_overlay:
-            payload["grid_overlay"] = self._grid_overlay_to_json()
+            payload["grid_overlay"] = go
+        else:
+            v = go.get("vacant")
+            if v is not None:
+                payload["grid_overlay"] = {"vacant": v}
         text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         tmp_path = path + ".tmp"
         try:
@@ -1763,19 +1502,15 @@ class GridWindow:
 
     def _refresh(self) -> None:
         """普通刷新：更新信息栏、总价标签、重绘 Canvas。"""
-        # log 已确认形状的物品，手动尺寸覆盖自动失效
-        confirmed_uids = [u for u, k in self.state.items.items() if k.shape is not None]
-        for u in confirmed_uids:
-            self._manual_shapes.pop(u, None)
-        # 删除与已确认 log 物品重叠的幽灵
-        self._remove_overlapping_phantoms()
-        # 道具/英雄全量扫描更新后，同步手动画框物品的排除约束
-        self._apply_scan_history_to_phantoms()
-        # 新约束可能与手动确认冲突，冲突时自动撤销确认
+        reconcile_overlay_after_refresh(
+            self.state,
+            self._manual_shapes,
+            self._phantom_items,
+            self._phantom_quality_pref,
+        )
         self._validate_manual_confirmations()
 
         self._info_text.set(self._info_summary_text())
-        self._update_total_label()
         self._draw()
 
     def _validate_manual_confirmations(self) -> None:
@@ -1787,35 +1522,36 @@ class GridWindow:
                     self._valid_manual_confirm_item(uid, k)
 
     def _tooltip_text_grid_total(self) -> str:
-        """图例栏「估算总价」：仅物品加总，与 board_pricing 中 T 一致。"""
-        total = float(self._calc_grid_total_price())
+        """图例栏「估算总价」：与 ``pricing.total``（board_pricing 汇总）一致。"""
+        p = self._last_pricing_for_tooltips
+        if not isinstance(p, dict) or p.get("total") is None:
+            p = self._build_pricing_snapshot_dict()
+        total = float(p.get("total") or 0)
         n_empty = self._compute_empty_zone_count()
         lines = [
             "估算总价 T（物品）",
-            "公式：各物品在格子上展示的单价之和",
-            "（已确认价 → 用确认价；唯一候选 → 候选原价；多候选 → 地图类别权重期望价）",
-            f"数字：T = ¥{total:,.0f}",
+            "由 ``board_pricing`` 根据快照 items 汇总："
+            "已确认价 → 日志价；未知轮廓 → 权重等价占位与期望价；未知品质 → 权重期望价。",
+            f"数字：T = ¥{total:,.0f}（与写入快照的 pricing.total 一致）",
         ]
         if n_empty is not None:
             lines.append(
-                f"提示：状态栏「空置 {n_empty} 格」为几何空置计数；"
-                "未乘入本行 T。空置加价见上方「全红/全橙/金红/最低」四档。"
+                f"提示：状态栏「空置 {n_empty} 格」与 ``grid_overlay.vacant`` 一致；"
+                "定价 ``pricing.vacant`` 由 ``analysis.grid_overlay.resolve_pricing_vacant`` 解析（200009 优先）。"
             )
         else:
             lines.append(
-                "提示：当前回合未到空置提示起始回合或无有效空置区，"
-                "几何空置未计数；顶栏四档估价中 V 按 0 与快照一致。"
+                "提示：当前回合未到空置提示起始回合或无有效锚点，"
+                "``grid_overlay.vacant.effective_count`` 为空；定价侧仍可能使用技能 200009 或历史 vacant_geometric。"
             )
         return "\n".join(lines)
 
     def _tooltip_text_position_estimate(self, key: str) -> str:
-        """顶栏四档仓位总价，与 build_snapshot_pricing_dict 中 est_* 一致。"""
+        """顶栏仓位总价：est_* / 主价区间，与 ``build_snapshot_pricing_dict`` 一致。"""
         p = self._last_pricing_for_tooltips
         if not isinstance(p, dict) or not p:
             return "（估价尚未计算，请稍候刷新）"
-        t_raw = p.get("known_items_total")
-        if t_raw is None:
-            t_raw = p.get("total")
+        t_raw = p.get("total")
         try:
             t_val = float(t_raw or 0)
         except (TypeError, ValueError):
@@ -1826,10 +1562,6 @@ class GridWindow:
             u_r = float(p.get("vacant_unit_all_red") or 0)
         except (TypeError, ValueError):
             u_o = u_gr = u_r = 0.0
-        try:
-            delta = float(p.get("sum_gold_red_min_minus_weighted") or 0)
-        except (TypeError, ValueError):
-            delta = 0.0
 
         v_raw = p.get("vacant_geometric")
         try:
@@ -1841,55 +1573,46 @@ class GridWindow:
             v_eff = int(v_eff_raw) if v_eff_raw is not None else 0
         except (TypeError, ValueError):
             v_eff = 0
-        try:
-            reserve = int(p.get("vacant_map_skill_hidden_cell_reserve") or 0)
-        except (TypeError, ValueError):
-            reserve = 0
         src = "地图品质均价 CSV" if p.get("map_quality_avg_hit") else "内置缺省单价"
 
-        head: List[str] = []
-        if v_g is None:
-            head.append("几何空置：未计入（未到空置提示回合或无有效空置区）")
-            head.append("有效空置格数 V = 0（与写入快照的定价一致）")
-        else:
-            head.append(f"几何空置格数：{v_g}")
-            head.append(f"地图技能预留格：{reserve}")
-            head.append(f"有效空置 V = max(0, {v_g} − {reserve}) = {v_eff}")
+        head: List[str] = [
+            f"定价用空置 V = {v_eff}（见 pricing.vacant；vacant_source = {p.get('vacant_source', '—')!s}）",
+        ]
+        if v_g is not None:
+            head.append(f"后备/几何相关 vacant_geometric = {v_g}")
         head.append(f"空置单价来源：{src}")
         head.append("")
 
         if key == "orange":
-            title = "全橙估价"
+            title = "全橙估价 est_orange"
             formula = "T + V × U_全橙"
             u = u_o
             result = p.get("est_orange")
             num = f"{t_val:,.0f} + {v_eff} × {u_o:,.0f} = {float(result or 0):,.0f}"
         elif key == "gold_red":
-            title = "金红估价"
+            title = "金红估价 est_gold_red"
             formula = "T + V × U_金红"
             u = u_gr
             result = p.get("est_gold_red")
             num = f"{t_val:,.0f} + {v_eff} × {u_gr:,.0f} = {float(result or 0):,.0f}"
         elif key == "red":
-            title = "全红估价"
+            title = "全红估价 est_red"
             formula = "T + V × U_全红"
             u = u_r
             result = p.get("est_red")
             num = f"{t_val:,.0f} + {v_eff} × {u_r:,.0f} = {float(result or 0):,.0f}"
         elif key == "floor":
-            title = "最低估价"
-            formula = "T + Δ + V × U_全橙"
-            u = u_o
-            result = p.get("est_floor")
-            num = (
-                f"{t_val:,.0f} + {delta:,.0f} + {v_eff} × {u_o:,.0f} "
-                f"= {float(result or 0):,.0f}"
+            title = "主价区间 points_floor / points_ceiling"
+            pf = p.get("points_floor")
+            pc = p.get("points_ceiling")
+            return "\n".join(
+                [
+                    title,
+                    f"第 4 回合起：下限 ≈ T + V×U_全橙 = {pf!s}；上限 ≈ T + V×U_全红 = {pc!s}。",
+                    f"第 1–3 回合：floor/ceiling 与主价 points 相同（扫描推断单价）。",
+                    f"当前 points = {p.get('points')!s}。",
+                ]
             )
-            head.append(
-                "Δ = Σ(多候选且计入加权的物品：min(橙红候选原价) − 橙红权重期望)；"
-                "橙红候选不足 2 件则该项为 0。"
-            )
-            head.append("")
         else:
             return ""
 
@@ -1897,120 +1620,42 @@ class GridWindow:
         return "\n".join(lines)
 
     def _tooltip_text_early_exclusions(self) -> str:
-        """第 1–3 回合：`_vacant_early_unit_from_exclusions` 单价与线性参考说明。"""
+        """扫描推断的早期空置格均价 U（写入 pricing.early_vacant_unit_from_scan）。"""
         p = self._last_pricing_for_tooltips
         if not isinstance(p, dict) or not p:
             return "（估价尚未计算）"
-        eu = p.get("early_exclusions_vacant_unit")
-        if eu is None:
-            return (
-                "第 4 回合起：本行不显示「排除法」早期空置单价。\n"
-                "「艾莎 bid」为 pricing.aisha_bid_points（悬浮可看第 4 回合起公式摘要）。\n"
-                "右侧为 CSV 三档（全橙/金红/全红）与最低估价。"
-            )
-        ab = p.get("aisha_bid")
-        if not isinstance(ab, dict):
-            ab = {}
-        detail = ab.get("early_round_detail") or {}
-        t_raw = p.get("known_items_total")
-        if t_raw is None:
-            t_raw = p.get("total")
+        eu = p.get("early_vacant_unit_from_scan")
         try:
-            t_val = float(t_raw or 0)
-        except (TypeError, ValueError):
-            t_val = 0.0
-        try:
-            u_int = int(eu)
+            u_int = int(eu) if eu is not None else 0
         except (TypeError, ValueError):
             u_int = 0
-        v_used = ab.get("vacant_used")
-        try:
-            v_int = int(v_used) if v_used is not None else 0
-        except (TypeError, ValueError):
-            v_int = 0
-        v_geo = ab.get("vacant_geometric_for_pricing")
-        try:
-            v_geo_i = int(v_geo) if v_geo is not None else None
-        except (TypeError, ValueError):
-            v_geo_i = None
-        try:
-            res = int(ab.get("vacant_map_skill_hidden_cell_reserve") or 0)
-        except (TypeError, ValueError):
-            res = 0
-        qg = p.get("early_exclusions_quality_group") or "—"
-        elin = p.get("early_exclusions_linear_total")
-        try:
-            lin = float(elin) if elin is not None else t_val + v_int * float(u_int)
-        except (TypeError, ValueError):
-            lin = t_val + v_int * float(u_int)
-        rnd = ab.get("current_round")
-        vr12 = detail.get("vacant_round_1_2")
-        vr3 = detail.get("vacant_round_3")
+        t_val = float(p.get("total") or 0)
+        v_eff = int(p.get("vacant") or 0)
+        pts = p.get("points")
         lines = [
             "早期空置单价（排除法）",
-            "依据：game_state.scan_history 的 quality 扫描（hit_uids=已揭示该档的物品）"
-            "→ 未知 uid 未出现在某档 hit 则排除该档；**无 quality 扫描时视为 1–6 皆可能（all）**；多未知物取交集"
-            "→ 映射 CSV 精确键 → 格均价 U；无键/缺行则为 0。",
-            f"本局选用 CSV 组合键：{qg}",
-            f"单价：U = ¥{u_int:,.0f} / 格",
-            "",
-            "几何空置（早期分支固定取 vacant_round_1_2，与艾莎 bid 早期逻辑一致）："
-            f" {vr12!s}；第 3 回合锚点行内空置 vacant_round_3 = {vr3!s}（本式未改用该值）。",
+            "依据 scan_history 中 quality 扫描 → 空格仍可能的品质集合 → CSV 对应 quality_group 的格均价；"
+            "无 quality 扫描时视为 all。",
+            f"U = ¥{u_int:,.0f} / 格（pricing.early_vacant_unit_from_scan）",
+            f"第 1–3 回合主价 points ≈ T + V×U = {t_val:,.0f} + {v_eff} × {u_int:,.0f}（与 pricing.points 一致）。",
         ]
-        if v_geo_i is not None:
-            lines.append(
-                f"参与计价的几何空置：{v_geo_i}；地图技能预留 {res}；"
-                f"有效空置 V = max(0, {v_geo_i} − {res}) = {v_int}"
-            )
-        else:
-            lines.append(f"有效空置 V = {v_int}（预留 {res}）")
-        pts = p.get("aisha_bid_points")
-        lines.extend(
-            [
-                "",
-                "仅作底数对照（未含地图技能金红格/件数、随机均价融合等；与顶栏「艾莎 bid」点数可不同）：",
-                f"T + V × U = {t_val:,.0f} + {v_int} × {u_int:,.0f} = {lin:,.0f}",
-            ]
-        )
         if pts is not None:
-            try:
-                lines.append(f"当前 pricing.aisha_bid_points = {int(round(float(pts))):,}")
-            except (TypeError, ValueError):
-                lines.append(f"当前 pricing.aisha_bid_points = {pts!r}")
-        if rnd is not None:
-            lines.insert(1, f"当前回合：第 {rnd} 回合（≤3 时启用排除法单价 U）")
+            lines.append(f"当前 pricing.points = {pts!s}")
         return "\n".join(lines)
 
-    def _tooltip_text_aisha_bid_points(self) -> str:
-        """pricing.aisha_bid_points：早期底数 + 附加项；晚期按金红披露与空置模式推算（摘要）。"""
+    def _tooltip_text_main_points(self) -> str:
+        """pricing.points / floor / ceiling 摘要。"""
         p = self._last_pricing_for_tooltips
         if not isinstance(p, dict) or not p:
             return "（估价尚未计算）"
-        pts = p.get("aisha_bid_points")
-        ab = p.get("aisha_bid")
-        if not isinstance(ab, dict):
-            ab = {}
-        pf, pc = ab.get("points_floor"), ab.get("points_ceiling")
-
-        def _adj_one(note: Any) -> str:
-            if isinstance(note, dict):
-                pairs = []
-                for k in sorted(note.keys(), key=str):
-                    v = note[k]
-                    s = f"{k}={v!r}"
-                    if len(s) > 48:
-                        s = s[:45] + "..."
-                    pairs.append(s)
-                out = "; ".join(pairs)
-                return out if len(out) <= 140 else out[:137] + "..."
-            return repr(note)[:140]
-
-        lines: List[str] = ["pricing.aisha_bid_points（快照字段，bot 与画板一致）"]
+        pts = p.get("points")
+        pf, pc = p.get("points_floor"), p.get("points_ceiling")
+        lines: List[str] = ["主价（快照 pricing.points）"]
         if pts is not None:
             try:
-                lines.append(f"主价：{int(round(float(pts))):,}")
+                lines.append(f"points = {int(round(float(pts))):,}")
             except (TypeError, ValueError):
-                lines.append(f"主价：{pts!r}")
+                lines.append(f"points = {pts!r}")
             mult = _instant_win_multiplier_for_round(self.state.current_round)
             try:
                 pv = float(pts)
@@ -2018,84 +1663,24 @@ class GridWindow:
                 lines.extend(
                     [
                         "",
-                        f"防拍参考：主价 ÷ 第 {max(1, min(5, int(self.state.current_round or 1)))} 回合秒杀倍率 {mult:g} ≈ {anti:,}",
+                        f"防拍参考：points ÷ 第 {max(1, min(5, int(self.state.current_round or 1)))} 回合秒杀倍率 {mult:g} ≈ {anti:,}",
                     ]
                 )
             except (TypeError, ValueError):
                 pass
-        else:
-            pm = ab.get("points")
-            if pm is not None:
-                try:
-                    lines.append(f"主价：—（外层返回 None；meta 内 points = {int(round(float(pm))):,}）")
-                except (TypeError, ValueError):
-                    lines.append("主价：—")
-            else:
-                lines.append("主价：—（无有效定价输出）")
         if pf is not None or pc is not None:
-            lines.append(f"points_floor / points_ceiling：{pf!s} / {pc!s}")
-
-        if ab.get("early_round_estimated"):
-            t_raw = p.get("known_items_total")
-            if t_raw is None:
-                t_raw = p.get("total")
-            try:
-                t_val = float(t_raw or 0)
-            except (TypeError, ValueError):
-                t_val = 0.0
-            u, v = ab.get("vacant_unit_applied"), ab.get("vacant_used")
-            lines.extend(
-                [
-                    "",
-                    "【第1–3回合】公式要点：",
-                    "底数 ≈ round(T + V×U)，U = scan_history 品质扫描推断（无 quality 扫描则 all）→ CSV 格均价（缺行则 0）；",
-                    "再叠加地图技能（金红格/件数等）与随机均价类融合，逐项记在 map_skill_adjustments。",
-                ]
-            )
-            try:
-                u_i = int(u) if u is not None else 0
-                v_i = int(v) if v is not None else 0
-                base = t_val + v_i * float(u_i)
-                lines.append(
-                    f"底数代入：T + V×U = {t_val:,.0f} + {v_i} × {u_i:,.0f} = {base:,.0f}（再 round 及加项后得主价）"
-                )
-            except (TypeError, ValueError):
-                pass
-        else:
-            lines.extend(
-                [
-                    "",
-                    "【第4回合起】公式要点：",
-                    f"空置计价模式 vacant_pricing_mode = {ab.get('vacant_pricing_mode')!s}",
-                    f"有效空置 vacant_used = {ab.get('vacant_used')!s}；"
-                    f"地图技能预留 vacant_map_skill_hidden_cell_reserve = "
-                    f"{ab.get('vacant_map_skill_hidden_cell_reserve')!s}",
-                ]
-            )
-            gr_ok = ab.get("gold_red_vacant_counts_certain")
-            if gr_ok is not None:
-                lines.append(f"金红分计是否可靠 gold_red_vacant_counts_certain = {gr_ok!s}")
-            u5, u56, u6 = ab.get("vacant_unit_q5"), ab.get("vacant_unit_q5_q6"), ab.get("vacant_unit_q6")
-            if any(x is not None for x in (u5, u56, u6)):
-                lines.append(
-                    f"本模式使用的空置单价（元/格）：q5={u5!s}，q5+q6={u56!s}，q6={u6!s}"
-                )
-            lines.append(
-                "主价通常取 points_floor 一侧；ceiling 为偏高边界或单价上限组合，详见 meta 与 adjustments。"
-            )
-
-        adj = ab.get("map_skill_adjustments") or []
-        if adj:
-            lines.extend(["", f"map_skill_adjustments（共 {len(adj)} 条，摘要）:"])
-            for note in adj[:16]:
-                lines.append(f"  • {_adj_one(note)}")
-            if len(adj) > 16:
-                lines.append(f"  … 余 {len(adj) - 16} 条略")
+            lines.append(f"points_floor / points_ceiling = {pf!s} / {pc!s}")
+        lines.append(
+            f"空置 V = {p.get('vacant')!s}；单价 CSV 命中 = {p.get('map_quality_avg_hit')!s}。"
+        )
         return "\n".join(lines)
 
     def _update_total_label(self) -> None:
-        """更新估算总价标签（含空置格价值）。"""
-        total = self._calc_grid_total_price()
+        """更新估算总价标签（pricing.total）。"""
+        p = self._last_pricing_for_tooltips
+        if not isinstance(p, dict) or p.get("total") is None:
+            p = self._build_pricing_snapshot_dict()
+        total = float(p.get("total") or 0)
         empty_count = self._compute_empty_zone_count()
         if empty_count and empty_count > 0:
             self._total_label.config(
@@ -2108,27 +1693,26 @@ class GridWindow:
             self._total_label.config(text=f"估算总价  ¥{total:,.0f}")
 
     def _update_vacant_estimate_bar(self) -> None:
-        """更新顶栏两行：①艾莎 bid + 可选早期单价；②四档 CSV 估价（与 ``build_snapshot_pricing_dict`` 一致）。"""
+        """更新顶栏两行：①主价 points；②三档 est_* 与主价区间。"""
         if not hasattr(self, "_est_label_red"):
             return
         p = self._build_pricing_snapshot_dict()
         self._last_pricing_for_tooltips = p
-        pts = p.get("aisha_bid_points")
+        pts = p.get("points")
         mult = _instant_win_multiplier_for_round(self.state.current_round)
         if pts is not None:
             try:
                 pts_i = int(round(float(pts)))
                 anti = int(round(pts_i / mult)) if mult > 0 else pts_i
                 self._est_label_aisha.config(
-                    text=f"艾莎 bid  {pts_i:,}  （÷{mult:g}→{anti:,}）",
+                    text=f"主价  {pts_i:,}  （÷{mult:g}→{anti:,}）",
                 )
             except (TypeError, ValueError):
-                self._est_label_aisha.config(text=f"艾莎 bid  {pts!r}")
+                self._est_label_aisha.config(text=f"主价  {pts!r}")
         else:
-            self._est_label_aisha.config(text="艾莎 bid  —")
+            self._est_label_aisha.config(text="主价  —")
 
-        eu = p.get("early_exclusions_vacant_unit")
-        eqg = p.get("early_exclusions_quality_group") or "—"
+        eu = p.get("early_vacant_unit_from_scan")
         if eu is not None:
             try:
                 eu_f = float(eu)
@@ -2136,7 +1720,7 @@ class GridWindow:
                 eu_f = None
             if eu_f is not None:
                 self._est_label_early.config(
-                    text=f"早期(约束) ¥{eu_f:,.0f}/格 [{eqg}]",
+                    text=f"扫描单价 ¥{eu_f:,.0f}/格",
                 )
                 self._est_early_wrap.pack(side="left", padx=(0, 16))
             else:
@@ -2149,11 +1733,17 @@ class GridWindow:
         est_red = float(p.get("est_red") or 0)
         est_orange = float(p.get("est_orange") or 0)
         est_gold_red = float(p.get("est_gold_red") or 0)
-        est_floor = float(p.get("est_floor") or 0)
         self._est_label_red.config(text=f"全红估价  ¥{est_red:,.0f}")
         self._est_label_orange.config(text=f"全橙估价  ¥{est_orange:,.0f}")
         self._est_label_gold_red.config(text=f"金红估价  ¥{est_gold_red:,.0f}")
-        self._est_label_floor.config(text=f"最低估价  ¥{est_floor:,.0f}")
+        rnd = int(self.state.current_round or 1)
+        if rnd >= 4:
+            pf = int(p.get("points_floor") or 0)
+            pc = int(p.get("points_ceiling") or 0)
+            self._est_label_floor.config(text=f"主价区间  ¥{pf:,.0f} – ¥{pc:,.0f}")
+        else:
+            pi = int(p.get("points") or 0)
+            self._est_label_floor.config(text=f"主价  ¥{pi:,.0f}")
 
     # ── 界面构建 ──────────────────────────────────────────────────────────
 
@@ -2201,7 +1791,7 @@ class GridWindow:
             ).pack(side='right', padx=8)
 
     def _build_vacant_estimate_bar(self) -> None:
-        """窗口最上方：第一行艾莎 bid + 可选早期约束单价；第二行四档 CSV 估价（避免单行过宽）。"""
+        """窗口最上方：第一行主价 points + 扫描单价；第二行三档 est 与主价区间。"""
         bar = tk.Frame(self.root, bg="#152030", pady=4)
         bar.pack(fill="x", padx=8, pady=(6, 0))
         row1 = tk.Frame(bar, bg="#152030")
@@ -2238,7 +1828,7 @@ class GridWindow:
         self._est_label_orange.pack(side="left", padx=(0, 16))
         self._est_label_gold_red.pack(side="left", padx=(0, 16))
         self._est_label_floor.pack(side="left", padx=(0, 0))
-        _PricingHoverTip(self._est_label_aisha, self._tooltip_text_aisha_bid_points)
+        _PricingHoverTip(self._est_label_aisha, self._tooltip_text_main_points)
         _PricingHoverTip(self._est_label_early, self._tooltip_text_early_exclusions)
         _PricingHoverTip(self._est_label_red, lambda: self._tooltip_text_position_estimate("red"))
         _PricingHoverTip(self._est_label_orange, lambda: self._tooltip_text_position_estimate("orange"))
@@ -2287,11 +1877,10 @@ class GridWindow:
             font=('微软雅黑', 8),
         ).pack(side='left', padx=(10, 4))
 
-        # 右侧：估算总价
-        total = self._calc_grid_total_price()
+        # 右侧：估算总价（首次绘制后由 _update_total_label 刷新）
         self._total_label = tk.Label(
             bar,
-            text=f"估算总价  ¥{total:,.0f}",
+            text="估算总价  ¥0",
             bg='#222233', fg='#e8d080',
             font=('微软雅黑', 10, 'bold'),
             cursor='hand2',
@@ -2370,8 +1959,6 @@ class GridWindow:
         self._snap_idx = idx
         self.state = self._snapshots[idx][1]
         self._recalc_vis_rows()
-        # 不同快照可能有不同的确认物品，删除与新快照冲突的幽灵
-        self._remove_overlapping_phantoms()
         self._manual_shapes_restore_backup = None
 
         # 更新窗口标题、信息栏、画布
@@ -2472,8 +2059,8 @@ class GridWindow:
             max_box_id = self._empty_zone_max_box_id()
             if max_box_id >= 0:
                 vac_limit = min(max_box_id, GRID_COLS * GRID_ROWS - 1)
-                apply_fraud = not self._empty_zone_ignore_fraud_filter(
-                    self._occupied_for_draw, vac_limit,
+                apply_fraud = not _grid_overlay.empty_zone_ignore_fraud_filter(
+                    list(self._skill_logs), self._occupied_for_draw, vac_limit,
                 )
                 for bid in range(vac_limit + 1):
                     row = bid // GRID_COLS
@@ -2541,11 +2128,11 @@ class GridWindow:
                 fill=preview_color, font=('微软雅黑', 10, 'bold'),
             )
 
-        # 每次绘制后同步更新估价标签（含空置格估算，趁缓存还在）
-        if hasattr(self, '_total_label'):
-            self._update_total_label()
+        # 每次绘制后同步更新估价标签（先算 pricing 缓存，再刷新总价）
         if hasattr(self, "_est_label_red"):
             self._update_vacant_estimate_bar()
+        if hasattr(self, '_total_label'):
+            self._update_total_label()
         if hasattr(self, '_info_text'):
             self._info_text.set(self._info_summary_text())
 
