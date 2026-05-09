@@ -415,6 +415,46 @@ def _apply_tier_zero_coherence(
             d[ek] = 0
 
 
+def _infer_q56_grid_from_total_and_q14(d: Dict[str, Any]) -> None:
+    """由 ``total_grid_count`` 与 q1–q4 总格推出金/红缺失档（恒等式：总数 = q1+…+q6）。
+
+    技能给出的总藏品格与分档格满足守恒：若 q1–q4 各档总格均已知，且 q5、q6 中至少有一档
+    总格已由日志给出（或该档件数为 0 可视为 0 格），则可推算另一档的精确总格。
+    仅填补仍为 ``None`` 的 ``q5_grid_count`` / ``q6_grid_count``，不覆盖已有整数。
+    """
+    T = _as_int_count(d.get("total_grid_count"))
+    if T is None:
+        return
+    g1 = _as_int_count(d.get("q1_grid_count"))
+    g2 = _as_int_count(d.get("q2_grid_count"))
+    g3 = _as_int_count(d.get("q3_grid_count"))
+    g4 = _as_int_count(d.get("q4_grid_count"))
+    if any(x is None for x in (g1, g2, g3, g4)):
+        return
+
+    sum14 = int(g1) + int(g2) + int(g3) + int(g4)
+    remainder = int(T) - sum14
+    if remainder < 0:
+        return
+
+    if d.get("q5_count") == 0 and d.get("q5_grid_count") is None:
+        d["q5_grid_count"] = 0
+    if d.get("q6_count") == 0 and d.get("q6_grid_count") is None:
+        d["q6_grid_count"] = 0
+
+    g5 = _as_int_count(d.get("q5_grid_count"))
+    g6 = _as_int_count(d.get("q6_grid_count"))
+
+    if g5 is not None and g6 is None:
+        rest = remainder - int(g5)
+        if rest >= 0:
+            d["q6_grid_count"] = rest
+    elif g6 is not None and g5 is None:
+        rest = remainder - int(g6)
+        if rest >= 0:
+            d["q5_grid_count"] = rest
+
+
 def build_raw_pricing_dict(
     *,
     map_id: int,
@@ -572,6 +612,7 @@ def build_raw_pricing_dict(
             if direct["q6_price_avg"] is None and agg["avg_price"] is not None:
                 direct["q6_price_avg"] = float(agg["avg_price"])
 
+
     for _pfx in ("q4_", "q5_", "q6_"):
         _infer_tier_count_grid_price(
             direct,
@@ -628,6 +669,8 @@ def build_raw_pricing_dict(
             total_price_k=total_price_k,
             also_zero=also_zero,
         )
+        
+    _infer_q56_grid_from_total_and_q14(direct)
 
     if direct["q1_count"] is not None and direct["q2_count"] is not None:
         direct["q12_count"] = direct["q1_count"] + direct["q2_count"]
