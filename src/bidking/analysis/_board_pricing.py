@@ -28,6 +28,10 @@ from . import grid_overlay as _grid_overlay
 
 _item_prices_cache: Optional[Tuple[Dict[int, Any], List[Any]]] = None
 
+# 仅 ``not q14_grid_known`` 早期回合：当 ``random_avg_price_min`` 超过本算 ``points`` 的 50% 时，
+# 用 ``(points + random_avg_price_min) / 2`` 与事件下界取中，缓和随机均价事件对总估价的拉扯。
+_RANDOM_AVG_MIN_DOMINANCE_RATIO = 0.5
+
 
 def _load_item_prices_db() -> Tuple[Dict[int, Any], List[Any]]:
     global _item_prices_cache
@@ -632,10 +636,29 @@ def build_snapshot_pricing_dict(
     est_red = vacant_pts_base + float(vacant_adj) * float(u_red)
 
     q14_grid_known = _event_stats_q14_grid_counts_all_known(raw)
+    early_pts_blended_with_random_avg = False
     if not q14_grid_known:
         pts = vacant_pts_base + float(vacant_adj) * float(u_early)
         pts_floor = pts
         pts_ceiling = pts
+        rnd_min: Optional[int] = None
+        if isinstance(st_ev, dict):
+            rv = st_ev.get("random_avg_price_min")
+            if rv is not None:
+                try:
+                    rnd_min = int(rv)
+                except (TypeError, ValueError):
+                    rnd_min = None
+        if (
+            rnd_min is not None
+            and rnd_min > 0
+            and pts > 0
+            and float(rnd_min) > _RANDOM_AVG_MIN_DOMINANCE_RATIO * float(pts)
+        ):
+            pts = int((pts + rnd_min) / 2)
+            pts_floor = pts
+            pts_ceiling = pts
+            early_pts_blended_with_random_avg = True
     else:
         pts = vacant_pts_base + float(vacant_adj) * float(u_early)
         pts_floor = vacant_pts_base + float(vacant_adj) * float(u_orange)
@@ -667,5 +690,6 @@ def build_snapshot_pricing_dict(
         "ahmad_points": int(ahmad_points),
         "known_contour_weighted_cells": int(kcw_geo),
         "known_contour_weighted_price": float(kcw_val),
+        "early_points_blended_with_random_avg": bool(early_pts_blended_with_random_avg),
     }
     return pricing
