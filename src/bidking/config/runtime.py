@@ -1,7 +1,7 @@
-"""runtime.json 加载与轻量类型化访问。
+"""runtime.json + config.json 加载与轻量类型化访问。
 
-为避免破坏既有大量 ``cfg["a"]["b"]`` 风格的访问，``RuntimeConfig`` 同时
-暴露 ``raw`` 字典与若干便利属性。
+默认读取 ``configs/runtime.json`` 为基底，再与 ``configs/config.json`` **深合并**
+（后者覆盖前者）。显式传入 ``path`` 时仅加载该文件（供测试或单文件模式）。
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from .paths import runtime_path
+from .paths import config_overlay_path, runtime_path
 
 
 @dataclass
@@ -71,7 +71,24 @@ class RuntimeConfig:
 
 
 def load_runtime(path: Optional[Path | str] = None) -> RuntimeConfig:
-    p = Path(path) if path else runtime_path()
-    with p.open("r", encoding="utf-8") as fp:
-        data = json.load(fp)
-    return RuntimeConfig(raw=data, source_path=p)
+    if path is not None:
+        p = Path(path).resolve()
+        with p.open("r", encoding="utf-8-sig") as fp:
+            data = json.load(fp)
+        return RuntimeConfig(raw=data, source_path=p)
+
+    from .pricing import deep_merge
+
+    rp = runtime_path()
+    cp = config_overlay_path()
+    base: Dict[str, Any] = {}
+    if rp.is_file():
+        with rp.open("r", encoding="utf-8-sig") as fp:
+            base = json.load(fp)
+    overlay: Dict[str, Any] = {}
+    if cp.is_file():
+        with cp.open("r", encoding="utf-8-sig") as fp:
+            overlay = json.load(fp)
+    merged = deep_merge(base, overlay)
+    src = cp if cp.is_file() else rp
+    return RuntimeConfig(raw=merged, source_path=src.resolve() if src.is_file() else cp.resolve())
