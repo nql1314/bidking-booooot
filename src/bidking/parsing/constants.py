@@ -65,7 +65,7 @@ HERO_SKILL_DESC: Dict[int, str] = {
     1001033: "品质2物品轮廓+位置",
     1001032: "品质3物品轮廓+位置",
     1001031: "品质4物品轮廓+位置",
-    100204: "总藏品数量",
+    1002040: "总藏品数量",
     1002041: "品质5平均格数",
     1002042: "品质4平均格数",
     1002043: "品质3平均格数",
@@ -132,12 +132,31 @@ MAP_SKILL_DESC: Dict[int, str] = {
     200046: "随机显示一种类型品质",
     200048: "随机最高品质",
     200050: "显示占位最高的道具",
+    990001: "显示金色品质",
+    990002: "显示红色品质",
+    990003: "金色总价",
+    990004: "红色总价"
 }
 
 # 地图技能中哪些 SkillCid 可以强制设定 HitBoxList 中物品的品质
 MAP_SKILL_FORCE_QUALITY: Dict[int, int] = {
     200001: 4,   # 该技能只命中品质=4的物品
+    990001: 5,   # 该技能只命中品质=5的物品
+    990002: 6,   # 该技能只命中品质=6的物品
 }
+
+# 轮廓类技能（英雄品质扫描 ∪ 地图强制品质）：可从 HitBoxList 推理件数/占格/价
+OUTLINE_SKILL_QUALITY: Dict[int, int] = {**HERO_SKILL_QUALITY, **MAP_SKILL_FORCE_QUALITY}
+
+# ─── 地图与英雄成对技能（语义相同，日志里可能只出现其中一种）────────────────
+# 总藏品件数
+SKILL_CID_TOTAL_ITEM_COUNT: Tuple[int, ...] = (200017, 1002040)
+# 紫色 Q4：件数、均格、均价（200010/200018 均为紫色件数类；1002042 为英雄「品质4平均格数」）
+SKILL_CID_Q4_ITEM_COUNT: Tuple[int, ...] = (200010, 200018)
+SKILL_CID_Q4_AVG_GRID: Tuple[int, ...] = (200013, 1002042)
+SKILL_CID_Q4_AVG_PRICE: Tuple[int, ...] = (200036,)
+# 全场藏品平均占格（均格）
+SKILL_CID_ALL_ITEMS_AVG_GRID: Tuple[int, ...] = (200014,)
 
 # 艾莎 board_snapshot 出价（逻辑在 ``getlog.board_pricing``；旧注释曾指向 bidking-bot aisha_premium）引用的地图技能 ID
 MAP_SKILL_TOTAL_HIDDEN_CELLS = 200009     # 所有藏品格数（TotalHitBoxIndex）；未满前空置计数可据此、且可跳过诈骗格过滤
@@ -152,6 +171,8 @@ MAP_SKILL_RANDOM6_AVG_PRICE = 200032      # 随机6均价
 MAP_SKILL_RANDOM9_AVG_PRICE = 200033      # 随机9均价
 MAP_SKILL_AVG_GOLD_PRICE = 200037         # 金色物品均价（AllHitItemAvgPrice）
 MAP_SKILL_AVG_RED_PRICE = 200038          # 红色物品均价
+MAP_SKILL_GOLD_TOTAL_PRICE = 990003       # 金色总价
+MAP_SKILL_RED_TOTAL_PRICE = 990004       # 红色总价
 
 # 200009 揭示地图藏宝总占用格；在已知区内占位格数未达该总数前，画板自动空置区忽略诈骗格过滤；吃满后恢复几何空置 + 诈骗格规则。
 # 200011/200012 揭示金/红总占用格；200015/200016 为平均占用类信息（bot 中不作总格数用于空余金红分拆）；

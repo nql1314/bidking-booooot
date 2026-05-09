@@ -17,18 +17,8 @@ src/bidking/
 
 ## Python 与 OCR 依赖
 
-- **推荐**：Python **3.10～3.12**，安装 `rapidocr-onnxruntime`（`pip install -e .` 会按版本自动选依赖）。
 - **Python 3.13**：PyPI 上 `rapidocr-onnxruntime` 无适用 wheel（要求 `python_version < 3.13`）。本项目 `pyproject.toml` 在 3.13 下会改为依赖 **`rapidocr`**；运行时 OCR 统一走 `bidking.interaction.ocr.get_engine()`（含 `_legacy_bot` / 对手价 OCR），两种包名任选其一装好即可。
 
-**最快上手（已有旧仓库 `bidking-bot` 的 venv，常为 Python 3.10 且依赖齐全）：**
-
-```powershell
-cd D:/workzone/bidking-booooot
-$env:PYTHONPATH = "src"
-$PY = "D:/workzone/bidking-bot/.venv/Scripts/python.exe"   # 按你本机路径改
-```
-
-新开 PowerShell 需重新设置 `PYTHONPATH=src`，或执行一次 `pip install -e .` 把包装进当前环境（此后不必再设 `PYTHONPATH`）。
 
 **本仓库自建 venv（任意兼容版本）：**
 
@@ -39,7 +29,6 @@ python -m venv .venv
 pip install -e .
 ```
 
-若手动补 OCR：`pip install rapidocr-onnxruntime onnxruntime`（3.13 则用 `pip install rapidocr onnxruntime`）。
 
 ## 配置
 
