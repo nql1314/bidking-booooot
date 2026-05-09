@@ -15,12 +15,9 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from bidking.analysis import _board_pricing as bp
+from bidking.analysis import grid_overlay as grid_overlay_mod
 from bidking.analysis.raw_pricing import build_raw_pricing_dict
-from bidking.parsing.constants import (
-    MAP_SKILL_TOTAL_GOLD_CELLS,
-    MAP_SKILL_TOTAL_HIDDEN_CELLS,
-    MAP_SKILL_TOTAL_RED_CELLS,
-)
+from bidking.parsing.constants import MAP_SKILL_TOTAL_HIDDEN_CELLS
 
 
 class BoardPricingTests(unittest.TestCase):
@@ -286,6 +283,31 @@ class BoardPricingTests(unittest.TestCase):
         self.assertEqual(bp.map_skill_total_hidden_cells_from_logs(logs), 42)
         self.assertIsNone(bp.map_skill_total_hidden_cells_from_logs([]))
 
+    def test_merged_items_applies_overlay_manual_shape(self) -> None:
+        """``grid_overlay.manual_shapes`` 在无 shape 时写入定价用外形（w*10+h）。"""
+        snap = {
+            "game_state": {
+                "items": {
+                    "x": {
+                        "uid": "x",
+                        "box_id": 0,
+                        "box_id_confirmed": True,
+                        "shape": None,
+                        "quality": 5,
+                        "categories": [],
+                        "item_cid": None,
+                        "price": None,
+                        "manual_confirm_item_id": None,
+                        "excluded_categories": [],
+                        "excluded_qualities": [],
+                    }
+                }
+            },
+            "grid_overlay": {"manual_shapes": {"x": [2, 1, 0, 0]}},
+        }
+        m = grid_overlay_mod.merged_items_dict(snap)
+        self.assertEqual(m["x"]["shape"], 21)
+
     def test_map_quality_csv_uses_normalize_map_id_41xx(self) -> None:
         """CSV 仅含 21xx 时，日志 41xx（等价 MapCid）应命中同一行。"""
         keys = [
@@ -320,200 +342,26 @@ class BoardPricingTests(unittest.TestCase):
         try:
             bp.set_map_quality_csv_override(path)
             pricing = bp.build_snapshot_pricing_dict(
+                {
+                    "game_state": {"map_id": 4101, "current_round": 4, "items": {}},
+                    "skill_logs": [],
+                    "map_id": 4101,
+                    "current_round": 4,
+                    "grid_overlay": {
+                        "vacant": {
+                            "effective_count": 1,
+                            "geometric": 1,
+                            "source": "test",
+                        }
+                    },
+                },
                 total=100.0,
-                raw_vacant=1,
-                sum_gold_red_min_minus_weighted=0.0,
-                map_id=4101,
-                current_round=4,
-                skill_logs=[],
-                game_state_json={"items": {}},
                 snapshot_path_hint=None,
             )
             self.assertTrue(pricing.get("map_quality_avg_hit"))
             self.assertEqual(pricing.get("vacant_unit_all_orange"), 111)
             self.assertEqual(pricing.get("vacant_unit_gold_red"), 222)
             self.assertEqual(pricing.get("vacant_unit_all_red"), 333)
-        finally:
-            bp.set_map_quality_csv_override(None)
-            Path(path).unlink(missing_ok=True)
-
-    def test_early_round_extra_g_subtracts_from_vacant_linear_unit(self) -> None:
-        """extra_g 金格加成与空格 unit 线性价重叠时，参与 unit 的空置格数扣 min(extra_g, vac_n)。"""
-        keys = [
-            "map_id",
-            "tier",
-            "nest_drop_id",
-            "quality_group",
-            "prob_in_group",
-            "avg_price_per_item",
-            "avg_price_per_cell",
-        ]
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8-sig",
-            suffix=".csv",
-            delete=False,
-            newline="",
-        ) as tf:
-            path = tf.name
-            w = csv.DictWriter(tf, fieldnames=keys)
-            w.writeheader()
-            base = {
-                "map_id": "2101",
-                "tier": "101",
-                "nest_drop_id": "2001",
-                "prob_in_group": "1",
-                "avg_price_per_item": "1",
-            }
-            w.writerow({**base, "quality_group": "q5", "avg_price_per_cell": "500"})
-            w.writerow({**base, "quality_group": "q5+q6", "avg_price_per_cell": "100"})
-            w.writerow({**base, "quality_group": "q6", "avg_price_per_cell": "600"})
-        try:
-            bp.set_map_quality_csv_override(path)
-            gs = {
-                "uid": "u1",
-                "map_id": 2101,
-                "current_round": 2,
-                "players": {},
-                "items": {
-                    "a": {
-                        "uid": "a",
-                        "box_id": 19,
-                        "box_id_confirmed": True,
-                        "quality": 5,
-                        "shape": "11",
-                    },
-                },
-                "displayed_event_uids": [],
-                "scan_history": [
-                    {"scan_type": "quality", "value": 1, "hit_uids": ["x"]},
-                    {"scan_type": "quality", "value": 2, "hit_uids": ["x"]},
-                    {"scan_type": "quality", "value": 3, "hit_uids": ["x"]},
-                    {"scan_type": "quality", "value": 4, "hit_uids": ["x"]},
-                ],
-            }
-            snap = {
-                "game_state": gs,
-                "current_round": 2,
-                "map_id": 2101,
-                "pricing": {"total": 1000.0, "vacant_unit_q5": 300},
-                "raw_pricing": {
-                    "csv_quality_groups_avg_per_cell": {"q5": 500.0, "q5+q6": 100.0, "q6": 600.0},
-                    "csv_quality_groups_avg_per_item": {"q5": 1.0, "q6": 1.0},
-                },
-                "skill_logs": [
-                    {
-                        "game_data": {
-                            "MapSkillLog": [
-                                {"SkillCid": MAP_SKILL_TOTAL_GOLD_CELLS, "TotalHitBoxIndex": 10},
-                            ]
-                        }
-                    }
-                ],
-            }
-            pts, meta = bp.compute_aisha_bid_from_board_snapshot(snap, snapshot_path_hint=None)
-            self.assertIsNotNone(pts)
-            vac_n = int(meta["vacant_used"])
-            self.assertEqual(vac_n, 19)
-            self.assertEqual(meta.get("early_vacant_cells_for_linear_pricing"), 10)
-            extra_g = 10 - 1
-            unit = 100
-            uq5 = 500
-            expect = int(round(1000.0 + (vac_n - min(extra_g, vac_n)) * unit + extra_g * uq5))
-            self.assertEqual(pts, expect)
-            self.assertEqual(expect, 6500)
-        finally:
-            bp.set_map_quality_csv_override(None)
-            Path(path).unlink(missing_ok=True)
-
-    def test_early_round_extra_r_subtracts_from_vacant_linear_after_gold(self) -> None:
-        """extra_r 红格加成与 unit 重叠时，在扣完金重叠后的空置上再扣 min(extra_r, vac_after_gold)。"""
-        keys = [
-            "map_id",
-            "tier",
-            "nest_drop_id",
-            "quality_group",
-            "prob_in_group",
-            "avg_price_per_item",
-            "avg_price_per_cell",
-        ]
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8-sig",
-            suffix=".csv",
-            delete=False,
-            newline="",
-        ) as tf:
-            path = tf.name
-            w = csv.DictWriter(tf, fieldnames=keys)
-            w.writeheader()
-            base = {
-                "map_id": "2101",
-                "tier": "101",
-                "nest_drop_id": "2001",
-                "prob_in_group": "1",
-                "avg_price_per_item": "1",
-            }
-            w.writerow({**base, "quality_group": "q5", "avg_price_per_cell": "500"})
-            w.writerow({**base, "quality_group": "q5+q6", "avg_price_per_cell": "100"})
-            w.writerow({**base, "quality_group": "q6", "avg_price_per_cell": "600"})
-        try:
-            bp.set_map_quality_csv_override(path)
-            gs = {
-                "uid": "u1",
-                "map_id": 2101,
-                "current_round": 2,
-                "players": {},
-                "items": {
-                    "a": {
-                        "uid": "a",
-                        "box_id": 19,
-                        "box_id_confirmed": True,
-                        "quality": 6,
-                        "shape": "11",
-                    },
-                },
-                "displayed_event_uids": [],
-                "scan_history": [
-                    {"scan_type": "quality", "value": 1, "hit_uids": ["x"]},
-                    {"scan_type": "quality", "value": 2, "hit_uids": ["x"]},
-                    {"scan_type": "quality", "value": 3, "hit_uids": ["x"]},
-                    {"scan_type": "quality", "value": 4, "hit_uids": ["x"]},
-                ],
-            }
-            snap = {
-                "game_state": gs,
-                "current_round": 2,
-                "map_id": 2101,
-                "pricing": {"total": 1000.0, "vacant_unit_q5": 300, "vacant_unit_all_red": 999},
-                "raw_pricing": {
-                    "csv_quality_groups_avg_per_cell": {"q5": 500.0, "q5+q6": 100.0, "q6": 600.0},
-                    "csv_quality_groups_avg_per_item": {"q5": 1.0, "q6": 1.0},
-                },
-                "skill_logs": [
-                    {
-                        "game_data": {
-                            "MapSkillLog": [
-                                {"SkillCid": MAP_SKILL_TOTAL_RED_CELLS, "TotalHitBoxIndex": 5},
-                            ]
-                        }
-                    }
-                ],
-            }
-            pts, meta = bp.compute_aisha_bid_from_board_snapshot(snap, snapshot_path_hint=None)
-            self.assertIsNotNone(pts)
-            vac_n = int(meta["vacant_used"])
-            self.assertEqual(vac_n, 19)
-            extra_r = 5 - 1
-            g_sub = 0
-            vac_after = vac_n - g_sub
-            r_sub = min(extra_r, vac_after)
-            self.assertEqual(meta.get("early_vacant_cells_for_linear_pricing"), vac_after - r_sub)
-            unit = 100
-            uq6 = 600
-            expect = int(round(1000.0 + (vac_after - r_sub) * unit + extra_r * uq6))
-            self.assertEqual(pts, expect)
-            self.assertEqual(expect, 1000 + 15 * 100 + 4 * 600)
         finally:
             bp.set_map_quality_csv_override(None)
             Path(path).unlink(missing_ok=True)
@@ -543,15 +391,14 @@ class BoardPricingTests(unittest.TestCase):
             "scan_history": [],
         }
         p = bp.build_snapshot_pricing_dict(
+            {
+                "game_state": gs,
+                "skill_logs": logs,
+                "map_id": 0,
+                "current_round": 5,
+            },
             total=1000.0,
-            raw_vacant=3,
-            sum_gold_red_min_minus_weighted=0.0,
-            map_id=0,
-            current_round=5,
-            skill_logs=logs,
-            game_state_json=gs,
             snapshot_path_hint=None,
-            vacant_occupied_cell_count=0,
         )
         self.assertEqual(p.get("vacant_geometric"), 61)
         self.assertEqual(p.get("vacant_effective_count"), 61)
@@ -567,27 +414,30 @@ class BoardPricingTests(unittest.TestCase):
             "scan_history": [],
         }
         p = bp.build_snapshot_pricing_dict(
+            {
+                "game_state": gs,
+                "skill_logs": [],
+                "map_id": 0,
+                "current_round": 5,
+                "grid_overlay": {
+                    "vacant": {
+                        "effective_count": 3,
+                        "geometric": 3,
+                        "source": "test",
+                    }
+                },
+            },
             total=1000.0,
-            raw_vacant=3,
-            sum_gold_red_min_minus_weighted=0.0,
-            map_id=0,
-            current_round=5,
-            skill_logs=[],
-            game_state_json=gs,
             snapshot_path_hint=None,
         )
-        self.assertIn("known_items_total", p)
-        self.assertEqual(p["known_items_total"], 1000.0)
-        self.assertIn("position_total_all_gold", p)
-        self.assertIn("position_total_gold_red", p)
-        self.assertIn("position_total_all_red", p)
-        self.assertAlmostEqual(p["position_total_all_gold"], p["est_orange"])
-        self.assertIsNotNone(p.get("aisha_bid"))
-        ab = p["aisha_bid"]
-        self.assertIsInstance(ab, dict)
-        self.assertIn("points", ab)
-        self.assertIn("points_floor", ab)
-        self.assertIn("points_ceiling", ab)
+        self.assertEqual(p["total"], 1000.0)
+        self.assertIn("points", p)
+        self.assertIn("points_floor", p)
+        self.assertIn("points_ceiling", p)
+        self.assertIn("est_orange", p)
+        self.assertIn("est_gold_red", p)
+        self.assertIn("est_red", p)
+        self.assertEqual(p["vacant"], 3)
 
     def test_raw_pricing_contains_requested_event_stats(self) -> None:
         gs = {
@@ -671,9 +521,9 @@ class BoardPricingTests(unittest.TestCase):
         )
         snap = {"game_state": gs, "skill_logs": [], "map_id": 0, "current_round": 5, "raw_pricing": raw}
         p = bp.build_snapshot_pricing_dict(snap, total=1000.0)
-        self.assertEqual(p.get("known_items_total"), 1000.0)
+        self.assertEqual(p.get("total"), 1000.0)
 
-    def test_compute_aisha_prefers_raw_pricing_csv_groups(self) -> None:
+    def test_build_snapshot_uses_raw_pricing_csv_units(self) -> None:
         snap = {
             "game_state": {
                 "uid": "u1",
@@ -684,7 +534,6 @@ class BoardPricingTests(unittest.TestCase):
                 "displayed_event_uids": [],
                 "scan_history": [],
             },
-            "pricing": {"total": 1000.0, "vacant": 2},
             "skill_logs": [],
             "current_round": 5,
             "map_id": 9999,
@@ -696,11 +545,22 @@ class BoardPricingTests(unittest.TestCase):
                 }
             },
         }
-        pts, meta = bp.compute_aisha_bid_from_board_snapshot(snap, snapshot_path_hint=None)
-        self.assertIsNotNone(pts)
-        self.assertEqual(meta.get("vacant_unit_q5"), 111)
-        self.assertEqual(meta.get("vacant_unit_q5_q6"), 222)
-        self.assertEqual(meta.get("vacant_unit_q6"), 333)
+        snap = {
+            **snap,
+            "grid_overlay": {
+                "vacant": {
+                    "effective_count": 2,
+                    "geometric": 2,
+                    "source": "test",
+                }
+            },
+        }
+        p = bp.build_snapshot_pricing_dict(snap, total=1000.0)
+        self.assertEqual(p.get("vacant_unit_all_orange"), 111)
+        self.assertEqual(p.get("vacant_unit_gold_red"), 222)
+        self.assertEqual(p.get("vacant_unit_all_red"), 333)
+        self.assertEqual(p.get("vacant"), 2)
+        self.assertEqual(p.get("est_orange"), 1000 + 2 * 111)
 
 
 if __name__ == "__main__":
