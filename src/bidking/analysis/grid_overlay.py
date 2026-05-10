@@ -14,6 +14,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Set, Tuple
 from ..parsing import item_db
 from ..parsing.state import GameState, ItemKnowledge
 from . import unknown_value as _unknown_value
+from ._shape_wh import shape_wh_from_snapshot
 from .scan_inference import possible_qualities_from_scan_history
 
 GRID_COLS = 10
@@ -390,45 +391,6 @@ def fraud_zone_cell_exclusion_enabled(
         return False
     return fraud_exclusion_eligible_from_scan(board_snapshot)
 
-
-def _map_id_from_board_snapshot(board_snapshot: Dict[str, Any]) -> Optional[int]:
-    gs = board_snapshot.get("game_state")
-    mid = None
-    if isinstance(gs, dict):
-        mid = gs.get("map_id")
-    if mid is None:
-        mid = board_snapshot.get("map_id")
-    try:
-        return int(mid)
-    except (TypeError, ValueError):
-        return None
-
-
-def _parse_shape_int_overlay(shape: Any) -> Optional[int]:
-    if shape is None:
-        return None
-    if isinstance(shape, int):
-        return shape
-    try:
-        return int(shape)
-    except (TypeError, ValueError):
-        s = str(shape)
-        if len(s) == 2 and s.isdigit():
-            return int(s)
-        return None
-
-
-def _csv_cells_raw_from_board_snapshot(board_snapshot: Dict[str, Any]) -> Dict[str, float]:
-    raw = board_snapshot.get("raw_pricing") if isinstance(board_snapshot, dict) else None
-    raw_csv = raw.get("csv_quality_groups_avg_per_cell") if isinstance(raw, dict) else None
-    out: Dict[str, float] = {}
-    if isinstance(raw_csv, dict):
-        try:
-            out = {str(k): float(v) for k, v in raw_csv.items()}
-        except (TypeError, ValueError):
-            out = {}
-    return out
-
 def compute_overlay_vacant_dict(
     *,
     occupied: set,
@@ -585,7 +547,7 @@ def board_display_occupied_cells_merged(board_snapshot: Dict[str, Any]) -> set:
         except (TypeError, ValueError):
             continue
         if it.get("box_id_confirmed"):
-            occ |= _occupied_cells_item_board_display(it, board_snapshot)
+            occ |= _occupied_cells_item_board_display(it)
     for it in items.values():
         if not isinstance(it, dict) or it.get("box_id") is None:
             continue
@@ -806,7 +768,7 @@ def _infer_pick_wh_from_candidates(
     if not candidates:
         return None
     if len(candidates) == 1:
-        return _shape_wh_from_snapshot(candidates[0].shape)
+        return shape_wh_from_snapshot(candidates[0].shape)
     est = item_db._weighted_est_price(candidates, map_category_weights, map_id_n)
     probs = item_db.candidate_probabilities(candidates, map_category_weights, map_id_n)
 
@@ -834,12 +796,12 @@ def _infer_pick_wh_from_candidates(
         if in_band:
             best = _pick_best(in_band)
             if best is not None:
-                return _shape_wh_from_snapshot(best.shape)
+                return shape_wh_from_snapshot(best.shape)
 
     best = _pick_best(candidates)
     if best is None:
         return None
-    return _shape_wh_from_snapshot(best.shape)
+    return shape_wh_from_snapshot(best.shape)
 
 
 def _infer_ordered_wh_for_default_infer(
@@ -855,7 +817,7 @@ def _infer_ordered_wh_for_default_infer(
     probs = item_db.candidate_probabilities(filt, map_category_weights, map_id_n)
     by_wh: Dict[Tuple[int, int], float] = {}
     for c in filt:
-        wh = _shape_wh_from_snapshot(c.shape)
+        wh = shape_wh_from_snapshot(c.shape)
         if wh is None:
             continue
         p = float(probs.get(c.item_id, 0.0))
@@ -1086,25 +1048,8 @@ def compute_grid_overlay_infer_shapes(
     return out
 
 
-def map_skill_hidden_cell_reserve_from_snapshot(board_snapshot: Dict[str, Any]) -> int:
-    _ = board_snapshot
-    return 0
-
-
-def _shape_wh_from_snapshot(shape: Any) -> Tuple[int, int]:
-    if shape is None:
-        return 1, 1
-    s = str(shape)
-    if len(s) == 2:
-        try:
-            return int(s[0]), int(s[1])
-        except ValueError:
-            return 1, 1
-    return 1, 1
-
-
 def _item_occupied_cells(box_id: int, shape: Any) -> set:
-    w, h = _shape_wh_from_snapshot(shape)
+    w, h = shape_wh_from_snapshot(shape)
     col = box_id % GRID_COLS
     row = box_id // GRID_COLS
     cells: set = set()
@@ -1114,8 +1059,7 @@ def _item_occupied_cells(box_id: int, shape: Any) -> set:
     return cells
 
 
-def _occupied_cells_item_board_display(it: Dict[str, Any], board_snapshot: Dict[str, Any]) -> set:
-    _ = board_snapshot
+def _occupied_cells_item_board_display(it: Dict[str, Any]) -> set:
     bid_raw = it.get("box_id")
     if bid_raw is None:
         return set()
@@ -1127,94 +1071,28 @@ def _occupied_cells_item_board_display(it: Dict[str, Any], board_snapshot: Dict[
         return _item_occupied_cells(bid, it.get("shape"))
     return {(bid // GRID_COLS, bid % GRID_COLS)}
 
-
-def confirmed_items_from_snapshot(board_snapshot: Dict[str, Any]) -> List[dict]:
-    raw = (board_snapshot.get("game_state") or {}).get("items") or {}
-    out: List[dict] = []
-    for _uid, it in raw.items():
-        if not isinstance(it, dict) or not it.get("box_id_confirmed"):
-            continue
-        bid = it.get("box_id")
-        if bid is None:
-            continue
-        try:
-            int(bid)
-        except (TypeError, ValueError):
-            continue
-        out.append(it)
-    return out
-
-
-def board_display_occupied_cells(board_snapshot: Dict[str, Any]) -> set:
-    raw = (board_snapshot.get("game_state") or {}).get("items") or {}
-    if not isinstance(raw, dict):
-        return set()
-    occ: set = set()
-    for it in raw.values():
-        if not isinstance(it, dict) or it.get("box_id") is None:
-            continue
-        try:
-            int(it["box_id"])
-        except (TypeError, ValueError):
-            continue
-        if it.get("box_id_confirmed"):
-            occ |= _occupied_cells_item_board_display(it, board_snapshot)
-    for it in raw.values():
-        if not isinstance(it, dict) or it.get("box_id") is None:
-            continue
-        try:
-            bid = int(it["box_id"])
-        except (TypeError, ValueError):
-            continue
-        if it.get("box_id_confirmed"):
-            continue
-        occ.add((bid // GRID_COLS, bid % GRID_COLS))
-    return occ
-
-def scam_span_vacant_deduction(board_snapshot: Dict[str, Any]) -> int:
-    items = confirmed_items_from_snapshot(board_snapshot)
-    if not items:
-        return 1
-    all_occ = board_display_occupied_cells(board_snapshot)
-    max_anchor = max(int(it["box_id"]) for it in items)
-    if max_anchor < 0:
-        return 1
-    col = max_anchor % GRID_COLS
-    span_lo = max(0, max_anchor - col - GRID_COLS)
-    span_hi = min(max_anchor, GRID_MAX_BOX_ID)
-    n = 0
-    for b in range(span_lo, span_hi + 1):
-        r, c = b // GRID_COLS, b % GRID_COLS
-        if (r, c) not in all_occ:
-            n += 1
-    return n
-
 __all__ = [
     "DEFAULT_GEOMETRIC_PREFIX_ANCHOR_BOX_ID",
     "OCCUPIED_CELL_BIDS",
     "apply_infer_shapes_to_items",
     "apply_manual_confirm_projection",
     "apply_manual_shapes_to_items",
-    "board_display_occupied_cells",
     "board_display_occupied_cells_merged",
     "build_occupied_cells",
     "cell_four_cardinal_neighbors_unoccupied",
     "column_downward_all_vacant",
     "compute_overlay_vacant_dict",
     "compute_grid_overlay_infer_shapes",
-    "confirmed_items_from_snapshot",
     "empty_zone_ignore_fraud_filter",
     "fraud_empty_cells_in_zone_prefix",
     "fraud_exclusion_eligible_from_scan",
     "fraud_zone_cell_exclusion_enabled",
     "map_skill_hidden_vacant",
-    "map_skill_hidden_cell_reserve_from_snapshot",
     "map_skill_total_hidden_for_overlay",
     "max_anchor_box_id_merged",
     "merged_items_dict",
     "merged_items_dict_from_snapshot",
     "occupied_cells_in_empty_zone_prefix",
-    "scam_span_vacant_deduction",
     "snapshot_occupied_cells",
     "total_grid_count_from_raw_pricing",
     "vacant_block_from_board_snapshot",

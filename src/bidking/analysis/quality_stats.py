@@ -8,18 +8,7 @@ from __future__ import annotations
 from typing import Any, Dict, Optional
 
 from .unknown_value import weighted_cell_equiv_for_unknown_contour_item
-
-
-def _shape_wh_from_snapshot(shape: Any) -> tuple[int, int]:
-    if shape is None:
-        return 1, 1
-    s = str(shape)
-    if len(s) == 2:
-        try:
-            return int(s[0]), int(s[1])
-        except ValueError:
-            return 1, 1
-    return 1, 1
+from ._shape_wh import shape_wh_from_snapshot
 
 
 def _items_dict_from_snapshot(board_snapshot: Dict[str, Any]) -> Dict[str, Any]:
@@ -48,7 +37,7 @@ def sum_quality_footprint_cells(
             continue
         shape = it.get("shape")
         if shape is not None:
-            w, h = _shape_wh_from_snapshot(shape)
+            w, h = shape_wh_from_snapshot(shape)
             n += w * h
         elif use_weighted_gr:
             w_eq = weighted_cell_equiv_for_unknown_contour_item(
