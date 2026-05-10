@@ -73,12 +73,32 @@ def build_grid_overlay_export_dict(
         "game_state": game_state_to_json(game_state),
         "raw_pricing": raw_pricing,
     }
+
+    infer = _grid_overlay.compute_grid_overlay_infer_shapes(
+        game_state=game_state,
+        manual_shapes=manual_shapes,
+        occupied_cells=set(occupied_cells),
+        vacant_manual_suppress=set(vacant_manual_suppress),
+        max_box_id=int(max_box_id),
+        raw_pricing=raw_pricing,
+    )
     vacant_block = _grid_overlay.compute_overlay_vacant_dict(
         occupied=occupied_cells,
         max_box_id=int(max_box_id),
         vacant_manual_suppress=set(vacant_manual_suppress),
         board_snapshot=vacant_ctx,
     )
+    infer_out = {uid: [int(x) for x in tup] for uid, tup in infer.items()}
+    overlay_for_merged = {
+        "phantom_items": ph,
+        "manual_shapes": manual,
+        "infer_shapes": infer_out,
+    }
+    snap_merged = {
+        "game_state": game_state_to_json(game_state),
+        "grid_overlay": overlay_for_merged,
+    }
+    merged_items = _grid_overlay.merged_items_dict(snap_merged)
     return {
         "phantom_items": ph,
         "manual_shapes": manual,
@@ -87,4 +107,6 @@ def build_grid_overlay_export_dict(
         "vacant_manual_suppress_bids": vacant_bids,
         _grid_overlay.OCCUPIED_CELL_BIDS: occ_bids,
         "vacant": vacant_block,
+        "infer_shapes": infer_out,
+        "merged_items_dict": merged_items,
     }
