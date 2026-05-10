@@ -65,7 +65,6 @@ from ...analysis._board_pricing import (
 )
 from ...analysis import grid_overlay as _grid_overlay
 from ...analysis.raw_pricing import build_raw_pricing_dict
-from ._client_profile import load_client_settings_beside_snapshot, sanitize_aisha_client_payload
 from ...analysis.snapshot import game_state_to_json, item_knowledge_to_json
 from ._grid_overlay_payload import (
     build_grid_overlay_export_dict,
@@ -143,6 +142,29 @@ _DEFAULT_ROUND_INSTANT_WIN_MULT: Dict[int, float] = {
 def _instant_win_multiplier_for_round(round_no: Optional[int]) -> float:
     r = max(1, min(5, int(round_no or 1)))
     return float(_DEFAULT_ROUND_INSTANT_WIN_MULT.get(r, 1.0))
+
+
+def _lines_from_ahmad_points_detail(detail: Any) -> List[str]:
+    """将 ``pricing.ahmad_points_detail`` 格式化为悬浮说明行。"""
+    if not isinstance(detail, dict):
+        return []
+    out: List[str] = []
+    winner = detail.get("winner")
+    if winner:
+        out.append(f"Ahmad 多候选取 max，采纳 id = {winner!s}")
+    for c in detail.get("candidates") or []:
+        if not isinstance(c, dict):
+            continue
+        cid = str(c.get("id") or "")
+        lbl = str(c.get("label") or "").strip()
+        try:
+            pv = int(c.get("points") or 0)
+            pts_s = f"{pv:,}"
+        except (TypeError, ValueError):
+            pts_s = str(c.get("points"))
+        suffix = "  ← max" if winner and cid == str(winner) else ""
+        out.append(f"  • [{cid}] {lbl} → {pts_s}{suffix}")
+    return out
 
 
 # 写入 board_snapshot.json 的 schema 版本（与 bot 侧校验一致）
@@ -1436,10 +1458,6 @@ class GridWindow:
                 snapshot_path_hint=self._snapshot_path,
             ),
         }
-        client_raw = load_client_settings_beside_snapshot(self._snapshot_path)
-        client_out = sanitize_aisha_client_payload(client_raw)
-        if client_out:
-            payload["aisha_client"] = client_out
         go = base.get("grid_overlay") or {}
         if self._snapshot_export_overlay:
             payload["grid_overlay"] = go
@@ -1675,14 +1693,21 @@ class GridWindow:
             title = "主价区间 points_floor / points_ceiling"
             pf = p.get("points_floor")
             pc = p.get("points_ceiling")
-            return "\n".join(
-                [
-                    title,
-                    f"第 4 回合起：下限 ≈ T + V×U_全橙 = {pf!s}；上限 ≈ T + V×U_全红 = {pc!s}。",
-                    f"第 1–3 回合：floor/ceiling 与主价 points 相同（扫描推断单价）。",
-                    f"当前 points = {p.get('points')!s}。",
-                ]
-            )
+            ahmad_active = bool(p.get("ahmad_pricing_active"))
+            base_lines = [
+                title,
+                f"第 4 回合起：下限 ≈ T + V×U_全橙 = {pf!s}；上限 ≈ T + V×U_全红 = {pc!s}。",
+                f"第 1–3 回合：floor/ceiling 与主价 points 相同（扫描推断单价）。",
+                f"当前 points = {p.get('points')!s}。",
+            ]
+            if ahmad_active:
+                gpf, gpc = p.get("generic_points_floor"), p.get("generic_points_ceiling")
+                base_lines.insert(
+                    1,
+                    "己方英雄为 Ahmad（204）：points/floor/ceiling 均为 event_stats 多候选 Ahmad 主价；"
+                    f"通用画板对照 generic_floor/ceiling = {gpf!s} / {gpc!s}。",
+                )
+            return "\n".join(base_lines)
         else:
             return ""
 
@@ -1725,9 +1750,17 @@ class GridWindow:
         lines.extend(
             [
                 f"U = ¥{u_int:,.0f} / 格（pricing.early_vacant_unit_from_scan）",
-                f"主价 points ≈ T + V×U = {t_val:,.0f} + {v_eff} × {u_int:,.0f}（与 pricing.points 一致）。",
             ]
         )
+        if p.get("ahmad_pricing_active"):
+            lines.append(
+                "己方 Ahmad：顶栏主价 points 来自 pricing.ahmad_points（非本式 T+V×U）；"
+                f"对照 generic_points = {p.get('generic_points')!s}。"
+            )
+        else:
+            lines.append(
+                f"主价 points ≈ T + V×U = {t_val:,.0f} + {v_eff} × {u_int:,.0f}（与 pricing.points 一致）。",
+            )
         if pts is not None:
             lines.append(f"当前 pricing.points = {pts!s}")
         return "\n".join(lines)
@@ -1739,7 +1772,9 @@ class GridWindow:
             return "（估价尚未计算）"
         pts = p.get("points")
         pf, pc = p.get("points_floor"), p.get("points_ceiling")
-        lines: List[str] = ["主价（快照 pricing.points）"]
+        ahmad_active = bool(p.get("ahmad_pricing_active"))
+        head = "主价（Ahmad：points = ahmad_points）" if ahmad_active else "主价（快照 pricing.points）"
+        lines: List[str] = [head]
         if pts is not None:
             try:
                 lines.append(f"points = {int(round(float(pts))):,}")
@@ -1757,6 +1792,13 @@ class GridWindow:
                 )
             except (TypeError, ValueError):
                 pass
+        if ahmad_active:
+            lines.append(
+                f"通用画板主价（对照）：generic_points = {p.get('generic_points')!s}，"
+                f"floor/ceiling = {p.get('generic_points_floor')!s} / {p.get('generic_points_ceiling')!s}"
+            )
+            lines.append("ahmad_points_detail（各候选）:")
+            lines.extend(_lines_from_ahmad_points_detail(p.get("ahmad_points_detail")))
         if pf is not None or pc is not None:
             lines.append(f"points_floor / points_ceiling = {pf!s} / {pc!s}")
         lines.append(

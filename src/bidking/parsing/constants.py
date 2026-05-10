@@ -57,6 +57,16 @@ HERO_SKILL_QUALITY: Dict[int, int] = {
     1001032: 3,
     1001031: 4,
 }
+HERO_ID: Dict[int, str] = {
+    103: "aisha",
+    204: "ahmad",
+    208: "yisen",
+    110: "yishabeila",
+    104: "jiabuli",
+    207: "wuqiling",
+    209: "vector",
+    107: "suofei",
+}
 # ─── 英雄技能 ──────────────────────────────────────────────────────────────
 
 # 英雄技能 SkillCid → 描述（未收录的 SkillCid 在输出时显示"未知英雄技能"）
@@ -65,7 +75,7 @@ HERO_SKILL_DESC: Dict[int, str] = {
     1001033: "品质2物品轮廓+位置",
     1001032: "品质3物品轮廓+位置",
     1001031: "品质4物品轮廓+位置",
-    1002040: "总藏品数量",
+    100204: "总藏品数量",
     1002041: "品质5平均格数",
     1002042: "品质4平均格数",
     1002043: "品质3平均格数",
@@ -154,7 +164,7 @@ OUTLINE_SKILL_QUALITY: Dict[int, int] = {**HERO_SKILL_QUALITY, **MAP_SKILL_FORCE
 
 # ─── 地图与英雄成对技能（语义相同，日志里可能只出现其中一种）────────────────
 # 总藏品件数
-SKILL_CID_TOTAL_ITEM_COUNT: Tuple[int, ...] = (200017, 1002040)
+SKILL_CID_TOTAL_ITEM_COUNT: Tuple[int, ...] = (200017, 100204)
 # 紫色 Q4：件数、均格、均价（200010/200018 均为紫色件数类；1002042 为英雄「品质4平均格数」）
 SKILL_CID_Q4_ITEM_COUNT: Tuple[int, ...] = (200018,)
 SKILL_CID_Q4_AVG_GRID: Tuple[int, ...] = (200013, 1002042)

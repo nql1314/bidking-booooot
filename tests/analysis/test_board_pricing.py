@@ -747,6 +747,53 @@ class BoardPricingTests(unittest.TestCase):
         )
         # 20*1000 + 5*1000 + 0 + 0
         self.assertEqual(p.get("ahmad_points"), 25000)
+        self.assertFalse(p.get("ahmad_pricing_active"))
+        self.assertNotIn("generic_points", p)
+
+    def test_ahmad_hero_204_main_points_match_ahmad_points(self) -> None:
+        """己方 hero_cid=204 时 points/floor/ceiling 取 ahmad_points，并保留 generic_* 对照。"""
+        self_uid = "358372071974712"
+        gs = {
+            "uid": "u1",
+            "map_id": 0,
+            "current_round": 5,
+            "players": {self_uid: {"name": "me", "hero_cid": 204}},
+            "items": {},
+            "displayed_event_uids": [],
+            "scan_history": [],
+        }
+        raw = {
+            "csv_quality_groups_avg_per_cell": {"q5": 1.0, "q5+q6": 1.0, "q6": 1.0},
+            "event_stats": {
+                "total_count": 20,
+                "q4_grid_min": 5,
+                "q5_grid_min": None,
+                "q6_grid_min": None,
+            },
+        }
+        snap = {
+            "game_state": gs,
+            "skill_logs": [],
+            "map_id": 0,
+            "current_round": 5,
+            "raw_pricing": raw,
+        }
+        p = bp.build_snapshot_pricing_dict(
+            snap,
+            snapshot_path_hint=None,
+            board_snapshot_config={"self_user_uid": self_uid},
+        )
+        self.assertTrue(p.get("ahmad_pricing_active"))
+        self.assertEqual(p.get("ahmad_points"), 25000)
+        self.assertEqual(p.get("points"), 25000)
+        self.assertEqual(p.get("points_floor"), 25000)
+        self.assertEqual(p.get("points_ceiling"), 25000)
+        self.assertIn("generic_points", p)
+        self.assertNotEqual(p.get("generic_points"), p.get("points"))
+        detail = p.get("ahmad_points_detail")
+        self.assertIsInstance(detail, dict)
+        self.assertEqual(detail.get("ahmad_points"), 25000)
+        self.assertTrue(detail.get("candidates"))
 
     def test_raw_pricing_contains_requested_event_stats(self) -> None:
         gs = {
