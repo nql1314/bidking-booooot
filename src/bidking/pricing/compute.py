@@ -112,6 +112,7 @@ def compute_price(
         fin,
         effective_round,
         price_config,
+        role=role,
         board_snapshot=bs,
         pricing=pricing,
     )

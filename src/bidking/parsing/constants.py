@@ -166,9 +166,9 @@ OUTLINE_SKILL_QUALITY: Dict[int, int] = {**HERO_SKILL_QUALITY, **MAP_SKILL_FORCE
 # 总藏品件数
 SKILL_CID_TOTAL_ITEM_COUNT: Tuple[int, ...] = (200017, 100204)
 # 紫色 Q4：件数、均格、均价（200010/200018 均为紫色件数类；1002042 为英雄「品质4平均格数」）
-SKILL_CID_Q4_ITEM_COUNT: Tuple[int, ...] = (200018,)
 SKILL_CID_Q4_AVG_GRID: Tuple[int, ...] = (200013, 1002042)
-SKILL_CID_Q4_AVG_PRICE: Tuple[int, ...] = (200036,)
+
+SKILL_CID_Q5_AVG_GRID: Tuple[int, ...] = (200015, 1002041)
 # 全场藏品平均占格（均格）
 SKILL_CID_ALL_ITEMS_AVG_GRID: Tuple[int, ...] = (200014,)
 
@@ -177,13 +177,18 @@ MAP_SKILL_TOTAL_HIDDEN_CELLS = 200009     # 所有藏品格数（TotalHitBoxInde
 MAP_SKILL_TOTAL_PURPLE_CELLS = 200010       # 地图紫格总数
 MAP_SKILL_TOTAL_GOLD_CELLS = 200011       # 地图金格总数
 MAP_SKILL_TOTAL_RED_CELLS = 200012        # 地图红格总数
-MAP_SKILL_AVG_GOLD_CELLS = 200015        # 金色平均占用格（快照估价见 bidking-bot aisha_premium）
 MAP_SKILL_AVG_RED_CELLS = 200016         # 红色平均占用格
-MAP_SKILL_GOLD_ITEM_COUNT = 200019        # 金（Q5）物品件数
-MAP_SKILL_RED_ITEM_COUNT = 200020         # 红（Q6）物品件数
+MAP_SKILL_TOTAL_PURPLE_COUNT = 200018       # 地图紫格件数
+MAP_SKILL_TOTAL_GOLD_COUNT = 200019       # 地图金格件数
+MAP_SKILL_TOTAL_RED_COUNT = 200020       # 地图红格件数
+MAP_SKILL_AVG_PURPLE_PRICE = 200036       # 紫色物品均价
+MAP_SKILL_AVG_GOLD_PRICE = 200037         # 金色物品均价
+MAP_SKILL_AVG_RED_PRICE = 200038          # 红色物品均价
+
 MAP_SKILL_RANDOM3_AVG_PRICE = 200031       # 随机3均价
 MAP_SKILL_RANDOM6_AVG_PRICE = 200032      # 随机6均价
 MAP_SKILL_RANDOM9_AVG_PRICE = 200033      # 随机9均价
+MAP_SKILL_AVG_GOLD_PRICE = 200037         # 金色物品均价（AllHitItemAvgPrice）
 MAP_SKILL_AVG_GOLD_PRICE = 200037         # 金色物品均价（AllHitItemAvgPrice）
 MAP_SKILL_AVG_RED_PRICE = 200038          # 红色物品均价
 MAP_SKILL_GOLD_TOTAL_PRICE = 990003       # 金色总价
