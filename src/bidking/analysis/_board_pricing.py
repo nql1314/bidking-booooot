@@ -892,7 +892,7 @@ def build_snapshot_pricing_dict(
     else:
         pts = vacant_pts_base + float(vacant_adj) * float(u_orange)
         pts_floor = vacant_pts_base + float(vacant_adj) * float(u_orange)
-        pts_ceiling = vacant_pts_base + float(vacant_adj) * float(u_gr)
+        pts_ceiling = vacant_pts_base + float(vacant_adj) * float(u_early)
 
     ahmad_detail = _ahmad_pricing_detail_from_raw_pricing(
         raw, items_total=float(vacant_pts_base), vacant_adj=int(vacant_adj)
