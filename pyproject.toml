@@ -20,6 +20,7 @@ dependencies = [
 bidking-bot = "bidking.runner.bot_main:main"
 bidking-aisha = "bidking.runner.aisha_main:main"
 bidking-viewer = "bidking.runner.viewer_main:main"
+bidking-parse-log = "bidking.parsing.parse_log:main"
 
 [project.optional-dependencies]
 build = ["pyinstaller>=6.20.0"]
