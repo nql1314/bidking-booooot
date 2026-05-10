@@ -316,6 +316,44 @@ class BoardPricingTests(unittest.TestCase):
         m = grid_overlay_mod.merged_items_dict(snap)
         self.assertEqual(m["x"]["shape"], 21)
 
+    def test_unique_item_cid_without_snapshot_shape_price_matches_csv_row(self) -> None:
+        """CSV 已唯一锁定 item_cid、快照无 shape 时：汇总价仍为该行 ``base_value``。"""
+        _, csv_items = bp._load_item_prices_db()
+        pick = next(
+            (
+                i
+                for i in csv_items
+                if len(str(i.shape)) == 2
+                and int(str(i.shape)[0]) * int(str(i.shape)[1]) > 1
+            ),
+            None,
+        )
+        self.assertIsNotNone(pick)
+        assert pick is not None
+        q = int(pick.quality)
+        snap = {
+            "game_state": {
+                "items": {
+                    "x": {
+                        "uid": "x",
+                        "box_id": 0,
+                        "box_id_confirmed": True,
+                        "shape": None,
+                        "quality": q,
+                        "categories": sorted(pick.category_tags),
+                        "item_cid": int(pick.item_id),
+                        "price": None,
+                        "manual_confirm_item_id": None,
+                        "excluded_categories": [],
+                        "excluded_qualities": [],
+                    }
+                }
+            },
+            "map_id": 2101,
+        }
+        total = bp.compute_items_total(snap)
+        self.assertAlmostEqual(total, float(pick.base_value))
+
     def test_early_round_vacant_dict_uses_geometry(self) -> None:
         """无 200009 时：``vacant_dict_from_board_snapshot`` 按几何前缀区计空置（与定价同源）。"""
         gs = {
@@ -349,6 +387,8 @@ class BoardPricingTests(unittest.TestCase):
         }
         vb = grid_overlay_mod.vacant_dict_from_board_snapshot(snap)
         self.assertEqual(vb.get("effective_count"), 5)
+        self.assertEqual(vb.get("geometric"), 5)
+        self.assertEqual(vb.get("weighted_footprint_vacant_adjust"), 0.0)
         self.assertEqual(vb.get("source"), "geometric_empty_zone")
         p = bp.build_snapshot_pricing_dict(snap, snapshot_path_hint=None)
         self.assertEqual(p["vacant"], 5)
