@@ -3,7 +3,7 @@
 画板快照定价：由 ``game_state.items`` 与 ``grid_overlay`` 合并后的有效物品表汇总总价、
 权重占位与空置格，再结合扫描推断与地图 CSV 格均价给出 ``points`` / ``est_*``。
 
-``items`` 与 ``grid_overlay`` 的合并由 :mod:`grid_overlay` 的 :func:`grid_overlay.merged_items_dict` 完成。
+``items`` 合并优先使用快照 ``grid_overlay["merged_items_dict"]``（见 :func:`grid_overlay.merged_items_dict_from_snapshot`），否则由 :func:`grid_overlay.merged_items_dict` 计算（含 ``infer_shapes`` 几何补全；推断外形的计价仍按未知轮廓加权）。
 
 不再维护独立的「艾莎 bid」分支；策略层直接消费 ``pricing.points`` / ``points_floor`` /
 ``points_ceiling``。
@@ -111,26 +111,21 @@ def _event_stat_grid_min_optional(st: Any, key: str) -> Optional[int]:
 
 def _confirmed_tier_footprint_q456(
     board_snapshot: Dict[str, Any],
-    *,
-    csv_cells_raw: Dict[str, float],
 ) -> Tuple[int, int, int]:
     """
-    合并物品表上 Q4/Q5/Q6、含有效 ``box_id`` 的占位格数之和（见 :func:`_merged_item_footprint_cells`）。
-
-    ``box_id_confirmed=True``：几何 / 唯一外形解析 / 既有加权规则；
-    ``box_id_confirmed=False``：轮廓未知时用 ``期望价/u_cell`` 权重占位（``require_box_id_confirmed=False``）。
+    合并物品表上 Q4/Q5/Q6、含有效 ``box_id`` 且快照 ``shape`` 已知的几何占位格数之和。
     """
-    mid = map_id_from_board_snapshot(board_snapshot)
-    mid_n = item_db.normalize_map_id(mid)
-    items = _grid_overlay.merged_items_dict(board_snapshot)
-    work = _pricing_work_board_snapshot(board_snapshot, items)
-    csv_index, csv_items = _load_item_prices_db()
-    if not csv_items:
-        return 0, 0, 0
-    weights = map_category_ratios(mid) or {}
+    items = _grid_overlay.merged_items_dict_from_snapshot(board_snapshot)
     s4 = s5 = s6 = 0.0
     for _uid, it in items.items():
         if not isinstance(it, dict):
+            continue
+        bid_raw = it.get("box_id")
+        if bid_raw is None:
+            continue
+        try:
+            int(bid_raw)
+        except (TypeError, ValueError):
             continue
         q_raw = it.get("quality")
         try:
@@ -139,15 +134,9 @@ def _confirmed_tier_footprint_q456(
             continue
         if q not in (4, 5, 6):
             continue
-        fp = _merged_item_footprint_cells(
-            it,
-            work,
-            csv_cells_raw,
-            mid_n,
-            csv_index,
-            csv_items,
-            weights,
-        )
+        fp = _geo_footprint_cells_from_shape_field(it.get("shape"))
+        if fp is None:
+            continue
         if q == 4:
             s4 += fp
         elif q == 5:
@@ -224,6 +213,13 @@ def _parse_shape_int(shape: Any) -> Optional[int]:
         return None
 
 
+def _pricing_shape_int_for_csv(it: Dict[str, Any]) -> Optional[int]:
+    """推断外形仅用于几何占位；CSV 计价匹配仍按未知外形做多候选加权。"""
+    if it.get("_overlay_shape_origin") == "infer":
+        return None
+    return _parse_shape_int(it.get("shape"))
+
+
 def _pricing_work_board_snapshot(board_snapshot: Dict[str, Any], items: Dict[str, Any]) -> Dict[str, Any]:
     gs = board_snapshot.get("game_state")
     if not isinstance(gs, dict):
@@ -296,7 +292,7 @@ def _item_value(
     except (TypeError, ValueError):
         q = None
 
-    sh = _parse_shape_int(it.get("shape"))
+    sh = _pricing_shape_int_for_csv(it)
     cats = _int_set_from_field(it.get("categories"))
     excl_q = _int_set_from_field(it.get("excluded_qualities"))
     excl_c = _int_set_from_field(it.get("excluded_categories"))
@@ -352,7 +348,7 @@ def _sum_known_contour_weighted_price_and_geo_cells(
     """
     mid = map_id_from_board_snapshot(board_snapshot)
     mid_n = item_db.normalize_map_id(mid)
-    items = _grid_overlay.merged_items_dict(board_snapshot)
+    items = _grid_overlay.merged_items_dict_from_snapshot(board_snapshot)
     csv_index, csv_items = _load_item_prices_db()
     if not csv_items:
         return 0.0, 0
@@ -370,8 +366,8 @@ def _sum_known_contour_weighted_price_and_geo_cells(
         except (TypeError, ValueError):
             continue
 
-        sh = _parse_shape_int(it.get("shape"))
-        if sh is None:
+        sh_geo = _parse_shape_int(it.get("shape"))
+        if sh_geo is None:
             continue
 
         cid_raw = it.get("item_cid")
@@ -395,8 +391,10 @@ def _sum_known_contour_weighted_price_and_geo_cells(
         excl_q = _int_set_from_field(it.get("excluded_qualities"))
         excl_c = _int_set_from_field(it.get("excluded_categories"))
 
+        sh_csv = _pricing_shape_int_for_csv(it)
+
         best, count, unique, est, _label = query_item(
-            sh,
+            sh_csv,
             q,
             cats,
             item_cid_i,
@@ -414,7 +412,8 @@ def _sum_known_contour_weighted_price_and_geo_cells(
         w_est = est
         if w_est is None and csv_items:
             cand = list(csv_items)
-            cand = [i for i in cand if i.shape == sh]
+            if sh_csv is not None:
+                cand = [i for i in cand if i.shape == sh_csv]
             if q is not None:
                 cand = [i for i in cand if i.quality == q]
             if excl_q:
@@ -428,19 +427,11 @@ def _sum_known_contour_weighted_price_and_geo_cells(
             w_est = _weighted_est_price(cand, weights if weights else None, mid_n)
         val = float(w_est) if w_est is not None else float(best.base_value)
 
-        w, h = _shape_wh_from_snapshot(sh)
+        w, h = _shape_wh_from_snapshot(sh_geo)
         geo = max(1, int(w) * int(h))
         sum_val += val
         sum_geo += geo
     return sum_val, sum_geo
-
-
-def _shape_area_from_item(it: Dict[str, Any]) -> int:
-    sh = _parse_shape_int(it.get("shape"))
-    if sh is not None:
-        w, h = _shape_wh_from_snapshot(sh)
-        return max(1, w * h)
-    return 1
 
 
 def _geo_footprint_cells_from_shape_field(shape_val: Any) -> Optional[float]:
@@ -450,143 +441,6 @@ def _geo_footprint_cells_from_shape_field(shape_val: Any) -> Optional[float]:
         return None
     w, h = _shape_wh_from_snapshot(sh)
     return float(max(1, w * h))
-
-
-def _footprint_cells(
-    it: Dict[str, Any],
-    board_snapshot: Dict[str, Any],
-    csv_cells_raw: Dict[str, float],
-    map_id_normalized: Optional[int],
-    *,
-    require_box_id_confirmed_for_weighted: bool = True,
-) -> float:
-    """未知轮廓加权占位：见 :func:`unknown_value.weighted_cell_equiv_for_unknown_contour_item`。"""
-    sh = _parse_shape_int(it.get("shape"))
-    if sh is not None:
-        w, h = _shape_wh_from_snapshot(sh)
-        return float(max(1, w * h))
-    q_raw = it.get("quality")
-    try:
-        q = int(q_raw) if q_raw is not None else None
-    except (TypeError, ValueError):
-        q = None
-    if q is not None and 1 <= q <= 6:
-        wcells = _unknown_value.weighted_cell_equiv_for_unknown_contour_item(
-            it,
-            board_snapshot,
-            csv_cells_raw or None,
-            {},
-            map_id_normalized,
-            require_box_id_confirmed=require_box_id_confirmed_for_weighted,
-        )
-        if wcells is not None and wcells > 0:
-            return float(wcells)
-    return 1.0
-
-
-def _footprint_cells_with_resolution(
-    it: Dict[str, Any],
-    board_snapshot: Dict[str, Any],
-    csv_cells_raw: Dict[str, float],
-    map_id_normalized: Optional[int],
-    *,
-    best: Any,
-    unique: bool,
-    require_box_id_confirmed_for_weighted: bool = True,
-) -> float:
-    """
-    汇总占位口径：
-    - 快照已有 ``shape`` → 几何 ``w×h``；
-    - **锚格已确认** 且快照无 ``shape``、CSV **唯一** → 用该行 ``shape`` 几何占位；
-    - **锚格未确认**、轮廓仍未知 → 仅用 ``期望价/u_cell`` 加权占位（不看唯一外形）；
-    - 其余 → ``期望价/u_cell``，其中 ``require_box_id_confirmed_for_weighted`` 控制加权函数是否要求已确认 Box。
-    """
-    geo = _geo_footprint_cells_from_shape_field(it.get("shape"))
-    if geo is not None:
-        return geo
-    if require_box_id_confirmed_for_weighted and unique and best is not None:
-        g2 = _geo_footprint_cells_from_shape_field(getattr(best, "shape", None))
-        if g2 is not None:
-            return g2
-    return _footprint_cells(
-        it,
-        board_snapshot,
-        csv_cells_raw,
-        map_id_normalized,
-        require_box_id_confirmed_for_weighted=require_box_id_confirmed_for_weighted,
-    )
-
-
-def _merged_item_footprint_cells(
-    it: Dict[str, Any],
-    board_snapshot: Dict[str, Any],
-    csv_cells_raw: Dict[str, float],
-    map_id_normalized: Optional[int],
-    csv_index: Dict[int, Any],
-    csv_items: List[Any],
-    map_category_weights: Dict[int, float],
-) -> float:
-    """
-    档事件 ``q*_grid_min`` 用到的 Q4/Q5/Q6 占位格数：含 ``item_cid``+``price`` 早退，
-    再经 :func:`_footprint_cells_with_resolution`（已确认锚格可走唯一外形；未确认仅加权）。
-    """
-    bid_raw = it.get("box_id")
-    if bid_raw is None:
-        return 0.0
-    try:
-        int(bid_raw)
-    except (TypeError, ValueError):
-        return 0.0
-
-    cid_raw = it.get("item_cid")
-    try:
-        item_cid_i = int(cid_raw) if cid_raw is not None else None
-    except (TypeError, ValueError):
-        item_cid_i = None
-    price_raw = it.get("price")
-    if item_cid_i is not None and price_raw is not None:
-        try:
-            float(price_raw)
-            return float(_shape_area_from_item(it))
-        except (TypeError, ValueError):
-            pass
-
-    q_raw = it.get("quality")
-    try:
-        q = int(q_raw) if q_raw is not None else None
-    except (TypeError, ValueError):
-        q = None
-
-    sh = _parse_shape_int(it.get("shape"))
-    cats = _int_set_from_field(it.get("categories"))
-    excl_q = _int_set_from_field(it.get("excluded_qualities"))
-    excl_c = _int_set_from_field(it.get("excluded_categories"))
-
-    best, count, unique, est, _label = query_item(
-        sh,
-        q,
-        cats,
-        item_cid_i,
-        csv_index,
-        csv_items,
-        excluded_categories=excl_c if excl_c else None,
-        excluded_qualities=excl_q if excl_q else None,
-        max_shape_wh=None,
-        map_category_weights=map_category_weights if map_category_weights else None,
-        map_id=map_id_normalized,
-    )
-    if best is None or count == 0:
-        return 0.0
-    require_wbox = bool(it.get("box_id_confirmed"))
-    return _footprint_cells_with_resolution(
-        it,
-        board_snapshot,
-        csv_cells_raw,
-        map_id_normalized,
-        best=best,
-        unique=unique,
-        require_box_id_confirmed_for_weighted=require_wbox,
-    )
 
 
 def estimate_snapshot_item_price(
@@ -616,7 +470,7 @@ def estimate_snapshot_item_price_for_uid(
     uid: str,
 ) -> Optional[float]:
     """按 uid 取合并后的物品行再估价（含 ``grid_overlay`` 手动画框与手动确认投影）。"""
-    items = _grid_overlay.merged_items_dict(board_snapshot)
+    items = _grid_overlay.merged_items_dict_from_snapshot(board_snapshot)
     it = items.get(str(uid))
     if not isinstance(it, dict):
         return None
@@ -628,7 +482,7 @@ def compute_items_total(board_snapshot: Dict[str, Any]) -> float:
     """对所有带有效 ``box_id`` 的物品求标价之和（合并 ``grid_overlay`` 投影）。"""
     mid = map_id_from_board_snapshot(board_snapshot)
     mid_n = item_db.normalize_map_id(mid)
-    items = _grid_overlay.merged_items_dict(board_snapshot)
+    items = _grid_overlay.merged_items_dict_from_snapshot(board_snapshot)
     csv_index, csv_items = _load_item_prices_db()
     if not csv_items:
         return 0.0
@@ -657,9 +511,9 @@ def build_snapshot_pricing_dict(
 
     从 ``board_snapshot`` 合并后的有效物品表（``game_state.items`` + ``grid_overlay``）
     计算 ``total``（不做外部覆盖）。
-    有效空置 ``pricing.vacant`` 与快照 ``grid_overlay.vacant`` 同源，由
-    :func:`grid_overlay.vacant_dict_from_board_snapshot` / :func:`grid_overlay.compute_overlay_vacant_dict`
-    统一计算；占位格优先 ``grid_overlay.occupied_cell_bids``。
+    有效空置 ``pricing.vacant`` 与快照 ``grid_overlay.vacant`` 一致时优先直接读取后者，
+    否则由 :func:`grid_overlay.vacant_dict_from_board_snapshot` 计算；
+    占位格优先 ``grid_overlay.occupied_cell_bids``。
     """
     game_state_json = board_snapshot.get("game_state") or {}
     skill_logs = list(board_snapshot.get("skill_logs") or [])
@@ -696,22 +550,8 @@ def build_snapshot_pricing_dict(
 
     total_f = float(compute_items_total(snap_full))
 
-    vb = _grid_overlay.vacant_dict_from_board_snapshot(
-        snap_full,
-    )
-    ec_raw = vb.get("effective_count")
-    if ec_raw is None:
-        vacant_num = 0
-    else:
-        try:
-            vacant_num = max(0, int(ec_raw))
-        except (TypeError, ValueError):
-            vacant_num = 0
-    geo_raw = vb.get("geometric")
-    try:
-        vacant_geo = int(geo_raw) if geo_raw is not None else None
-    except (TypeError, ValueError):
-        vacant_geo = None
+    vb = _grid_overlay.vacant_block_from_board_snapshot(snap_full)
+    vacant_num = int(vb.get("geometric") or 0)
     vacant_src = str(vb.get("source") or "")
 
     u_orange = int(round(float(csv_cells_for_est.get("q5", 0.0))))
@@ -725,7 +565,7 @@ def build_snapshot_pricing_dict(
     )
 
     st_ev = raw.get("event_stats") if isinstance(raw, dict) else None
-    cq4, cq5, cq6 = _confirmed_tier_footprint_q456(snap_full, csv_cells_raw=csv_cells_for_est)
+    cq4, cq5, cq6 = _confirmed_tier_footprint_q456(snap_full)
     tier_extra_val, tier_extra_cells = _tier_min_extra_value_and_cells(
         st_ev,
         confirmed_q4=cq4,
@@ -786,8 +626,6 @@ def build_snapshot_pricing_dict(
         "vacant_unit_all_orange": u_orange,
         "vacant_unit_gold_red": u_gr,
         "vacant_unit_all_red": u_red,
-        "vacant_geometric": vacant_geo,
-        "vacant_effective_count": int(vacant_num),
         "vacant_source": vacant_src,
         "early_vacant_unit_from_scan": int(u_early),
         "early_vacant_csv_group": str(qg_early or ""),
