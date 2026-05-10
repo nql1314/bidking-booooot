@@ -271,10 +271,18 @@ def _self_player_hero_cid(
     return hc if hc > 0 else None
 
 
-def _ahmad_pricing_detail_from_raw_pricing(raw: Any) -> Dict[str, Any]:
+def _ahmad_pricing_detail_from_raw_pricing(
+    raw: Any,
+    *,
+    items_total: Optional[float] = None,
+    vacant_adj: Optional[int] = None,
+) -> Dict[str, Any]:
     """Ahmad 估价算法（点数口径）及候选分解，由 ``raw_pricing`` 实现，多候选取最大值。
 
     返回 dict：``ahmad_points``、``candidates``（每项含 ``id``/``label``/``points`` 及算式用中间量）、``winner``。
+
+    ``items_total`` / ``vacant_adj``：可选；二者皆给出时增加候选
+    ``total + vacant_adj × q1234 格均价``（``q1234`` 取自 CSV 格均价键 ``\"q1234\"``）。
 
     **候选 A — CSV 边际定价**（当 CSV 含 ``"all"`` 质量组时）：
 
@@ -300,6 +308,12 @@ def _ahmad_pricing_detail_from_raw_pricing(raw: Any) -> Dict[str, Any]:
         溢价   = Σ q*_格数 × (q*格均价 − q3456_格均价)   （紫/金/红）
 
     **候选 C — random_avg**：``random_avg_price_min``（n×均价总价下界）直接参与竞争。
+
+    **候选 E — total + 空置调整 × q1234 格均价**（仅当调用方传入 ``items_total`` 与 ``vacant_adj`` 时）：
+
+    .. code-block:: text
+
+        pts = total + vacant_adj × q1234_格均价
 
     缺失或非数字字段按 0，不影响其他项。
     """
@@ -482,6 +496,22 @@ def _ahmad_pricing_detail_from_raw_pricing(raw: Any) -> Dict[str, Any]:
                 "id": "random_avg_price_min",
                 "label": "random_avg_price_min 事件下界",
                 "points": int(rnd_min),
+            }
+        )
+
+    # ── 候选 E：total + vacant_adj × q1234 格均价（需快照侧传入 items_total / vacant_adj）──
+    if items_total is not None and vacant_adj is not None:
+        u_early_q1234 = _csv_f(csv_per_cell, "q1+q2+q3+q4")
+        u_early_f = float(u_early_q1234) if u_early_q1234 is not None else 0.0
+        pts_e = float(items_total) + float(vacant_adj) * u_early_f
+        candidates_rows.append(
+            {
+                "id": "total_plus_vacant_adj_times_q1234_cell_avg",
+                "label": "物品 total + 有效空置调整 × q1234 格均价",
+                "points": int(round(pts_e)),
+                "items_total": float(items_total),
+                "vacant_adj": int(vacant_adj),
+                "u_early_q1234": u_early_f,
             }
         )
 
@@ -864,7 +894,9 @@ def build_snapshot_pricing_dict(
         pts_floor = vacant_pts_base + float(vacant_adj) * float(u_orange)
         pts_ceiling = vacant_pts_base + float(vacant_adj) * float(u_red)
 
-    ahmad_detail = _ahmad_pricing_detail_from_raw_pricing(raw)
+    ahmad_detail = _ahmad_pricing_detail_from_raw_pricing(
+        raw, items_total=float(vacant_pts_base), vacant_adj=int(vacant_adj)
+    )
     ahmad_points = int(ahmad_detail.get("ahmad_points") or 0)
 
     generic_pts = int(round(pts))
