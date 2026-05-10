@@ -133,15 +133,19 @@ MAP_SKILL_DESC: Dict[int, str] = {
     200021: "随机揭示X件藏品",
     200022: "随机显示X件藏品",
     200023: "随机显示6件藏品",
+    200024: "随机显示8件藏品",
     200026: "随机3品质",
     200027: "随机6品质",
     200028: "随机9品质",
+    200029: "随机12品质",
     200031: "随机3均价",
     200032: "随机6均价",
     200033: "随机9均价",
+    200034: "随机12均价",
     200036: "紫色均价",
     200037: "金色均价",
     200038: "红色均价",
+    200039: "所有道具轮廓",
     200046: "显示一种类型品质",
     200048: "显示最高品质",
     200049: "显示最高价值",
@@ -188,6 +192,7 @@ MAP_SKILL_AVG_RED_PRICE = 200038          # 红色物品均价
 MAP_SKILL_RANDOM3_AVG_PRICE = 200031       # 随机3均价
 MAP_SKILL_RANDOM6_AVG_PRICE = 200032      # 随机6均价
 MAP_SKILL_RANDOM9_AVG_PRICE = 200033      # 随机9均价
+MAP_SKILL_RANDOM12_AVG_PRICE = 200034      # 随机12均价
 MAP_SKILL_AVG_GOLD_PRICE = 200037         # 金色物品均价（AllHitItemAvgPrice）
 MAP_SKILL_AVG_GOLD_PRICE = 200037         # 金色物品均价（AllHitItemAvgPrice）
 MAP_SKILL_AVG_RED_PRICE = 200038          # 红色物品均价
