@@ -343,6 +343,152 @@ class BoardPricingTests(unittest.TestCase):
         self.assertEqual(m["y"]["shape"], 21)
         self.assertEqual(m["y"].get("_overlay_shape_origin"), "infer")
 
+    def test_merged_items_applies_phantom_quality_pref(self) -> None:
+        """``phantom_quality_pref`` 须并入合并表 ``quality``，定价才按红笔等已知档位计价。"""
+        snap = {
+            "game_state": {"items": {}},
+            "grid_overlay": {
+                "phantom_items": {
+                    "phantom_9": {
+                        "uid": "phantom_9",
+                        "box_id": 0,
+                        "box_id_confirmed": True,
+                        "shape": 22,
+                        "quality": None,
+                        "categories": [],
+                        "item_cid": None,
+                        "price": None,
+                        "manual_confirm_item_id": None,
+                        "excluded_categories": [],
+                        "excluded_qualities": [],
+                    }
+                },
+                "manual_shapes": {"phantom_9": [2, 2, 0, 0]},
+                "phantom_quality_pref": {"phantom_9": 6},
+            },
+        }
+        m = grid_overlay_mod.merged_items_dict(snap)
+        self.assertEqual(m["phantom_9"].get("quality"), 6)
+
+    def test_merged_items_phantom_without_pref_defaults_quality_5(self) -> None:
+        """无 ``phantom_quality_pref`` 条目时与画板缺省金笔一致：合并表 ``quality`` 为 5。"""
+        snap = {
+            "game_state": {"items": {}},
+            "grid_overlay": {
+                "phantom_items": {
+                    "phantom_1": {
+                        "uid": "phantom_1",
+                        "box_id": 0,
+                        "box_id_confirmed": True,
+                        "shape": 11,
+                        "quality": None,
+                        "categories": [],
+                        "item_cid": None,
+                        "price": None,
+                        "manual_confirm_item_id": None,
+                        "excluded_categories": [],
+                        "excluded_qualities": [],
+                    }
+                },
+                "manual_shapes": {"phantom_1": [1, 1, 0, 0]},
+            },
+        }
+        m = grid_overlay_mod.merged_items_dict(snap)
+        self.assertEqual(m["phantom_1"].get("quality"), 5)
+
+    def test_merged_items_phantom_infer_pref_keeps_quality_none(self) -> None:
+        """推断笔偏好 ``_phantom_q_infer``：合并表 ``quality`` 保持 None。"""
+        snap = {
+            "game_state": {"items": {}},
+            "grid_overlay": {
+                "phantom_items": {
+                    "phantom_1": {
+                        "uid": "phantom_1",
+                        "box_id": 0,
+                        "box_id_confirmed": True,
+                        "shape": 11,
+                        "quality": None,
+                        "categories": [],
+                        "item_cid": None,
+                        "price": None,
+                        "manual_confirm_item_id": None,
+                        "excluded_categories": [],
+                        "excluded_qualities": [],
+                    }
+                },
+                "manual_shapes": {"phantom_1": [1, 1, 0, 0]},
+                "phantom_quality_pref": {"phantom_1": "_phantom_q_infer"},
+            },
+        }
+        m = grid_overlay_mod.merged_items_dict(snap)
+        self.assertIsNone(m["phantom_1"].get("quality"))
+
+    def test_merged_items_dict_from_snapshot_applies_pref_on_cached_merged(self) -> None:
+        """读出缓存 ``merged_items_dict`` 时仍应用 ``phantom_quality_pref``（兼容旧写出）。"""
+        snap = {
+            "game_state": {"items": {}},
+            "grid_overlay": {
+                "phantom_quality_pref": {"phantom_9": 6},
+                "merged_items_dict": {
+                    "phantom_9": {
+                        "uid": "phantom_9",
+                        "box_id": 0,
+                        "box_id_confirmed": True,
+                        "shape": 22,
+                        "quality": None,
+                        "categories": [],
+                        "item_cid": None,
+                        "price": None,
+                        "manual_confirm_item_id": None,
+                        "excluded_categories": [],
+                        "excluded_qualities": [],
+                    }
+                },
+            },
+        }
+        m = grid_overlay_mod.merged_items_dict_from_snapshot(snap)
+        self.assertEqual(m["phantom_9"].get("quality"), 6)
+
+    def test_merged_items_dict_from_snapshot_default_q5_on_cached(self) -> None:
+        """缓存里 ``quality: null``、且无偏好条目时，读出仍补齐 Q5。"""
+        snap = {
+            "game_state": {"items": {}},
+            "grid_overlay": {
+                "phantom_items": {
+                    "phantom_1": {
+                        "uid": "phantom_1",
+                        "box_id": 0,
+                        "box_id_confirmed": True,
+                        "shape": 11,
+                        "quality": None,
+                        "categories": [],
+                        "item_cid": None,
+                        "price": None,
+                        "manual_confirm_item_id": None,
+                        "excluded_categories": [],
+                        "excluded_qualities": [],
+                    }
+                },
+                "merged_items_dict": {
+                    "phantom_1": {
+                        "uid": "phantom_1",
+                        "box_id": 0,
+                        "box_id_confirmed": True,
+                        "shape": 11,
+                        "quality": None,
+                        "categories": [],
+                        "item_cid": None,
+                        "price": None,
+                        "manual_confirm_item_id": None,
+                        "excluded_categories": [],
+                        "excluded_qualities": [],
+                    }
+                },
+            },
+        }
+        m = grid_overlay_mod.merged_items_dict_from_snapshot(snap)
+        self.assertEqual(m["phantom_1"].get("quality"), 5)
+
     def test_infer_shapes_nonempty_when_only_anchor_occupancy(self) -> None:
         """未确认物品仅占锚格时，可行性检测须剔除自身锚格，否则 ``infer_shapes`` 恒为空。"""
         from bidking.parsing.state import GameState, ItemKnowledge

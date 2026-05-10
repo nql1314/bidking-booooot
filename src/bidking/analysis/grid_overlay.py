@@ -3,6 +3,7 @@
 合并后的物品表供 ``_board_pricing`` 等模块做总价与占位计算，规则与 UI 写入快照一致：
 
 - ``phantom_items``：仅补充 ``game_state.items`` 中不存在的 uid；
+- ``phantom_quality_pref``：显式 Q1–Q6 写入合并行的 ``quality``（幽灵 JSON 常为 ``quality: null``）；
 - ``manual_shapes``：对尚无 ``shape`` 的条目写入 ``shape = w*10+h``；
 - ``manual_confirm_item_id``：按 ``item_prices.csv`` 投影 ``item_cid`` / ``quality`` / ``shape`` / ``price``。
 """
@@ -134,11 +135,84 @@ def apply_infer_shapes_to_items(items: Dict[str, Any], infer_shapes: Any) -> Non
             row["_overlay_shape_origin"] = "infer"
 
 
+# 与 UI ``GridWindow.PHANTOM_Q_INFER`` 一致；定价层不依赖 tk 模块。
+_PHANTOM_QUALITY_PREF_INFER = "_phantom_q_infer"
+
+
+def apply_phantom_quality_pref_to_items(items: Dict[str, Any], phantom_quality_pref: Any) -> None:
+    """
+    将 ``grid_overlay.phantom_quality_pref`` 写入合并表中的 ``quality``。
+
+    手画幽灵在 ``phantom_items`` JSON 里常为 ``quality: null``，真实档位仅保存在偏好里；
+    若不合并，定价会把幽灵当成「品质未知」走入 known-contour 加权 / kcw 分支。
+    """
+    if not isinstance(phantom_quality_pref, dict):
+        return
+    for uid_raw, val in phantom_quality_pref.items():
+        uid_s = str(uid_raw)
+        row = items.get(uid_s)
+        if not isinstance(row, dict):
+            continue
+        q: Optional[int] = None
+        if isinstance(val, int) and 1 <= val <= 6:
+            q = val
+        elif isinstance(val, str):
+            if val.strip() == _PHANTOM_QUALITY_PREF_INFER:
+                continue
+            try:
+                vi = int(val.strip())
+            except (TypeError, ValueError):
+                continue
+            if 1 <= vi <= 6:
+                q = vi
+        if q is not None:
+            row["quality"] = q
+
+
+def apply_phantom_default_quality_for_phantom_rows(items: Dict[str, Any], overlay: Any) -> None:
+    """
+    与 ``GridWindow._phantom_effective_quality`` 对齐：显式偏好应用后仍为 ``quality is None`` 的幽灵，
+    若不是推断笔（``phantom_quality_pref != _phantom_q_infer``），则默认 **Q5（金笔缺省）**。
+
+    推断笔在偏好里为 ``_phantom_q_infer`` 时不写入，保持 None。
+    """
+    if not isinstance(overlay, dict):
+        return
+    ph = overlay.get("phantom_items")
+    if not isinstance(ph, dict):
+        return
+    pref = overlay.get("phantom_quality_pref")
+    pref_d: Dict[str, Any] = pref if isinstance(pref, dict) else {}
+    for uid_raw in ph:
+        uid_s = str(uid_raw)
+        row = items.get(uid_s)
+        if not isinstance(row, dict) or row.get("quality") is not None:
+            continue
+        raw_p = pref_d.get(uid_s)
+        if raw_p is None:
+            raw_p = pref_d.get(uid_raw)
+        if isinstance(raw_p, str) and raw_p.strip() == _PHANTOM_QUALITY_PREF_INFER:
+            continue
+        if raw_p == _PHANTOM_QUALITY_PREF_INFER:
+            continue
+        row["quality"] = 5
+
+
+def sync_phantom_row_quality_from_overlay(items: Dict[str, Any], overlay: Any) -> None:
+    """``phantom_quality_pref`` + 缺省 Q5；须在 ``manual_confirm_projection`` 之前调用。"""
+    if not isinstance(overlay, dict):
+        return
+    apply_phantom_quality_pref_to_items(items, overlay.get("phantom_quality_pref"))
+    apply_phantom_default_quality_for_phantom_rows(items, overlay)
+
+
 def merged_items_dict(board_snapshot: Dict[str, Any]) -> Dict[str, Any]:
     """
     ``game_state.items`` 与 ``grid_overlay`` 合并后的定价用物品表（浅拷贝各行 dict，可原地改投影字段）。
 
     ``grid_overlay.infer_shapes`` 会写入几何用 ``shape``，并标记 ``_overlay_shape_origin == "infer"``；
+    ``phantom_quality_pref`` 会把显式 Q1–Q6 写入幽灵行的 ``quality``（与画板一致）；
+    缺省金笔且无推断偏好键时补 **Q5**（与 ``GridWindow._phantom_effective_quality`` 一致）。
     定价侧对推断外形按未知轮廓做多候选加权（见 :mod:`_board_pricing`）。
     """
     gs = board_snapshot.get("game_state") or {}
@@ -164,6 +238,7 @@ def merged_items_dict(board_snapshot: Dict[str, Any]) -> Dict[str, Any]:
                     items[suid] = prow
         apply_manual_shapes_to_items(items, overlay.get("manual_shapes"))
         apply_infer_shapes_to_items(items, overlay.get("infer_shapes"))
+        sync_phantom_row_quality_from_overlay(items, overlay)
     csv_index, _csv_items = _load_item_prices_db()
     apply_manual_confirm_projection(items, csv_index)
     return items
@@ -172,6 +247,9 @@ def merged_items_dict(board_snapshot: Dict[str, Any]) -> Dict[str, Any]:
 def merged_items_dict_from_snapshot(board_snapshot: Dict[str, Any]) -> Dict[str, Any]:
     """
     优先使用 ``grid_overlay["merged_items_dict"]``（与 UI 写出一致），否则调用 :func:`merged_items_dict`。
+
+    命中缓存时仍会按当前 ``phantom_items`` / ``phantom_quality_pref`` **重写幽灵 ``quality``**，
+    避免磁盘里旧的 ``merged_items_dict`` 与偏好脱节。
     """
     overlay = board_snapshot.get("grid_overlay")
     if isinstance(overlay, dict) and "merged_items_dict" in overlay:
@@ -180,6 +258,7 @@ def merged_items_dict_from_snapshot(board_snapshot: Dict[str, Any]) -> Dict[str,
             out: Dict[str, Any] = {}
             for k, v in cached.items():
                 out[str(k)] = dict(v) if isinstance(v, dict) else v
+            sync_phantom_row_quality_from_overlay(out, overlay)
             return out
     return merged_items_dict(board_snapshot)
 
@@ -1075,6 +1154,9 @@ __all__ = [
     "DEFAULT_GEOMETRIC_PREFIX_ANCHOR_BOX_ID",
     "OCCUPIED_CELL_BIDS",
     "apply_infer_shapes_to_items",
+    "apply_phantom_default_quality_for_phantom_rows",
+    "apply_phantom_quality_pref_to_items",
+    "sync_phantom_row_quality_from_overlay",
     "apply_manual_confirm_projection",
     "apply_manual_shapes_to_items",
     "board_display_occupied_cells_merged",
