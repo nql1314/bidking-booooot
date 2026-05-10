@@ -14,7 +14,7 @@ run() 是整个解析流程的入口：
 import copy
 import io
 import sys
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from .handlers import handle_s2c33, handle_s2c37, handle_s2c39, handle_s2c45
 from .item_db import load_csv
@@ -145,10 +145,38 @@ def parse_last_game(
     return state, csv_index, csv_items
 
 
+def skill_log_entry_for_raw_pricing(event_type: str, data: dict) -> dict:
+    """
+    与 ``GridWindow`` 写入 ``skill_logs`` 的 ``game_data`` 子集一致，
+    供 ``build_raw_pricing_dict`` / 回放快照使用。
+    """
+    gd = data.get("GameData")
+    if not isinstance(gd, dict):
+        return {"event_type": event_type, "game_data": {}, "received_at_unix": 0.0}
+    keys = (
+        "HeroSkillLog",
+        "MapSkillLog",
+        "ItemSkillLog",
+        "UserLog",
+        "Round",
+        "Uid",
+        "MapId",
+    )
+    out: Dict[str, Any] = {}
+    for k in keys:
+        if k not in gd:
+            continue
+        try:
+            out[k] = copy.deepcopy(gd[k])
+        except Exception:
+            out[k] = gd[k]
+    return {"event_type": event_type, "game_data": out, "received_at_unix": 0.0}
+
+
 def parse_last_game_rounds(
     log_path: str,
     csv_path: str,
-) -> Tuple[List[Tuple[str, GameState]], Dict[int, CsvItem], List[CsvItem]]:
+) -> Tuple[List[Tuple[str, GameState, List[dict]]], Dict[int, CsvItem], List[CsvItem]]:
     """
     解析日志文件中最后一局，在每个回合边界截取状态快照。
 
@@ -159,8 +187,9 @@ def parse_last_game_rounds(
       - S2C_45 处理完毕  → 快照"游戏结束"（保留结束前最后一轮推断）
 
     Returns:
-        snapshots : [(label, GameState_deepcopy), ...]
-                    按时间顺序排列，每项是该时间点的状态深拷贝
+        snapshots : [(label, state, skill_logs), ...]
+                    ``skill_logs`` 为该时点之前（含）与实时监听相同的累积列表，
+                    供 ``build_raw_pricing_dict`` / Ahmad 估价使用。
         csv_index : item_id → CsvItem
         csv_items : 全量 CsvItem 列表
     """
@@ -168,10 +197,11 @@ def parse_last_game_rounds(
     silent = io.StringIO()
 
     # 记录所有局的快照列表，最终取最后一局
-    all_games: List[List[Tuple[str, GameState]]] = []
-    cur_snapshots: List[Tuple[str, GameState]] = []
+    all_games: List[List[Tuple[str, GameState, List[dict]]]] = []
+    cur_snapshots: List[Tuple[str, GameState, List[dict]]] = []
     cur_state = GameState()
     game_active = False
+    skill_logs: List[dict] = []
 
     for line in iter_log_lines(log_path, tail=False):
         if line is None:
@@ -184,26 +214,32 @@ def parse_last_game_rounds(
         if event_type == 'S2C_33_game_start_notify':
             cur_state = GameState()
             cur_snapshots = []
+            skill_logs = []
             game_active = True
             handle_s2c33(data, cur_state, csv_index, csv_items, silent)
-            cur_snapshots.append(('第 1 回合', copy.deepcopy(cur_state)))
+            skill_logs.append(skill_log_entry_for_raw_pricing(event_type, data))
+            cur_snapshots.append(
+                ("第 1 回合", copy.deepcopy(cur_state), list(skill_logs))
+            )
 
         elif event_type == 'S2C_37_game_next_round_notify' and game_active:
             handle_s2c37(data, cur_state, csv_index, csv_items, silent)
+            skill_logs.append(skill_log_entry_for_raw_pricing(event_type, data))
             cur_snapshots.append(
-                (f'第 {cur_state.current_round} 回合', copy.deepcopy(cur_state))
+                (f'第 {cur_state.current_round} 回合', copy.deepcopy(cur_state), list(skill_logs))
             )
 
         elif event_type == 'S2C_39_game_use_item' and game_active:
             handle_s2c39(data, cur_state, csv_index, csv_items, silent)
-            # 道具使用后追加快照，注明"（道具）"以便区分同回合普通快照
+            skill_logs.append(skill_log_entry_for_raw_pricing(event_type, data))
             cur_snapshots.append(
-                (f'第 {cur_state.current_round} 回合（道具）', copy.deepcopy(cur_state))
+                (f'第 {cur_state.current_round} 回合（道具）', copy.deepcopy(cur_state), list(skill_logs))
             )
 
         elif event_type == 'S2C_45_game_over_notify' and game_active:
             handle_s2c45(data, cur_state, csv_index, csv_items, silent)
-            cur_snapshots.append(('游戏结束', copy.deepcopy(cur_state)))
+            skill_logs.append(skill_log_entry_for_raw_pricing(event_type, data))
+            cur_snapshots.append(("游戏结束", copy.deepcopy(cur_state), list(skill_logs)))
             game_active = False
             all_games.append(cur_snapshots)
 

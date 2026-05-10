@@ -340,6 +340,8 @@ class GridWindow:
         board_mode  : ``elsa``（默认）或 ``raven``（仅文案与铺板提示差异）。
         snapshot_path : 若传入非空字符串则用作快照路径；若省略则用模块常量 ``DEFAULT_BOARD_SNAPSHOT_PATH``（空字符串表示不写）。
         snapshot_export_overlay : 是否在快照中包含幽灵物品与手动轮廓（grid_overlay）。
+        snapshots : 回放模式下的 ``[(标签, GameState, skill_logs), ...]``；``skill_logs`` 与实时监听累积形状一致，
+            供定价/raw_pricing。兼容仅 ``(标签, state)`` 的旧列表（无技能日志时 Ahmad 等会为 0）。
     """
 
     def __init__(
@@ -348,7 +350,7 @@ class GridWindow:
         csv_index: Dict[int, CsvItem],
         csv_items: List[CsvItem],
         log_path: Optional[str] = None,
-        snapshots: Optional[List[Tuple[str, GameState]]] = None,
+        snapshots: Optional[List[Tuple[str, GameState, List[dict]]]] = None,
         map_category_weights: Optional[Dict[int, float]] = None,
         board_mode: str = BOARD_MODE_ELSA,
         snapshot_path: Optional[str] = None,
@@ -375,11 +377,23 @@ class GridWindow:
         # 地图类别权重入口：category tag -> multiplier，默认由 item_db 使用 1.0。
         self._map_category_weights = map_category_weights
 
-        # 快照回放模式（静态逐回合浏览）
-        self._snapshots: Optional[List[Tuple[str, GameState]]] = snapshots
+        # 快照回放模式（静态逐回合浏览）；每项第三段为截至该点的 skill_logs（与实时 tail 同源）
+        self._snapshots: Optional[List[Tuple[str, GameState, List[dict]]]] = None
         self._snap_idx: int = 0
         if snapshots:
-            self.state = snapshots[0][1]
+            norm: List[Tuple[str, GameState, List[dict]]] = []
+            for row in snapshots:
+                if isinstance(row, tuple) and len(row) == 3:
+                    lab, st, logs = row  # type: ignore[misc]
+                    norm.append((lab, st, list(logs) if isinstance(logs, list) else []))
+                elif isinstance(row, tuple) and len(row) == 2:
+                    lab, st = row  # type: ignore[misc]
+                    norm.append((lab, st, []))
+                else:
+                    continue
+            self._snapshots = norm
+            self.state = norm[0][1]
+            self._skill_logs = list(norm[0][2])
 
         # 手动尺寸覆盖：uid → (w, h, display_col, display_row)
         # display_col/row 是用户设定的显示左上角；BoxId 必须在矩形内
@@ -2070,7 +2084,7 @@ class GridWindow:
     def _update_nav_label(self) -> None:
         if not self._snapshots:
             return
-        label, _ = self._snapshots[self._snap_idx]
+        label = self._snapshots[self._snap_idx][0]
         total = len(self._snapshots)
         self._nav_label.set(f"{label}   ({self._snap_idx + 1} / {total})")
         # 边界禁用按钮
@@ -2089,11 +2103,12 @@ class GridWindow:
             return
         self._snap_idx = idx
         self.state = self._snapshots[idx][1]
+        self._skill_logs = list(self._snapshots[idx][2])
         self._recalc_vis_rows()
         self._manual_shapes_restore_backup = None
 
         # 更新窗口标题、信息栏、画布
-        label, _ = self._snapshots[idx]
+        label = self._snapshots[idx][0]
         self.root.title(
             f"BidKing 物品格局  —  对局 {self.state.uid}  {label}"
             f"{self._board_mode_title_suffix()}"

@@ -3,35 +3,14 @@
 from __future__ import annotations
 
 import csv
+import math
 import os
 from decimal import Decimal
 from fractions import Fraction
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from ..parsing import item_db
-from ..parsing.constants import (
-    MAP_SKILL_AVG_GOLD_CELLS,
-    MAP_SKILL_AVG_GOLD_PRICE,
-    MAP_SKILL_AVG_RED_CELLS,
-    MAP_SKILL_AVG_RED_PRICE,
-    MAP_SKILL_GOLD_ITEM_COUNT,
-    MAP_SKILL_RANDOM3_AVG_PRICE,
-    MAP_SKILL_RANDOM6_AVG_PRICE,
-    MAP_SKILL_RANDOM9_AVG_PRICE,
-    MAP_SKILL_RED_ITEM_COUNT,
-    MAP_SKILL_TOTAL_PURPLE_CELLS,
-    MAP_SKILL_TOTAL_GOLD_CELLS,
-    MAP_SKILL_TOTAL_HIDDEN_CELLS,
-    MAP_SKILL_TOTAL_RED_CELLS,
-    OUTLINE_SKILL_QUALITY,
-    SKILL_CID_ALL_ITEMS_AVG_GRID,
-    SKILL_CID_Q4_AVG_GRID,
-    SKILL_CID_Q4_AVG_PRICE,
-    SKILL_CID_Q4_ITEM_COUNT,
-    SKILL_CID_TOTAL_ITEM_COUNT,
-    MAP_SKILL_GOLD_TOTAL_PRICE,
-    MAP_SKILL_RED_TOTAL_PRICE,
-)
+from ..parsing.constants import *
 from .map_avg_csv import (
     map_quality_csv_path_resolved,
 )
@@ -132,11 +111,6 @@ def _min_total_from_avg(avg: Optional[float]) -> Optional[int]:
         return max(0, int(round(a)))
     return max(0, int(fr.numerator))
 
-
-def _min_total_price_from_avg(avg: Optional[float]) -> Optional[int]:
-    return _min_total_from_avg(avg)
-
-
 _RANDOM_AVG_DEFAULT_HIT_COUNT: Dict[int, int] = {
     MAP_SKILL_RANDOM3_AVG_PRICE: 3,
     MAP_SKILL_RANDOM6_AVG_PRICE: 6,
@@ -172,20 +146,47 @@ def _max_optional_int(*vals: Optional[int]) -> Optional[int]:
     return max(xs) if xs else None
 
 
-def _merge_with_min_from_avg(
-    existing: Optional[int],
+_RATIO_INFER_TOL = 1e-4
+
+# ``avg * n`` 与最近整数距离 ≤ delta 时，``n`` 的上限搜索范围（防极端无理数/浮点噪声死循环）。
+_AVG_NEAR_INTEGER_MAX_MULTIPLIER = 200
+
+
+def _dist_to_nearest_integer_positive(x: float) -> float:
+    """正有限 ``x`` 到最近整数的距离，取值 ``[0, 0.5]``。"""
+    if x != x or x <= 0:
+        return 0.5
+    t = math.fmod(x, 1.0)
+    if t < 0:
+        t += 1.0
+    return min(t, 1.0 - t)
+
+
+def _min_positive_int_avg_product_near_integer(
     avg: Optional[float],
     *,
-    from_price: bool = False,
+    delta: float = _RATIO_INFER_TOL,
+    max_n: int = _AVG_NEAR_INTEGER_MAX_MULTIPLIER,
 ) -> Optional[int]:
-    """由均格/均价推算的最小整数件数（或总价下界）与 ``existing`` 取较大者。"""
-    inferred = (
-        _min_total_price_from_avg(avg) if from_price else _min_total_from_avg(avg)
-    )
-    return _max_optional_int(existing, inferred)
+    """最小正整数 ``n`` 使得 ``avg * n`` 与某整数相差不超过 ``delta``。
 
-
-_RATIO_INFER_TOL = 1e-4
+    用于均格/小数均价等「件数倍乘后应为整数总量」的启发式；找不到则返回 ``None``。
+    """
+    if avg is None:
+        return None
+    try:
+        a = float(avg)
+    except (TypeError, ValueError):
+        return None
+    if a <= 0 or a != a:
+        return None
+    for n in range(1, max_n + 1):
+        prod = a * n
+        if prod != prod:
+            return None
+        if _dist_to_nearest_integer_positive(prod) <= delta:
+            return n
+    return None
 
 
 def _is_positive_finite_float(x: Any) -> bool:
@@ -203,6 +204,39 @@ def _near_int(x: float, tol: float = _RATIO_INFER_TOL) -> bool:
         return False
     r = round(x)
     return abs(x - r) <= tol
+
+
+def _min_merge_bound_from_price_avg(avg: Optional[float]) -> Optional[int]:
+    """与 ``count_min`` / ``grid_min`` 合并用的均价侧下界：整数均价为 ``1``；否则取最小倍数 ``n``（见 ``_min_positive_int_avg_product_near_integer``），失败则退回分数分子。"""
+    if avg is None:
+        return None
+    try:
+        a = float(avg)
+    except (TypeError, ValueError):
+        return None
+    if a <= 0 or a != a:
+        return None
+    if _near_int(a):
+        return 1
+    return _min_positive_int_avg_product_near_integer(
+        avg
+    ) or _min_total_from_avg(avg)
+
+
+def _merge_with_min_from_avg(
+    existing: Optional[int],
+    avg: Optional[float],
+    *,
+    from_price: bool = False,
+) -> Optional[int]:
+    """由均格/均价推算的下界与 ``existing`` 取较大者（均价侧见 ``_min_merge_bound_from_price_avg``）。"""
+    if from_price:
+        inferred = _min_merge_bound_from_price_avg(avg)
+    else:
+        inferred = _min_positive_int_avg_product_near_integer(
+            avg
+        ) or _min_total_from_avg(avg)
+    return _max_optional_int(existing, inferred)
 
 
 def _as_int_count(v: Any) -> Optional[int]:
@@ -291,7 +325,11 @@ def _finalize_tier_min_bounds(
     count_min_k: str,
     grid_min_k: str,
 ) -> None:
-    """由已知件数、总格、均价/均格分数下界合并得到 ``count_min`` / ``grid_min``。"""
+    """合并 ``count_min`` / ``grid_min``：在件数/总格基础上与均价、均格启发式下界取大。
+
+    均价为整数时合并下界为 ``1``；否则先取最小正整数 ``n`` 使 ``avg*n`` 接近整数
+    （``_min_positive_int_avg_product_near_integer``），失败则退回 ``_min_total_from_avg`` 分数分子；均格分支同理。
+    """
     n = _as_int_count(d.get(count_k))
     G = _as_int_count(d.get(grid_k))
     ag = d.get(avg_grid_k)
@@ -513,17 +551,14 @@ def build_raw_pricing_dict(
 
     total_count = _first_int_from_skills(skill_entries, SKILL_CID_TOTAL_ITEM_COUNT, "HitItemIndex")
     q12_count = _safe_int_field(skill_entries.get(_SKILL_Q12_COUNT), "HitItemIndex")
-    q4_count = _first_int_from_skills(skill_entries, SKILL_CID_Q4_ITEM_COUNT, "HitItemIndex")
-    q5_count = _safe_int_field(skill_entries.get(MAP_SKILL_GOLD_ITEM_COUNT), "HitItemIndex")
-    q6_count = _safe_int_field(skill_entries.get(MAP_SKILL_RED_ITEM_COUNT), "HitItemIndex")
+    q4_count = _safe_int_field(skill_entries.get(MAP_SKILL_TOTAL_PURPLE_COUNT), "HitItemIndex")
+    q5_count = _safe_int_field(skill_entries.get(MAP_SKILL_TOTAL_GOLD_COUNT), "HitItemIndex")
+    q6_count = _safe_int_field(skill_entries.get(MAP_SKILL_TOTAL_RED_COUNT), "HitItemIndex")
 
     total_grid_count = _safe_int_field(skill_entries.get(MAP_SKILL_TOTAL_HIDDEN_CELLS), "TotalHitBoxIndex")
     ent_all_avg_grid = _skill_entry_for_any(skill_entries, SKILL_CID_ALL_ITEMS_AVG_GRID)
     total_grid_avg = _safe_float_field(ent_all_avg_grid, "AllHitItemAvgBoxIndex")
 
-    total_price_min = _min_total_price_from_avg(
-        _first_float_from_skills(skill_entries, SKILL_CID_TOTAL_ITEM_COUNT, "AllHitItemAvgPrice")
-    )
     random_avg_price_min: Optional[int] = None
     for _rnd_cid in (
         MAP_SKILL_RANDOM3_AVG_PRICE,
@@ -537,19 +572,15 @@ def build_raw_pricing_dict(
             avg_f, hc, skill_cid=_rnd_cid
         )
         random_avg_price_min = _max_optional_int(random_avg_price_min, inferred)
-        total_price_min = _max_optional_int(
-            total_price_min,
-            inferred,
-        )
 
     q3_grid_avg = _safe_float_field(skill_entries.get(_SKILL_Q3_GRID_AVG), "AllHitItemAvgBoxIndex")
-    
+
     q4_grid_avg = _safe_float_field(_skill_entry_for_any(skill_entries, SKILL_CID_Q4_AVG_GRID), "AllHitItemAvgBoxIndex")
-    q4_price_avg = _safe_float_field(_skill_entry_for_any(skill_entries, SKILL_CID_Q4_AVG_PRICE), "AllHitItemAvgPrice")
-    q4_grid_count = _safe_int_field(skill_entries.get(MAP_SKILL_TOTAL_PURPLE_CELLS), "AllHitItemAvgBoxIndex")
+    q4_price_avg = _safe_float_field(skill_entries.get(MAP_SKILL_AVG_PURPLE_PRICE), "AllHitItemAvgPrice")
+    q4_grid_count = _safe_int_field(skill_entries.get(MAP_SKILL_TOTAL_PURPLE_CELLS), "TotalHitBoxIndex")
 
 
-    q5_grid_avg = _safe_float_field(skill_entries.get(MAP_SKILL_AVG_GOLD_CELLS), "AllHitItemAvgBoxIndex")
+    q5_grid_avg = _safe_float_field(_skill_entry_for_any(skill_entries, SKILL_CID_Q5_AVG_GRID), "AllHitItemAvgBoxIndex")
     q5_grid_count = _safe_int_field(skill_entries.get(MAP_SKILL_TOTAL_GOLD_CELLS), "TotalHitBoxIndex")
     q5_price_avg = _safe_float_field(skill_entries.get(MAP_SKILL_AVG_GOLD_PRICE), "AllHitItemAvgPrice")
     q5_price_total = _safe_int_field(skill_entries.get(MAP_SKILL_GOLD_TOTAL_PRICE), "HitItemTotalPrice")
@@ -564,7 +595,6 @@ def build_raw_pricing_dict(
         "total_count": total_count,
         "total_grid_count": total_grid_count,
         "total_grid_avg": total_grid_avg,
-        "total_price_min": total_price_min,
         "random_avg_price_min": random_avg_price_min,
         "q1_count": None,
         "q1_grid_count": None,
@@ -708,7 +738,7 @@ def build_raw_pricing_dict(
             total_price_k=total_price_k,
             also_zero=also_zero,
         )
-        
+
     _infer_q56_grid_from_total_and_q14(direct)
 
     if direct["q1_count"] is not None and direct["q2_count"] is not None:
