@@ -341,6 +341,107 @@ def fraud_zone_cell_exclusion_enabled(
     return fraud_exclusion_eligible_from_scan(board_snapshot)
 
 
+def _map_id_from_board_snapshot(board_snapshot: Dict[str, Any]) -> Optional[int]:
+    gs = board_snapshot.get("game_state")
+    mid = None
+    if isinstance(gs, dict):
+        mid = gs.get("map_id")
+    if mid is None:
+        mid = board_snapshot.get("map_id")
+    try:
+        return int(mid)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_shape_int_overlay(shape: Any) -> Optional[int]:
+    if shape is None:
+        return None
+    if isinstance(shape, int):
+        return shape
+    try:
+        return int(shape)
+    except (TypeError, ValueError):
+        s = str(shape)
+        if len(s) == 2 and s.isdigit():
+            return int(s)
+        return None
+
+
+def _csv_cells_raw_from_board_snapshot(board_snapshot: Dict[str, Any]) -> Dict[str, float]:
+    raw = board_snapshot.get("raw_pricing") if isinstance(board_snapshot, dict) else None
+    raw_csv = raw.get("csv_quality_groups_avg_per_cell") if isinstance(raw, dict) else None
+    out: Dict[str, float] = {}
+    if isinstance(raw_csv, dict):
+        try:
+            out = {str(k): float(v) for k, v in raw_csv.items()}
+        except (TypeError, ValueError):
+            out = {}
+    return out
+
+
+def weighted_footprint_vacant_adjust_cells(board_snapshot: Dict[str, Any]) -> float:
+    """
+    合并后 **品质已确定**（Q1–Q6）、**轮廓未定**（无 ``shape``）的物品：
+    按 ``期望价/u_cell`` 得加权格数，空置有效计数扣减 ``Σ max(0, 加权格−1)``。
+    与 ``box_id_confirmed``、CSV 是否唯一无关；仍要求存在有效 ``box_id``。
+    ``item_cid``+``price`` 已锁单品价的条目跳过（不占未知轮廓加权）。
+    """
+    items = merged_items_dict(board_snapshot)
+    mid = _map_id_from_board_snapshot(board_snapshot)
+    mid_n = item_db.normalize_map_id(mid)
+    csv_cells = _csv_cells_raw_from_board_snapshot(board_snapshot)
+    total_adj = 0.0
+    for it in items.values():
+        if not isinstance(it, dict):
+            continue
+        bid_raw = it.get("box_id")
+        if bid_raw is None:
+            continue
+        try:
+            int(bid_raw)
+        except (TypeError, ValueError):
+            continue
+
+        cid_raw = it.get("item_cid")
+        try:
+            item_cid_i = int(cid_raw) if cid_raw is not None else None
+        except (TypeError, ValueError):
+            item_cid_i = None
+        price_raw = it.get("price")
+        if item_cid_i is not None and price_raw is not None:
+            try:
+                float(price_raw)
+                continue
+            except (TypeError, ValueError):
+                pass
+
+        sh = _parse_shape_int_overlay(it.get("shape"))
+        if sh is not None:
+            continue
+
+        q_raw = it.get("quality")
+        try:
+            q = int(q_raw) if q_raw is not None else None
+        except (TypeError, ValueError):
+            q = None
+        if q is None or not (1 <= q <= 6):
+            continue
+
+        w_cells = _unknown_value.weighted_cell_equiv_for_unknown_contour_item(
+            it,
+            board_snapshot,
+            csv_cells if csv_cells else None,
+            {},
+            mid_n,
+            require_box_id_confirmed=False,
+        )
+        if w_cells is None or w_cells <= 0:
+            continue
+        total_adj += max(0.0, float(w_cells) - 1.0)
+    return total_adj
+
+
 def compute_overlay_vacant_dict(
     *,
     occupied: set,
@@ -351,23 +452,37 @@ def compute_overlay_vacant_dict(
     """
     写入 ``grid_overlay["vacant"]`` 的块；定价与 UI 共用同一套逻辑。
 
-    - **200009**：``raw_pricing.event_stats.total_grid_count`` 非空时，空置 = 总数 − ``len(occupied)``。
-    - **几何前缀区**：否则数 0..max(BoxId) 内空格；诈骗格剔除见 :func:`fraud_zone_cell_exclusion_enabled`。
+    - **200009**：``raw_pricing.event_stats.total_grid_count`` 非空时，空置 = 总数 − ``len(occupied)``；
+      若存在 **品质已定、轮廓未定** 的物品（与 ``box_id_confirmed``、候选是否唯一无关），
+      有效空置再减去 ``Σmax(0, 加权格−1)``（几何仅占锚格 1 格）。
+    - **几何前缀区**：否则数 0..max(BoxId) 内空格；同上对 ``effective_count`` 做加权修正；
+      ``geometric`` 仍为未扣加权过剩的几何计数。
     - ``board_snapshot``：须含 ``raw_pricing``（及 ``game_state.scan_history`` 供金红候选判断）。
     """
+    adj = 0.0
+    if board_snapshot is not None:
+        adj = weighted_footprint_vacant_adjust_cells(board_snapshot)
+
+    def _apply_adjust(base: int) -> int:
+        return max(0, int(round(float(base) - adj)))
+
+    meta_adj = round(adj, 6)
     total_h = map_skill_total_hidden_for_overlay(board_snapshot)
     if total_h is not None:
         sv = map_skill_hidden_vacant(total_h, occupied_cell_count=len(occupied))
         if sv is not None:
+            sv_i = int(sv)
             return {
-                "effective_count": int(sv),
-                "geometric": int(sv),
+                "effective_count": _apply_adjust(sv_i),
+                "geometric": sv_i,
+                "weighted_footprint_vacant_adjust": meta_adj,
                 "source": "map_skill_total_hidden_minus_occupied",
             }
     if max_box_id < 0:
         return {
             "effective_count": None,
             "geometric": None,
+            "weighted_footprint_vacant_adjust": meta_adj,
             "source": "no_confirmed_anchor",
         }
     limit = min(max_box_id, GRID_MAX_BOX_ID)
@@ -383,8 +498,9 @@ def compute_overlay_vacant_dict(
                 continue
             count += 1
     return {
-        "effective_count": int(count),
+        "effective_count": _apply_adjust(int(count)),
         "geometric": int(count),
+        "weighted_footprint_vacant_adjust": meta_adj,
         "source": "geometric_empty_zone",
     }
 
@@ -699,4 +815,5 @@ __all__ = [
     "vacant_manual_suppress_cells_from_snapshot",
     "vacant_neighbor_occupied",
     "vacant_side_effective_blocks",
+    "weighted_footprint_vacant_adjust_cells",
 ]
