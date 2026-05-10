@@ -1884,6 +1884,7 @@ class GridWindow:
         lines.extend(
             [
                 f"U = ¥{u_int:,.0f} / 格（pricing.early_vacant_unit_from_scan）",
+                f"顶栏「空置 N 格」与 pricing.vacant 一致，当前 V = {v_eff}。",
             ]
         )
         if p.get("ahmad_pricing_active"):
@@ -1985,8 +1986,15 @@ class GridWindow:
             except (TypeError, ValueError):
                 eu_f = None
             if eu_f is not None:
+                try:
+                    v_scan = int(p.get("vacant") or 0)
+                except (TypeError, ValueError):
+                    v_scan = 0
                 self._est_label_early.config(
-                    text=f"扫描单价 ¥{eu_f:,.0f}/格",
+                    text=(
+                        f"扫描单价 ¥{eu_f:,.0f}/格"
+                        f"    空置 {v_scan} 格"
+                    ),
                 )
                 self._est_early_wrap.pack(side="left", padx=(0, 16))
             else:
@@ -2063,7 +2071,7 @@ class GridWindow:
             ).pack(side="right", padx=8)
 
     def _build_vacant_estimate_bar(self) -> None:
-        """窗口最上方：第一行主价 points + 扫描单价；第二行三档 est 与主价区间。"""
+        """窗口最上方：第一行主价 points + 扫描单价与定价空置格数 V；第二行三档 est 与主价区间。"""
         bar = tk.Frame(self.root, bg="#152030", pady=4)
         bar.pack(fill="x", padx=8, pady=(6, 0))
         row1 = tk.Frame(bar, bg="#152030")
