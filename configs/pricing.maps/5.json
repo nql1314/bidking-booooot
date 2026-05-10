@@ -1,6 +1,6 @@
 {
   "pricing": {
-    "fallback_bid_price": 111112
+    "fallback_bid_price": 88888
   },
   "automation": {
     "default_map": "1",
@@ -8,11 +8,11 @@
     "safe_guard_enabled": true,
     "safe_guard_max_increase_ratio": 0.05,
     "bid_ratio_by_round": {
-      "1": 0.6,
+      "1": 0.55,
       "2": 0.6,
       "3": 0.75,
-      "4": 0.9,
-      "5": 0.95
+      "4": 0.95,
+      "5": 1
     }
   }
 }
