@@ -77,12 +77,12 @@ from ._overlay_reconcile import (
 
 # ─── 布局常量 ──────────────────────────────────────────────────────────────
 
-GRID_COLS  = 10       # 游戏地图固定宽度
-GRID_ROWS  = 30       # 游戏地图最大高度
-VISIBLE_ROWS = 10     # 默认视口显示行数
-CELL_SIZE  = 56       # 每格像素边长
-CELL_W     = CELL_SIZE
-CELL_H     = CELL_SIZE
+GRID_COLS = 10  # 游戏地图固定宽度
+GRID_ROWS = 30  # 游戏地图最大高度
+VISIBLE_ROWS = 10  # 默认视口显示行数
+CELL_SIZE = 56  # 每格像素边长
+CELL_W = CELL_SIZE
+CELL_H = CELL_SIZE
 CANVAS_MAX_W = GRID_COLS * CELL_W + 1
 CANVAS_MAX_H = VISIBLE_ROWS * CELL_H + 1
 
@@ -90,44 +90,44 @@ CANVAS_MAX_H = VISIBLE_ROWS * CELL_H + 1
 
 # 背景色（按品质 1-6）
 QUALITY_BG: Dict[int, str] = {
-    1: '#7a7a8a',   # 灰
-    2: '#3a8a4a',   # 绿
-    3: '#2060c0',   # 蓝
-    4: '#8030b0',   # 紫
-    5: '#c07010',   # 橙
-    6: '#c02020',   # 红
+    1: "#7a7a8a",  # 灰
+    2: "#3a8a4a",  # 绿
+    3: "#2060c0",  # 蓝
+    4: "#8030b0",  # 紫
+    5: "#c07010",  # 橙
+    6: "#c02020",  # 红
 }
 # 文字色（所有品质都用白）
-QUALITY_FG: Dict[int, str] = {k: '#ffffff' for k in range(1, 7)}
-UNKNOWN_BG = '#fbd99a'   # 未知品质，与空格子和已知品质都有明显区分
-UNKNOWN_FG = '#ffffff'
-EMPTY_BG   = '#2a2a3a'
-GRID_LINE  = '#505060'
+QUALITY_FG: Dict[int, str] = {k: "#ffffff" for k in range(1, 7)}
+UNKNOWN_BG = "#fbd99a"  # 未知品质，与空格子和已知品质都有明显区分
+UNKNOWN_FG = "#ffffff"
+EMPTY_BG = "#2a2a3a"
+GRID_LINE = "#505060"
 
 # 空缺区域橘红覆盖层与空置计数：由 ``grid_overlay.compute_overlay_vacant_dict`` 统一计算；
 # 诈骗格剔除仅在扫描推断仅剩金红候选且 200009 吃满后生效（见 ``fraud_zone_cell_exclusion_enabled``）。
-EMPTY_ZONE_COLOR    = '#cc4400'   # 橘红
-EMPTY_ZONE_STIPPLE  = 'gray25'    # 约 25% 覆盖度，模拟半透明
+EMPTY_ZONE_COLOR = "#cc4400"  # 橘红
+EMPTY_ZONE_STIPPLE = "gray25"  # 约 25% 覆盖度，模拟半透明
 
 # 看板角色：界面文案（拉文铺板提示）
-BOARD_MODE_ELSA = 'elsa'
-BOARD_MODE_RAVEN = 'raven'
+BOARD_MODE_ELSA = "elsa"
+BOARD_MODE_RAVEN = "raven"
 
 # 未知品质物品的手动缩放把手（边条宽度 + 四角命中半径；四角缩放用 Ctrl+左键）
-RESIZE_HANDLE_W     = 8          # 四边把手条宽度（像素），提高横向拖动命中率
-RESIZE_CORNER_HIT   = 12          # 角落命中：以角点为心 ± 该值（像素），Ctrl+左键对角缩放
-RESIZE_HANDLE_COLOR = '#ffffff'
+RESIZE_HANDLE_W = 8  # 四边把手条宽度（像素），提高横向拖动命中率
+RESIZE_CORNER_HIT = 12  # 角落命中：以角点为心 ± 该值（像素），Ctrl+左键对角缩放
+RESIZE_HANDLE_COLOR = "#ffffff"
 
 # 手动画框的"幽灵"物品
-PHANTOM_BG     = '#0d3a4a'   # 深青蓝：原推断 / 非金非红显式 Q 等
-PHANTOM_BORDER = '#00cccc'   # 青色边框
+PHANTOM_BG = "#0d3a4a"  # 深青蓝：原推断 / 非金非红显式 Q 等
+PHANTOM_BORDER = "#00cccc"  # 青色边框
 # 左笔金默认 / Q5：淡黄底；右笔红 / Q6：粉格
-PHANTOM_GOLD_BG     = '#cda48a'
-PHANTOM_GOLD_BORDER = '#c18d6d'
-PHANTOM_GOLD_FG     = '#2a2410'
-PHANTOM_PINK_BG     = '#d67c8f'
-PHANTOM_PINK_BORDER = '#a63cd9'
-PHANTOM_PINK_FG     = '#3a1525'
+PHANTOM_GOLD_BG = "#cda48a"
+PHANTOM_GOLD_BORDER = "#c18d6d"
+PHANTOM_GOLD_FG = "#2a2410"
+PHANTOM_PINK_BG = "#d67c8f"
+PHANTOM_PINK_BORDER = "#a63cd9"
+PHANTOM_PINK_FG = "#3a1525"
 
 # 与 bidking_fresh_bot ``price_config.json`` 的 ``round_rules.multiplier`` 默认一致（第 1–4 回合为「第二价秒杀」倍数）。
 _DEFAULT_ROUND_INSTANT_WIN_MULT: Dict[int, float] = {
@@ -196,8 +196,7 @@ def _safe_archive_stem_from_player_names(names: List[str]) -> str:
     parts: List[str] = []
     for n in names:
         cleaned = "".join(
-            c if c not in _WIN_FILENAME_FORBIDDEN and ord(c) >= 32 else "_"
-            for c in n
+            c if c not in _WIN_FILENAME_FORBIDDEN and ord(c) >= 32 else "_" for c in n
         )
         cleaned = cleaned.strip(" .")
         if cleaned:
@@ -223,7 +222,9 @@ def _archive_board_snapshot_then_unlink(snapshot_path: str) -> None:
         data = json.loads(path.read_text(encoding="utf-8-sig"))
     except Exception:
         pass
-    stem = _safe_archive_stem_from_player_names(_snapshot_player_names_for_board_archive(data))
+    stem = _safe_archive_stem_from_player_names(
+        _snapshot_player_names_for_board_archive(data)
+    )
     run_dir = path.resolve().parent / "run"
     try:
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -247,14 +248,21 @@ def _archive_board_snapshot_then_unlink(snapshot_path: str) -> None:
 HIGH_VALUE_THRESHOLD = 100_000
 
 # 幽灵物品品质偏好：dict 中无记录 = 金默认（按 Q5 筛选）；该值 = 不限品质原推断（含金/红等）
-PHANTOM_Q_INFER = '_phantom_q_infer'
+PHANTOM_Q_INFER = "_phantom_q_infer"
 
 # ─── 类别缩写（两字显示） ─────────────────────────────────────────────────
 
 _CAT_SHORT: Dict[int, str] = {
-    101: '家具', 102: '医药', 103: '时尚', 104: '兵装',
-    105: '珠宝', 106: '文物', 107: '数码', 108: '能源',
-    109: '食饮', 110: '书画',
+    101: "家具",
+    102: "医药",
+    103: "时尚",
+    104: "兵装",
+    105: "珠宝",
+    106: "文物",
+    107: "数码",
+    108: "能源",
+    109: "食饮",
+    110: "书画",
 }
 
 
@@ -329,6 +337,7 @@ class _PricingHoverTip:
 
 # ─── 主窗口 ────────────────────────────────────────────────────────────────
 
+
 class GridWindow:
     """
     BidKing 物品格局可视化窗口。
@@ -356,12 +365,14 @@ class GridWindow:
         snapshot_path: Optional[str] = None,
         snapshot_export_overlay: bool = True,
     ) -> None:
-        self.state     = state
+        self.state = state
         self.csv_index = csv_index
         self.csv_items = csv_items
         self._log_path = log_path
         bm = (board_mode or BOARD_MODE_ELSA).strip().lower()
-        self._board_mode = bm if bm in (BOARD_MODE_ELSA, BOARD_MODE_RAVEN) else BOARD_MODE_ELSA
+        self._board_mode = (
+            bm if bm in (BOARD_MODE_ELSA, BOARD_MODE_RAVEN) else BOARD_MODE_ELSA
+        )
         if snapshot_path is None:
             sp = (DEFAULT_BOARD_SNAPSHOT_PATH or "").strip() or None
         elif isinstance(snapshot_path, str):
@@ -402,7 +413,9 @@ class GridWindow:
         # 推算轮廓（与快照 grid_overlay.infer_shapes 同源）；手动画框优先覆盖
         self._infer_shapes: Dict[str, Tuple[int, int, int, int]] = {}
         # 最近一次点击「扩展日志物品」之前的 _manual_shapes 快照（用于一键还原）
-        self._manual_shapes_restore_backup: Optional[Dict[str, Tuple[int, int, int, int]]] = None
+        self._manual_shapes_restore_backup: Optional[
+            Dict[str, Tuple[int, int, int, int]]
+        ] = None
         # 缩放把手拖动状态
         self._drag_state: Optional[dict] = None
         # _draw() 期间的占位格缓存（单次绘制内复用，避免重复构建）
@@ -429,9 +442,9 @@ class GridWindow:
 
         # 线程安全：后台线程写 state，主线程读 state；用 RLock 以便在持锁的 poll 路径内可再入 _refresh→写快照
         self._lock: threading.RLock = threading.RLock()
-        self._queue: queue.SimpleQueue  = queue.SimpleQueue()
+        self._queue: queue.SimpleQueue = queue.SimpleQueue()
         # 'update' = 普通刷新, 'new_game' = 新对局（需重置整个界面）
-        self._live_game_active: bool    = bool(state.uid)
+        self._live_game_active: bool = bool(state.uid)
 
         self._recalc_vis_rows()
         self._build_window()
@@ -447,15 +460,15 @@ class GridWindow:
         self.vis_rows = GRID_ROWS
 
     def _board_mode_title_suffix(self) -> str:
-        return ' [拉文看板]' if self._board_mode == BOARD_MODE_RAVEN else ''
+        return " [拉文看板]" if self._board_mode == BOARD_MODE_RAVEN else ""
 
     def _board_mode_info_suffix(self) -> str:
         """状态栏补充：拉文铺板顺序提示。"""
         if self._board_mode != BOARD_MODE_RAVEN:
-            return ''
+            return ""
         return (
-            '   [拉文] 铺板建议：左键/Ctrl 幽灵操作见图例；'
-            '「扩展日志物品」顺序：绿蓝→金→灰紫/未知→红，同增益按形状边际概率优先'
+            "   [拉文] 铺板建议：左键/Ctrl 幽灵操作见图例；"
+            "「扩展日志物品」顺序：绿蓝→金→灰紫/未知→红，同增益按形状边际概率优先"
         )
 
     def _vacant_scan_context_snapshot(self) -> dict:
@@ -487,7 +500,11 @@ class GridWindow:
     # ── 尺寸推断辅助 ──────────────────────────────────────────────────────
 
     def _effective_shape_wh(
-        self, uid: str, k: ItemKnowledge, *, with_infer: bool = True,
+        self,
+        uid: str,
+        k: ItemKnowledge,
+        *,
+        with_infer: bool = True,
     ) -> Tuple[int, int]:
         """返回物品的有效 (w, h)：log 形状 → 手动画框 → 推算框 → 手动确认候选 → 默认 1×1。"""
         if k.shape is not None:
@@ -504,7 +521,11 @@ class GridWindow:
         return (1, 1)
 
     def _effective_display_origin(
-        self, uid: str, k: ItemKnowledge, *, with_infer: bool = True,
+        self,
+        uid: str,
+        k: ItemKnowledge,
+        *,
+        with_infer: bool = True,
     ) -> Tuple[int, int]:
         """
         返回物品在网格上显示的左上角 (col, row)。
@@ -520,7 +541,9 @@ class GridWindow:
             return 0, 0
         return k.box_id % GRID_COLS, k.box_id // GRID_COLS
 
-    def _manual_shapes_merged_for_occupied(self) -> Dict[str, Tuple[int, int, int, int]]:
+    def _manual_shapes_merged_for_occupied(
+        self,
+    ) -> Dict[str, Tuple[int, int, int, int]]:
         """占位用：推算与手动画框合并，手动画框覆盖同 uid 的推算。"""
         out = dict(self._infer_shapes)
         out.update(self._manual_shapes)
@@ -536,8 +559,12 @@ class GridWindow:
             phantom_items=self._phantom_items,
             manual_shapes=self._manual_shapes,
             exclude_uid="",
-            item_shape_wh=lambda u, kk: self._effective_shape_wh(u, kk, with_infer=False),
-            item_origin=lambda u, kk: self._effective_display_origin(u, kk, with_infer=False),
+            item_shape_wh=lambda u, kk: self._effective_shape_wh(
+                u, kk, with_infer=False
+            ),
+            item_origin=lambda u, kk: self._effective_display_origin(
+                u, kk, with_infer=False
+            ),
         )
 
     def _sync_infer_shapes_from_analysis(self) -> None:
@@ -554,7 +581,9 @@ class GridWindow:
             manual_shapes=self._manual_shapes,
             occupied_cells=set(occ),
             vacant_manual_suppress=set(self._vacant_manual_suppress),
-            max_box_id=max_anchor_box_id_from_overlay_ui(self.state.items, self._phantom_items),
+            max_box_id=max_anchor_box_id_from_overlay_ui(
+                self.state.items, self._phantom_items
+            ),
             raw_pricing=rp,
         )
         self._infer_shapes = {
@@ -563,7 +592,7 @@ class GridWindow:
             if len(t) >= 4
         }
 
-    def _build_occupied(self, exclude_uid: str = '') -> set:
+    def _build_occupied(self, exclude_uid: str = "") -> set:
         """
         返回所有已确认/手动定位/幽灵物品所占据的格子 (row, col) 集合。
         逻辑在 :func:`grid_overlay.build_occupied_cells`。
@@ -573,8 +602,12 @@ class GridWindow:
             phantom_items=self._phantom_items,
             manual_shapes=self._manual_shapes_merged_for_occupied(),
             exclude_uid=exclude_uid,
-            item_shape_wh=lambda u, kk: self._effective_shape_wh(u, kk, with_infer=True),
-            item_origin=lambda u, kk: self._effective_display_origin(u, kk, with_infer=True),
+            item_shape_wh=lambda u, kk: self._effective_shape_wh(
+                u, kk, with_infer=True
+            ),
+            item_origin=lambda u, kk: self._effective_display_origin(
+                u, kk, with_infer=True
+            ),
         )
 
     def _phantom_effective_quality(self, uid: str) -> Optional[int]:
@@ -591,15 +624,15 @@ class GridWindow:
     def _phantom_pen_theme(self, uid: str) -> str:
         """手画幽灵底色：金笔（缺省/Q5）淡黄，红笔（Q6）粉，其余保持深青。"""
         if uid not in self._phantom_items:
-            return 'neutral'
+            return "neutral"
         p = self._phantom_quality_pref.get(uid)
         if p == 6:
-            return 'red'
+            return "red"
         if p == PHANTOM_Q_INFER:
-            return 'neutral'
+            return "neutral"
         if isinstance(p, int) and 1 <= p <= 4:
-            return 'neutral'
-        return 'gold'
+            return "neutral"
+        return "gold"
 
     def _unknown_quality_pref_eligible(self, uid: str, k: ItemKnowledge) -> bool:
         """日志物品品质未知时可在候选弹窗手选品质（已知 CID 锁定单物品时不适用）。"""
@@ -624,11 +657,7 @@ class GridWindow:
     @staticmethod
     def _rect_cells(row: int, col: int, w: int, h: int) -> set:
         """返回矩形覆盖的所有格子坐标 (row, col)。"""
-        return {
-            (row + ddr, col + ddc)
-            for ddr in range(h)
-            for ddc in range(w)
-        }
+        return {(row + ddr, col + ddc) for ddr in range(h) for ddc in range(w)}
 
     def _rect_overlaps_occupied(
         self,
@@ -636,7 +665,7 @@ class GridWindow:
         col: int,
         w: int,
         h: int,
-        exclude_uid: str = '',
+        exclude_uid: str = "",
     ) -> bool:
         """检查指定矩形是否覆盖已有可靠物品或幽灵物品。"""
         if row < 0 or col < 0 or w <= 0 or h <= 0:
@@ -672,15 +701,22 @@ class GridWindow:
                     max_shape = (max_w, max_h)
 
         return query_item(
-            effective_shape, self._effective_quality_for_query(uid, k), k.categories, k.item_cid,
-            self.csv_index, self.csv_items,
-            k.excluded_categories, k.excluded_qualities,
+            effective_shape,
+            self._effective_quality_for_query(uid, k),
+            k.categories,
+            k.item_cid,
+            self.csv_index,
+            self.csv_items,
+            k.excluded_categories,
+            k.excluded_qualities,
             max_shape_wh=max_shape,
             map_category_weights=self._map_category_weights,
             map_id=self.state.map_id,
         )
 
-    def _valid_manual_confirm_item(self, uid: str, k: ItemKnowledge) -> Optional[CsvItem]:
+    def _valid_manual_confirm_item(
+        self, uid: str, k: ItemKnowledge
+    ) -> Optional[CsvItem]:
         """
         返回当前仍然有效的手动确认候选；若已与新约束冲突会自动撤销。
         冲突判定基于当前网格约束筛出的候选集合。
@@ -717,33 +753,39 @@ class GridWindow:
         elif k.box_id is not None:
             max_w, max_h = self._compute_max_size(uid, k)
             if max_w < GRID_COLS or max_h < GRID_ROWS:
+
                 def _shape_fits(shape: int) -> bool:
                     ss = str(shape)
                     if len(ss) == 2:
                         return int(ss[0]) <= max_w and int(ss[1]) <= max_h
                     return False
+
                 candidates = [i for i in candidates if _shape_fits(i.shape)]
 
         eq = self._effective_quality_for_query(uid, k)
         if eq is not None:
             candidates = [i for i in candidates if i.quality == eq]
         if k.excluded_qualities:
-            candidates = [i for i in candidates if i.quality not in k.excluded_qualities]
+            candidates = [
+                i for i in candidates if i.quality not in k.excluded_qualities
+            ]
         if k.categories:
             with_cat = [
-                i for i in candidates
-                if all(c in i.category_tags for c in k.categories)
+                i for i in candidates if all(c in i.category_tags for c in k.categories)
             ]
             if with_cat:
                 candidates = with_cat
         if k.excluded_categories:
             candidates = [
-                i for i in candidates
+                i
+                for i in candidates
                 if not any(c in k.excluded_categories for c in i.category_tags)
             ]
         return candidates
 
-    def _candidate_items_without_manual_shape_lock(self, uid: str, k: ItemKnowledge) -> List[CsvItem]:
+    def _candidate_items_without_manual_shape_lock(
+        self, uid: str, k: ItemKnowledge
+    ) -> List[CsvItem]:
         """
         与 _candidate_items_for_grid 相同的品质/类别/排除约束，
         但不按当前手动矩形过滤 shape；仅用日志形状或 BoxId 推断的最大外形包络。
@@ -758,34 +800,42 @@ class GridWindow:
         elif k.box_id is not None:
             max_w, max_h = self._compute_max_size(uid, k)
             if max_w < GRID_COLS or max_h < GRID_ROWS:
+
                 def _shape_fits(shape: int) -> bool:
                     ss = str(shape)
                     if len(ss) == 2:
                         return int(ss[0]) <= max_w and int(ss[1]) <= max_h
                     return False
+
                 candidates = [i for i in candidates if _shape_fits(i.shape)]
 
         eq = self._effective_quality_for_query(uid, k)
         if eq is not None:
             candidates = [i for i in candidates if i.quality == eq]
         if k.excluded_qualities:
-            candidates = [i for i in candidates if i.quality not in k.excluded_qualities]
+            candidates = [
+                i for i in candidates if i.quality not in k.excluded_qualities
+            ]
         if k.categories:
             with_cat = [
-                i for i in candidates
-                if all(c in i.category_tags for c in k.categories)
+                i for i in candidates if all(c in i.category_tags for c in k.categories)
             ]
             if with_cat:
                 candidates = with_cat
         if k.excluded_categories:
             candidates = [
-                i for i in candidates
+                i
+                for i in candidates
                 if not any(c in k.excluded_categories for c in i.category_tags)
             ]
         return candidates
 
     def _marginal_shape_probability_mass(
-        self, uid: str, k: ItemKnowledge, w: int, h: int,
+        self,
+        uid: str,
+        k: ItemKnowledge,
+        w: int,
+        h: int,
     ) -> float:
         """候选（未锁手动外形）中 ItemSlotType=w×h 的归一化概率质量之和。"""
         if not (1 <= w <= 9 and 1 <= h <= 9):
@@ -795,7 +845,9 @@ class GridWindow:
         if not loose:
             return 0.0
         probs = candidate_probabilities(
-            loose, self._map_category_weights, self.state.map_id,
+            loose,
+            self._map_category_weights,
+            self.state.map_id,
         )
         return sum(probs.get(c.item_id, 0.0) for c in loose if c.shape == vs)
 
@@ -886,9 +938,7 @@ class GridWindow:
         category_ratios = map_category_ratios(self.state.map_id)
         if not category_ratios and self._map_category_weights:
             # 回退：若没有地图根图数据，则使用传入的类别倍率入口。
-            total_weight = sum(
-                w for w in self._map_category_weights.values() if w > 0
-            )
+            total_weight = sum(w for w in self._map_category_weights.values() if w > 0)
             if total_weight > 0:
                 category_ratios = {
                     cid: w / total_weight
@@ -944,7 +994,9 @@ class GridWindow:
         memo_key = (limit, id(occupied))
         if self._empty_zone_fraud_memo != memo_key:
             self._empty_zone_fraud_memo = memo_key
-            self._empty_zone_fraud_cells = _grid_overlay.fraud_empty_cells_in_zone_prefix(occupied, limit)
+            self._empty_zone_fraud_cells = (
+                _grid_overlay.fraud_empty_cells_in_zone_prefix(occupied, limit)
+            )
         return (row, col) in self._empty_zone_fraud_cells
 
     def _cell_is_vacant_manual_suppress_eligible(self, row: int, col: int) -> bool:
@@ -973,8 +1025,11 @@ class GridWindow:
 
     def _compute_empty_zone_count(self) -> Optional[int]:
         """空置有效格数：算法在 ``analysis.grid_overlay``，此处仅聚合 UI 状态并触发计算。"""
-        occupied = self._occupied_for_draw if self._occupied_for_draw is not None \
+        occupied = (
+            self._occupied_for_draw
+            if self._occupied_for_draw is not None
             else self._build_occupied()
+        )
         d = _grid_overlay.compute_overlay_vacant_dict(
             occupied=occupied,
             max_box_id=self._empty_zone_max_box_id(),
@@ -995,11 +1050,11 @@ class GridWindow:
         """在 (row, col) 以 (w, h) 大小创建一个幽灵物品，并应用当前扫描历史约束。"""
         if self._rect_overlaps_occupied(row, col, w, h):
             return False
-        phid = f'phantom_{self._phantom_counter}'
+        phid = f"phantom_{self._phantom_counter}"
         self._phantom_counter += 1
         pk = ItemKnowledge(uid=phid)
         pk.box_id = row * GRID_COLS + col
-        pk.box_id_confirmed = True   # 用户明确指定了位置
+        pk.box_id_confirmed = True  # 用户明确指定了位置
         self._phantom_items[phid] = pk
         self._manual_shapes[phid] = (w, h, col, row)
         if use_infer_quality:
@@ -1032,19 +1087,30 @@ class GridWindow:
                 if (r, c) in self._vacant_manual_suppress:
                     continue
                 if self._exclude_from_empty_zone_estimate(
-                    r, c, occupied, limit, apply_fraud_filter=apply_fraud,
+                    r,
+                    c,
+                    occupied,
+                    limit,
+                    apply_fraud_filter=apply_fraud,
                 ):
                     continue
                 remaining.add((r, c))
         return remaining, ""
 
     def _expand_rect_collides_others(
-        self, dr: int, dc: int, w: int, h: int, exclude_uid: str,
+        self,
+        dr: int,
+        dc: int,
+        w: int,
+        h: int,
+        exclude_uid: str,
     ) -> bool:
         occ = self._build_occupied(exclude_uid=exclude_uid)
         return any(cell in occ for cell in self._rect_cells(dr, dc, w, h))
 
-    def _current_item_manual_rect(self, uid: str, k: ItemKnowledge) -> Tuple[int, int, int, int]:
+    def _current_item_manual_rect(
+        self, uid: str, k: ItemKnowledge
+    ) -> Tuple[int, int, int, int]:
         """当前显示用的 (w,h,dc,dr)；手动画框 → 推算框 → 否则按 BoxId 作 1×1 左上角。"""
         if uid in self._manual_shapes:
             return self._manual_shapes[uid]
@@ -1076,7 +1142,11 @@ class GridWindow:
 
     def _expandable_log_items_by_phase(
         self,
-    ) -> Tuple[List[Tuple[str, ItemKnowledge]], List[Tuple[str, ItemKnowledge]], List[Tuple[str, ItemKnowledge]]]:
+    ) -> Tuple[
+        List[Tuple[str, ItemKnowledge]],
+        List[Tuple[str, ItemKnowledge]],
+        List[Tuple[str, ItemKnowledge]],
+    ]:
         """
         仅日志物品、且轮廓未由日志锁死 (shape is None) 的可调项。
         艾莎看板：非金红（含未知）→ 金 → 红；不创建新 UID。
@@ -1149,7 +1219,9 @@ class GridWindow:
         返回 (uid, k, dc, dr, w, h, extra_cells)。
         """
         best_key: Optional[Tuple[float, ...]] = None
-        best_payload: Optional[Tuple[str, ItemKnowledge, int, int, int, int, set]] = None
+        best_payload: Optional[Tuple[str, ItemKnowledge, int, int, int, int, set]] = (
+            None
+        )
         for uid, k in phase:
             ow, oh, odc, odr = self._current_item_manual_rect(uid, k)
             old_cells = self._rect_cells(odr, odc, ow, oh)
@@ -1172,9 +1244,16 @@ class GridWindow:
                             extra = ncells - old_cells
                             if not extra or not extra <= remaining:
                                 continue
-                            if self._expand_rect_collides_others(ndr, ndc, nw, nh, exclude_uid=uid):
+                            if self._expand_rect_collides_others(
+                                ndr, ndc, nw, nh, exclude_uid=uid
+                            ):
                                 continue
-                            if self._probe_log_item_manual_shape(uid, k, ndc, ndr, nw, nh) <= 0:
+                            if (
+                                self._probe_log_item_manual_shape(
+                                    uid, k, ndc, ndr, nw, nh
+                                )
+                                <= 0
+                            ):
                                 continue
                             gain = len(extra)
                             area = nw * nh
@@ -1184,8 +1263,10 @@ class GridWindow:
                                 else 0.0
                             )
                             key: Tuple[float, ...] = (
-                                float(gain), shape_mass, float(area)
-                            ) if use_shape_probability else (float(gain), float(area))
+                                (float(gain), shape_mass, float(area))
+                                if use_shape_probability
+                                else (float(gain), float(area))
+                            )
                             if best_key is None or key > best_key:
                                 best_key = key
                                 best_payload = (uid, k, ndc, ndr, nw, nh, extra)
@@ -1234,7 +1315,9 @@ class GridWindow:
             while remaining and guard < 800:
                 guard += 1
                 picked = self._pick_best_log_expansion(
-                    phase, remaining, use_shape_probability=use_sp,
+                    phase,
+                    remaining,
+                    use_shape_probability=use_sp,
                 )
                 if picked is None:
                     break
@@ -1343,12 +1426,12 @@ class GridWindow:
             return n - 1
 
         right_ext = _scan_right()
-        left_ext  = _scan_left()
-        down_ext  = _scan_down()
-        up_ext    = _scan_up()
+        left_ext = _scan_left()
+        down_ext = _scan_down()
+        up_ext = _scan_up()
 
         max_w = max(1, left_ext + 1 + right_ext)
-        max_h = max(1, up_ext  + 1 + down_ext)
+        max_h = max(1, up_ext + 1 + down_ext)
         return max_w, max_h
 
     def _empty_zone_max_box_id(self) -> int:
@@ -1362,8 +1445,13 @@ class GridWindow:
         if not isinstance(gd, dict):
             return {}
         keys = (
-            "HeroSkillLog", "MapSkillLog", "ItemSkillLog", "UserLog",
-            "Round", "Uid", "MapId",
+            "HeroSkillLog",
+            "MapSkillLog",
+            "ItemSkillLog",
+            "UserLog",
+            "Round",
+            "Uid",
+            "MapId",
         )
         out: dict = {}
         for k in keys:
@@ -1377,11 +1465,13 @@ class GridWindow:
         return out
 
     def _append_skill_log_entry(self, event_type: str, data: dict) -> None:
-        self._skill_logs.append({
-            "event_type": event_type,
-            "game_data": self._skill_log_game_data_subset(data),
-            "received_at_unix": time.time(),
-        })
+        self._skill_logs.append(
+            {
+                "event_type": event_type,
+                "game_data": self._skill_log_game_data_subset(data),
+                "received_at_unix": time.time(),
+            }
+        )
 
     def _make_board_snapshot(self) -> dict:
         """不含 ``pricing`` 的画板快照：供定价、单件估价与写盘复用。"""
@@ -1399,7 +1489,9 @@ class GridWindow:
             "current_round": int(self.state.current_round or 1),
             "map_id": int(self.state.map_id or 0),
             "raw_pricing": raw_pricing,
-            "grid_overlay": self._grid_overlay_to_json(raw_pricing, occupied_cells=occ_infer),
+            "grid_overlay": self._grid_overlay_to_json(
+                raw_pricing, occupied_cells=occ_infer
+            ),
         }
 
     def _build_pricing_snapshot_dict(self) -> dict:
@@ -1427,7 +1519,9 @@ class GridWindow:
             unknown_cell_quality_pref=self._unknown_cell_quality_pref,
             vacant_manual_suppress=self._vacant_manual_suppress,
             occupied_cells=occ_for_infer,
-            max_box_id=max_anchor_box_id_from_overlay_ui(self.state.items, self._phantom_items),
+            max_box_id=max_anchor_box_id_from_overlay_ui(
+                self.state.items, self._phantom_items
+            ),
         )
         inf = export.get("infer_shapes") or {}
         self._infer_shapes = {
@@ -1445,7 +1539,9 @@ class GridWindow:
         }
         export["vacant"] = _grid_overlay.compute_overlay_vacant_dict(
             occupied=set(occ_full),
-            max_box_id=int(max_anchor_box_id_from_overlay_ui(self.state.items, self._phantom_items)),
+            max_box_id=int(
+                max_anchor_box_id_from_overlay_ui(self.state.items, self._phantom_items)
+            ),
             vacant_manual_suppress=set(self._vacant_manual_suppress),
             board_snapshot=vacant_ctx,
         )
@@ -1496,7 +1592,7 @@ class GridWindow:
 
     def _start_live_monitor(self) -> None:
         """启动后台 daemon 线程，从日志文件当前末尾开始 tail。"""
-        t = threading.Thread(target=self._monitor_thread, daemon=True, name='log-tail')
+        t = threading.Thread(target=self._monitor_thread, daemon=True, name="log-tail")
         t.start()
 
     def _monitor_thread(self) -> None:
@@ -1505,8 +1601,8 @@ class GridWindow:
         状态修改均在 self._lock 保护下进行；事件信号写入 self._queue。
         """
         silent = io.StringIO()
-        with open(self._log_path, 'r', encoding='utf-8', errors='replace') as f:
-            f.seek(0, 2)   # 直接跳到文件末尾，只处理新增内容
+        with open(self._log_path, "r", encoding="utf-8", errors="replace") as f:
+            f.seek(0, 2)  # 直接跳到文件末尾，只处理新增内容
             while True:
                 line = f.readline()
                 if not line:
@@ -1518,30 +1614,46 @@ class GridWindow:
                 event_type, data = result
 
                 with self._lock:
-                    if event_type == 'S2C_33_game_start_notify':
+                    if event_type == "S2C_33_game_start_notify":
                         self.state = GameState()
                         self._live_game_active = True
                         self._skill_logs.clear()
                         self._last_raw_pricing = None
-                        handle_s2c33(data, self.state, self.csv_index, self.csv_items, silent)
+                        handle_s2c33(
+                            data, self.state, self.csv_index, self.csv_items, silent
+                        )
                         self._append_skill_log_entry(event_type, data)
-                        self._queue.put('new_game')
+                        self._queue.put("new_game")
 
-                    elif event_type == 'S2C_37_game_next_round_notify' and self._live_game_active:
-                        handle_s2c37(data, self.state, self.csv_index, self.csv_items, silent)
+                    elif (
+                        event_type == "S2C_37_game_next_round_notify"
+                        and self._live_game_active
+                    ):
+                        handle_s2c37(
+                            data, self.state, self.csv_index, self.csv_items, silent
+                        )
                         self._append_skill_log_entry(event_type, data)
-                        self._queue.put('update')
+                        self._queue.put("update")
 
-                    elif event_type == 'S2C_39_game_use_item' and self._live_game_active:
-                        handle_s2c39(data, self.state, self.csv_index, self.csv_items, silent)
+                    elif (
+                        event_type == "S2C_39_game_use_item" and self._live_game_active
+                    ):
+                        handle_s2c39(
+                            data, self.state, self.csv_index, self.csv_items, silent
+                        )
                         self._append_skill_log_entry(event_type, data)
-                        self._queue.put('update')
+                        self._queue.put("update")
 
-                    elif event_type == 'S2C_45_game_over_notify' and self._live_game_active:
-                        handle_s2c45(data, self.state, self.csv_index, self.csv_items, silent)
+                    elif (
+                        event_type == "S2C_45_game_over_notify"
+                        and self._live_game_active
+                    ):
+                        handle_s2c45(
+                            data, self.state, self.csv_index, self.csv_items, silent
+                        )
                         self._append_skill_log_entry(event_type, data)
                         self._live_game_active = False
-                        self._queue.put('update')
+                        self._queue.put("update")
 
     def _poll_updates(self) -> None:
         """
@@ -1549,12 +1661,12 @@ class GridWindow:
         多个信号合并为一次绘制，避免短时间内多次重绘。
         """
         needs_redraw = False
-        is_new_game  = False
+        is_new_game = False
         try:
             while True:
                 msg = self._queue.get_nowait()
                 needs_redraw = True
-                if msg == 'new_game':
+                if msg == "new_game":
                     is_new_game = True
         except queue.Empty:
             pass
@@ -1715,7 +1827,9 @@ class GridWindow:
                 f"当前 points = {p.get('points')!s}。",
             ]
             if ahmad_active:
-                gpf, gpc = p.get("generic_points_floor"), p.get("generic_points_ceiling")
+                gpf, gpc = p.get("generic_points_floor"), p.get(
+                    "generic_points_ceiling"
+                )
                 base_lines.insert(
                     1,
                     "己方英雄为 Ahmad（204）：points/floor/ceiling 均为 event_stats 多候选 Ahmad 主价；"
@@ -1725,7 +1839,13 @@ class GridWindow:
         else:
             return ""
 
-        lines = [title, *head, f"公式：{formula}", f"其中 U = ¥{u:,.0f}", f"数字：{num}"]
+        lines = [
+            title,
+            *head,
+            f"公式：{formula}",
+            f"其中 U = ¥{u:,.0f}",
+            f"数字：{num}",
+        ]
         return "\n".join(lines)
 
     def _tooltip_text_early_exclusions(self) -> str:
@@ -1787,7 +1907,11 @@ class GridWindow:
         pts = p.get("points")
         pf, pc = p.get("points_floor"), p.get("points_ceiling")
         ahmad_active = bool(p.get("ahmad_pricing_active"))
-        head = "主价（Ahmad：points = ahmad_points）" if ahmad_active else "主价（快照 pricing.points）"
+        head = (
+            "主价（Ahmad：points = ahmad_points）"
+            if ahmad_active
+            else "主价（快照 pricing.points）"
+        )
         lines: List[str] = [head]
         if pts is not None:
             try:
@@ -1829,10 +1953,7 @@ class GridWindow:
         empty_count = self._compute_empty_zone_count()
         if empty_count and empty_count > 0:
             self._total_label.config(
-                text=(
-                    f"估算总价  ¥{total:,.0f}"
-                    f"    空置 {empty_count} 格"
-                )
+                text=(f"估算总价  ¥{total:,.0f}" f"    空置 {empty_count} 格")
             )
         else:
             self._total_label.config(text=f"估算总价  ¥{total:,.0f}")
@@ -1900,7 +2021,7 @@ class GridWindow:
             f"第 {self.state.current_round} 回合{live_tag}"
             f"{self._board_mode_title_suffix()}"
         )
-        self.root.configure(bg='#1a1a2e')
+        self.root.configure(bg="#1a1a2e")
 
         self._build_vacant_estimate_bar()
         self._build_info_bar()
@@ -1908,32 +2029,38 @@ class GridWindow:
         self._build_canvas()
         if self._snapshots:
             self._build_nav_bar()
-        self.root.bind('<Control-Shift-V>', lambda _e: self._on_expand_log_items_into_vacant())
-        self.root.bind('<Control-Shift-Z>', lambda _e: self._on_restore_manual_shapes())
+        self.root.bind(
+            "<Control-Shift-V>", lambda _e: self._on_expand_log_items_into_vacant()
+        )
+        self.root.bind("<Control-Shift-Z>", lambda _e: self._on_restore_manual_shapes())
         self._draw()
 
     def _build_info_bar(self) -> None:
-        bar = tk.Frame(self.root, bg='#1a1a2e', pady=4)
-        bar.pack(fill='x', padx=8)
+        bar = tk.Frame(self.root, bg="#1a1a2e", pady=4)
+        bar.pack(fill="x", padx=8)
 
         # StringVar 方便后续 _refresh() 直接更新，无需重建 Label
         self._info_text = tk.StringVar(value=self._info_summary_text())
         tk.Label(
             bar,
             textvariable=self._info_text,
-            bg='#1a1a2e', fg='#ccccdd',
-            font=('微软雅黑', 10),
+            bg="#1a1a2e",
+            fg="#ccccdd",
+            font=("微软雅黑", 10),
             wraplength=CANVAS_MAX_W - 20,
-            justify='left',
-        ).pack(side='left')
+            justify="left",
+        ).pack(side="left")
 
         if self._log_path:
             tk.Label(
-                bar, text=" ● LIVE ",
-                bg='#c03030', fg='#ffffff',
-                font=('微软雅黑', 9, 'bold'),
-                relief='flat', padx=4,
-            ).pack(side='right', padx=8)
+                bar,
+                text=" ● LIVE ",
+                bg="#c03030",
+                fg="#ffffff",
+                font=("微软雅黑", 9, "bold"),
+                relief="flat",
+                padx=4,
+            ).pack(side="right", padx=8)
 
     def _build_vacant_estimate_bar(self) -> None:
         """窗口最上方：第一行主价 points + 扫描单价；第二行三档 est 与主价区间。"""
@@ -1964,7 +2091,9 @@ class GridWindow:
         self._est_label_early.pack(side="left")
         row2 = tk.Frame(bar, bg="#152030")
         row2.pack(fill="x", padx=10, pady=(6, 0))
-        tip_lbl = dict(bg="#152030", fg="#b8e0ff", font=("微软雅黑", 10), cursor="hand2")
+        tip_lbl = dict(
+            bg="#152030", fg="#b8e0ff", font=("微软雅黑", 10), cursor="hand2"
+        )
         self._est_label_red = tk.Label(row2, text="", **tip_lbl)
         self._est_label_orange = tk.Label(row2, text="", **tip_lbl)
         self._est_label_gold_red = tk.Label(row2, text="", **tip_lbl)
@@ -1975,62 +2104,81 @@ class GridWindow:
         self._est_label_floor.pack(side="left", padx=(0, 0))
         _PricingHoverTip(self._est_label_aisha, self._tooltip_text_main_points)
         _PricingHoverTip(self._est_label_early, self._tooltip_text_early_exclusions)
-        _PricingHoverTip(self._est_label_red, lambda: self._tooltip_text_position_estimate("red"))
-        _PricingHoverTip(self._est_label_orange, lambda: self._tooltip_text_position_estimate("orange"))
-        _PricingHoverTip(self._est_label_gold_red, lambda: self._tooltip_text_position_estimate("gold_red"))
-        _PricingHoverTip(self._est_label_floor, lambda: self._tooltip_text_position_estimate("floor"))
+        _PricingHoverTip(
+            self._est_label_red, lambda: self._tooltip_text_position_estimate("red")
+        )
+        _PricingHoverTip(
+            self._est_label_orange,
+            lambda: self._tooltip_text_position_estimate("orange"),
+        )
+        _PricingHoverTip(
+            self._est_label_gold_red,
+            lambda: self._tooltip_text_position_estimate("gold_red"),
+        )
+        _PricingHoverTip(
+            self._est_label_floor, lambda: self._tooltip_text_position_estimate("floor")
+        )
         self._update_vacant_estimate_bar()
 
     def _build_legend(self) -> None:
-        bar = tk.Frame(self.root, bg='#222233', pady=5)
-        bar.pack(fill='x', padx=8)
+        bar = tk.Frame(self.root, bg="#222233", pady=5)
+        bar.pack(fill="x", padx=8)
 
         # 只保留未知品质色块，已知品质直接通过格子颜色区分。
-        tk.Label(bar, text=" 未知 ", bg=UNKNOWN_BG, fg='#ffffff',
-                 font=('微软雅黑', 8), relief='flat', padx=2).pack(side='left', padx=(6, 2))
+        tk.Label(
+            bar,
+            text=" 未知 ",
+            bg=UNKNOWN_BG,
+            fg="#ffffff",
+            font=("微软雅黑", 8),
+            relief="flat",
+            padx=2,
+        ).pack(side="left", padx=(6, 2))
 
         tk.Button(
             bar,
             text="扩展日志物品",
             command=self._on_expand_log_items_into_vacant,
-            bg='#355545',
-            fg='#e0ffe8',
-            font=('微软雅黑', 8),
-            relief='flat',
+            bg="#355545",
+            fg="#e0ffe8",
+            font=("微软雅黑", 8),
+            relief="flat",
             padx=8,
             pady=2,
-            cursor='hand2',
-        ).pack(side='left', padx=(8, 4))
+            cursor="hand2",
+        ).pack(side="left", padx=(8, 4))
 
         tk.Button(
             bar,
             text="还原轮廓",
             command=self._on_restore_manual_shapes,
-            bg='#554535',
-            fg='#ffe8e0',
-            font=('微软雅黑', 8),
-            relief='flat',
+            bg="#554535",
+            fg="#ffe8e0",
+            font=("微软雅黑", 8),
+            relief="flat",
             padx=8,
             pady=2,
-            cursor='hand2',
-        ).pack(side='left', padx=(0, 4))
+            cursor="hand2",
+        ).pack(side="left", padx=(0, 4))
 
         tk.Label(
             bar,
             text="空置格·右键剔除/恢复",
-            bg='#222233', fg='#aaaabb',
-            font=('微软雅黑', 8),
-        ).pack(side='left', padx=(10, 4))
+            bg="#222233",
+            fg="#aaaabb",
+            font=("微软雅黑", 8),
+        ).pack(side="left", padx=(10, 4))
 
         # 右侧：估算总价（首次绘制后由 _update_total_label 刷新）
         self._total_label = tk.Label(
             bar,
             text="估算总价  ¥0",
-            bg='#222233', fg='#e8d080',
-            font=('微软雅黑', 10, 'bold'),
-            cursor='hand2',
+            bg="#222233",
+            fg="#e8d080",
+            font=("微软雅黑", 10, "bold"),
+            cursor="hand2",
         )
-        self._total_label.pack(side='right', padx=12)
+        self._total_label.pack(side="right", padx=12)
         _PricingHoverTip(self._total_label, self._tooltip_text_grid_total)
 
         tk.Label(
@@ -2041,45 +2189,57 @@ class GridWindow:
                 "右键幽灵删格；日志物品轮廓未锁时右键命中可还原手动画框；"
                 "弹窗双击行确认；Ctrl+Shift+Z：还原轮廓"
             ),
-            bg='#222233', fg='#555577',
-            font=('微软雅黑', 8),
-        ).pack(side='right', padx=8)
+            bg="#222233",
+            fg="#555577",
+            font=("微软雅黑", 8),
+        ).pack(side="right", padx=8)
 
     def _build_nav_bar(self) -> None:
         """快照导航栏：上一步 / 当前位置 / 下一步（仅快照模式显示）。"""
-        bar = tk.Frame(self.root, bg='#161625', pady=6)
-        bar.pack(fill='x', padx=8)
+        bar = tk.Frame(self.root, bg="#161625", pady=6)
+        bar.pack(fill="x", padx=8)
 
         btn_cfg = dict(
-            font=('微软雅黑', 9, 'bold'), relief='flat',
-            padx=14, pady=4, cursor='hand2',
+            font=("微软雅黑", 9, "bold"),
+            relief="flat",
+            padx=14,
+            pady=4,
+            cursor="hand2",
         )
         self._btn_prev = tk.Button(
-            bar, text="◀  上一步",
-            bg='#334466', fg='#aabbdd',
-            command=self._snap_prev, **btn_cfg,
+            bar,
+            text="◀  上一步",
+            bg="#334466",
+            fg="#aabbdd",
+            command=self._snap_prev,
+            **btn_cfg,
         )
-        self._btn_prev.pack(side='left', padx=8)
+        self._btn_prev.pack(side="left", padx=8)
 
         self._nav_label = tk.StringVar()
         tk.Label(
-            bar, textvariable=self._nav_label,
-            bg='#161625', fg='#ddddee',
-            font=('微软雅黑', 10, 'bold'),
-        ).pack(side='left', expand=True)
+            bar,
+            textvariable=self._nav_label,
+            bg="#161625",
+            fg="#ddddee",
+            font=("微软雅黑", 10, "bold"),
+        ).pack(side="left", expand=True)
 
         self._btn_next = tk.Button(
-            bar, text="下一步  ▶",
-            bg='#334466', fg='#aabbdd',
-            command=self._snap_next, **btn_cfg,
+            bar,
+            text="下一步  ▶",
+            bg="#334466",
+            fg="#aabbdd",
+            command=self._snap_next,
+            **btn_cfg,
         )
-        self._btn_next.pack(side='right', padx=8)
+        self._btn_next.pack(side="right", padx=8)
 
         self._update_nav_label()
 
         # 键盘快捷键
-        self.root.bind('<Left>',  lambda _: self._snap_prev())
-        self.root.bind('<Right>', lambda _: self._snap_next())
+        self.root.bind("<Left>", lambda _: self._snap_prev())
+        self.root.bind("<Right>", lambda _: self._snap_next())
 
     def _update_nav_label(self) -> None:
         if not self._snapshots:
@@ -2089,12 +2249,12 @@ class GridWindow:
         self._nav_label.set(f"{label}   ({self._snap_idx + 1} / {total})")
         # 边界禁用按钮
         self._btn_prev.config(
-            state='normal' if self._snap_idx > 0 else 'disabled',
-            bg='#334466' if self._snap_idx > 0 else '#222233',
+            state="normal" if self._snap_idx > 0 else "disabled",
+            bg="#334466" if self._snap_idx > 0 else "#222233",
         )
         self._btn_next.config(
-            state='normal' if self._snap_idx < len(self._snapshots) - 1 else 'disabled',
-            bg='#334466' if self._snap_idx < len(self._snapshots) - 1 else '#222233',
+            state="normal" if self._snap_idx < len(self._snapshots) - 1 else "disabled",
+            bg="#334466" if self._snap_idx < len(self._snapshots) - 1 else "#222233",
         )
 
     def _snap_goto(self, idx: int) -> None:
@@ -2128,13 +2288,13 @@ class GridWindow:
         self._snap_goto(self._snap_idx + 1)
 
     def _build_canvas(self) -> None:
-        outer = tk.Frame(self.root, bg='#1a1a2e')
-        outer.pack(fill='both', expand=True, anchor='w', padx=8, pady=(4, 8))
+        outer = tk.Frame(self.root, bg="#1a1a2e")
+        outer.pack(fill="both", expand=True, anchor="w", padx=8, pady=(4, 8))
 
         cw = GRID_COLS * CELL_W + 1
         ch = GRID_ROWS * CELL_H + 1
 
-        v_sb = tk.Scrollbar(outer, orient='vertical')
+        v_sb = tk.Scrollbar(outer, orient="vertical")
 
         self.canvas = tk.Canvas(
             outer,
@@ -2147,41 +2307,43 @@ class GridWindow:
             takefocus=1,
         )
         v_sb.config(command=self.canvas.yview)
-        self.canvas.pack(side='left', fill='y', expand=True)
-        v_sb.pack(side='left', fill='y')
-        self.canvas.bind('<Button-1>',         self._on_click)
-        self.canvas.bind('<B1-Motion>',        self._on_drag)
-        self.canvas.bind('<ButtonRelease-1>',  self._on_drag_end)
-        self.canvas.bind('<Button-2>',         self._on_middle_press)   # 中键占位（角缩放已改 Ctrl+左键）
-        self.canvas.bind('<B2-Motion>',         self._on_drag)
-        self.canvas.bind('<ButtonRelease-2>', self._on_drag_end)
-        self.canvas.bind('<Button-3>',         self._on_right_click)
-        self.canvas.bind('<B3-Motion>',       self._on_drag)
-        self.canvas.bind('<ButtonRelease-3>', self._on_drag_end)
+        self.canvas.pack(side="left", fill="y", expand=True)
+        v_sb.pack(side="left", fill="y")
+        self.canvas.bind("<Button-1>", self._on_click)
+        self.canvas.bind("<B1-Motion>", self._on_drag)
+        self.canvas.bind("<ButtonRelease-1>", self._on_drag_end)
+        self.canvas.bind(
+            "<Button-2>", self._on_middle_press
+        )  # 中键占位（角缩放已改 Ctrl+左键）
+        self.canvas.bind("<B2-Motion>", self._on_drag)
+        self.canvas.bind("<ButtonRelease-2>", self._on_drag_end)
+        self.canvas.bind("<Button-3>", self._on_right_click)
+        self.canvas.bind("<B3-Motion>", self._on_drag)
+        self.canvas.bind("<ButtonRelease-3>", self._on_drag_end)
 
         # 鼠标滚轮滚动画布内容（Windows）
-        self.canvas.bind('<Enter>', self._bind_mousewheel)
-        self.canvas.bind('<Leave>', self._unbind_mousewheel)
+        self.canvas.bind("<Enter>", self._bind_mousewheel)
+        self.canvas.bind("<Leave>", self._unbind_mousewheel)
 
     def _bind_mousewheel(self, _event: tk.Event) -> None:
         self.canvas.focus_set()
-        self.canvas.bind_all('<MouseWheel>', self._on_mousewheel)
+        self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
 
     def _unbind_mousewheel(self, _event: tk.Event) -> None:
-        self.canvas.unbind_all('<MouseWheel>')
+        self.canvas.unbind_all("<MouseWheel>")
 
     def _on_mousewheel(self, event: tk.Event) -> str:
         """光标在画布上时滚动 Canvas 内容。"""
         if event.delta:
-            self.canvas.yview_scroll(-1 if event.delta > 0 else 1, 'units')
-        return 'break'
+            self.canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
+        return "break"
 
     # ── 绘制 ──────────────────────────────────────────────────────────────
 
     def _draw(self) -> None:
         self._sync_infer_shapes_from_analysis()
         canvas = self.canvas
-        canvas.delete('all')
+        canvas.delete("all")
 
         # 构建共享占位格缓存，供本次绘制所有 _compute_max_size 调用复用
         self._occupied_for_draw = self._build_occupied()
@@ -2192,13 +2354,22 @@ class GridWindow:
                 x1, y1 = col * CELL_W, row * CELL_H
                 x2, y2 = x1 + CELL_W, y1 + CELL_H
                 canvas.create_rectangle(
-                    x1, y1, x2, y2,
-                    fill=EMPTY_BG, outline=GRID_LINE, width=1,
+                    x1,
+                    y1,
+                    x2,
+                    y2,
+                    fill=EMPTY_BG,
+                    outline=GRID_LINE,
+                    width=1,
                 )
                 bid = row * GRID_COLS + col
                 canvas.create_text(
-                    x1 + 4, y1 + 3, text=str(bid),
-                    anchor='nw', fill='#404050', font=('Consolas', 7),
+                    x1 + 4,
+                    y1 + 3,
+                    text=str(bid),
+                    anchor="nw",
+                    fill="#404050",
+                    font=("Consolas", 7),
                 )
 
         # ── 1.5  空置候选区（橘红半透明；诈骗格剔除与计数逻辑一致） ─────
@@ -2217,17 +2388,23 @@ class GridWindow:
                     if (row, col) in self._vacant_manual_suppress:
                         continue
                     if self._exclude_from_empty_zone_estimate(
-                        row, col, self._occupied_for_draw, vac_limit,
+                        row,
+                        col,
+                        self._occupied_for_draw,
+                        vac_limit,
                         apply_fraud_filter=apply_fraud_cells,
                     ):
                         continue
                     x1 = col * CELL_W
                     y1 = row * CELL_H
                     canvas.create_rectangle(
-                        x1, y1, x1 + CELL_W, y1 + CELL_H,
+                        x1,
+                        y1,
+                        x1 + CELL_W,
+                        y1 + CELL_H,
                         fill=EMPTY_ZONE_COLOR,
                         stipple=EMPTY_ZONE_STIPPLE,
-                        outline='',
+                        outline="",
                     )
 
         # ── 2. 物品格子（log 数据）────────────────────────────────────────
@@ -2244,20 +2421,23 @@ class GridWindow:
         # ── 4. 正在拖拽画框的预览虚线框 ────────────────────────────────────
         if self._phantom_draw_state:
             pds = self._phantom_draw_state
-            sr, sc = pds['start_row'], pds['start_col']
-            cr, cc = pds['cur_row'],   pds['cur_col']
+            sr, sc = pds["start_row"], pds["start_col"]
+            cr, cc = pds["cur_row"], pds["cur_col"]
             min_r, max_r = min(sr, cr), max(sr, cr)
             min_c, max_c = min(sc, cc), max(sc, cc)
             preview_w = max_c - min_c + 1
             preview_h = max_r - min_r + 1
             preview_invalid = self._rect_overlaps_occupied(
-                min_r, min_c, preview_w, preview_h,
+                min_r,
+                min_c,
+                preview_w,
+                preview_h,
             )
             if preview_invalid:
-                preview_color = '#cc4444'
-            elif pds.get('phantom_infer'):
+                preview_color = "#cc4444"
+            elif pds.get("phantom_infer"):
                 preview_color = PHANTOM_BORDER
-            elif pds.get('default_quality') == 6:
+            elif pds.get("default_quality") == 6:
                 preview_color = PHANTOM_PINK_BORDER
             else:
                 preview_color = PHANTOM_GOLD_BORDER
@@ -2266,22 +2446,30 @@ class GridWindow:
             px2 = (max_c + 1) * CELL_W - 1
             py2 = (max_r + 1) * CELL_H - 1
             canvas.create_rectangle(
-                px1, py1, px2, py2,
-                fill='', outline=preview_color, width=2, dash=(6, 3),
+                px1,
+                py1,
+                px2,
+                py2,
+                fill="",
+                outline=preview_color,
+                width=2,
+                dash=(6, 3),
             )
             # 显示将要创建的大小
             canvas.create_text(
-                (px1 + px2) / 2, (py1 + py2) / 2,
+                (px1 + px2) / 2,
+                (py1 + py2) / 2,
                 text=f"{preview_w}x{preview_h}" + (" 重叠" if preview_invalid else ""),
-                fill=preview_color, font=('微软雅黑', 10, 'bold'),
+                fill=preview_color,
+                font=("微软雅黑", 10, "bold"),
             )
 
         # 每次绘制后同步更新估价标签（先算 pricing 缓存，再刷新总价）
         if hasattr(self, "_est_label_red"):
             self._update_vacant_estimate_bar()
-        if hasattr(self, '_total_label'):
+        if hasattr(self, "_total_label"):
             self._update_total_label()
-        if hasattr(self, '_info_text'):
+        if hasattr(self, "_info_text"):
             self._info_text.set(self._info_summary_text())
 
         # 绘制完成，释放缓存
@@ -2304,56 +2492,63 @@ class GridWindow:
         cy = (y1 + y2) / 2
 
         is_phantom = uid in self._phantom_items
-        q   = self._display_quality(uid, k) or 0
-        pen = self._phantom_pen_theme(uid) if is_phantom else ''
+        q = self._display_quality(uid, k) or 0
+        pen = self._phantom_pen_theme(uid) if is_phantom else ""
         if is_phantom:
-            if pen == 'red':
+            if pen == "red":
                 bg = PHANTOM_PINK_BG
                 fg = PHANTOM_PINK_FG
-            elif pen == 'gold':
+            elif pen == "gold":
                 bg = PHANTOM_GOLD_BG
                 fg = PHANTOM_GOLD_FG
             else:
                 bg = PHANTOM_BG
-                fg = QUALITY_FG.get(q, UNKNOWN_FG) if q else '#e8e8f0'
+                fg = QUALITY_FG.get(q, UNKNOWN_FG) if q else "#e8e8f0"
         else:
             bg = QUALITY_BG.get(q, UNKNOWN_BG)
             fg = QUALITY_FG.get(q, UNKNOWN_FG)
-        tag = f'item_{uid}'
+        tag = f"item_{uid}"
         price_value = self._display_price_value(uid, k)
-        is_high_value = (
-            price_value is not None and price_value >= HIGH_VALUE_THRESHOLD
-        )
+        is_high_value = price_value is not None and price_value >= HIGH_VALUE_THRESHOLD
 
         # 外边框：幽灵=金/红/青，手动调整=黄色，普通=白色
         if is_phantom:
-            if pen == 'red':
+            if pen == "red":
                 border_color = PHANTOM_PINK_BORDER
-            elif pen == 'gold':
+            elif pen == "gold":
                 border_color = PHANTOM_GOLD_BORDER
             else:
                 border_color = PHANTOM_BORDER
             border_width = 2
         elif is_high_value:
-            border_color = '#ffd34d'
+            border_color = "#ffd34d"
             border_width = 3
         elif uid in self._manual_shapes:
-            border_color = '#ffdd00'
+            border_color = "#ffdd00"
             border_width = 2
         elif uid in self._infer_shapes:
-            border_color = '#66b3ff'
+            border_color = "#66b3ff"
             border_width = 2
         else:
-            border_color = '#ffffff'
+            border_color = "#ffffff"
             border_width = 1
         canvas.create_rectangle(
-            x1 - border_width, y1 - border_width,
-            x2 + border_width, y2 + border_width,
-            fill=border_color, outline='', tags=(tag,),
+            x1 - border_width,
+            y1 - border_width,
+            x2 + border_width,
+            y2 + border_width,
+            fill=border_color,
+            outline="",
+            tags=(tag,),
         )
         canvas.create_rectangle(
-            x1, y1, x2, y2,
-            fill=bg, outline='', tags=(tag,),
+            x1,
+            y1,
+            x2,
+            y2,
+            fill=bg,
+            outline="",
+            tags=(tag,),
         )
 
         # 构建显示文字
@@ -2361,22 +2556,32 @@ class GridWindow:
         text = "\n".join(lines)
 
         canvas.create_text(
-            cx, cy, text=text,
+            cx,
+            cy,
+            text=text,
             fill=fg,
-            font=('微软雅黑', 8),
-            justify='center', anchor='center',
+            font=("微软雅黑", 8),
+            justify="center",
+            anchor="center",
             tags=(tag,),
         )
 
         if is_high_value:
             canvas.create_rectangle(
-                x2 - 31, y1, x2, y1 + 14,
-                fill='#ffd34d', outline='', tags=(tag,),
+                x2 - 31,
+                y1,
+                x2,
+                y1 + 14,
+                fill="#ffd34d",
+                outline="",
+                tags=(tag,),
             )
             canvas.create_text(
-                x2 - 15, y1 + 7,
-                text="10万+", fill='#3a2600',
-                font=('微软雅黑', 7, 'bold'),
+                x2 - 15,
+                y1 + 7,
+                text="10万+",
+                fill="#3a2600",
+                font=("微软雅黑", 7, "bold"),
                 tags=(tag,),
             )
 
@@ -2385,34 +2590,62 @@ class GridWindow:
             hw = RESIZE_HANDLE_W
             hc = RESIZE_HANDLE_COLOR
             pad = 2
-            stipple = 'gray50'
+            stipple = "gray50"
             # 东侧（改宽）— 先于南/北绘制，避免视觉上被横条完全盖住
             canvas.create_rectangle(
-                x2 - hw, y1 + pad, x2, y2 - pad,
-                fill=hc, outline='', stipple=stipple, tags=(tag,),
+                x2 - hw,
+                y1 + pad,
+                x2,
+                y2 - pad,
+                fill=hc,
+                outline="",
+                stipple=stipple,
+                tags=(tag,),
             )
             # 西侧（改宽，同时移动左边界）
             canvas.create_rectangle(
-                x1, y1 + pad, x1 + hw, y2 - pad,
-                fill=hc, outline='', stipple=stipple, tags=(tag,),
+                x1,
+                y1 + pad,
+                x1 + hw,
+                y2 - pad,
+                fill=hc,
+                outline="",
+                stipple=stipple,
+                tags=(tag,),
             )
             # 南侧（改高）
             canvas.create_rectangle(
-                x1 + pad, y2 - hw, x2 - pad, y2,
-                fill=hc, outline='', stipple=stipple, tags=(tag,),
+                x1 + pad,
+                y2 - hw,
+                x2 - pad,
+                y2,
+                fill=hc,
+                outline="",
+                stipple=stipple,
+                tags=(tag,),
             )
             # 北侧（改高，同时移动上边界）
             canvas.create_rectangle(
-                x1 + pad, y1, x2 - pad, y1 + hw,
-                fill=hc, outline='', stipple=stipple, tags=(tag,),
+                x1 + pad,
+                y1,
+                x2 - pad,
+                y1 + hw,
+                fill=hc,
+                outline="",
+                stipple=stipple,
+                tags=(tag,),
             )
             # 四角实心方块（视觉提示；命中区见 _find_resize_corner_handle_at，配合 Ctrl+左键）
             ch = max(hw, RESIZE_CORNER_HIT // 2 + 4)
             for cx2, cy2 in [(x1, y1), (x2, y1), (x1, y2), (x2, y2)]:
                 canvas.create_rectangle(
-                    cx2 - ch // 2, cy2 - ch // 2,
-                    cx2 + ch // 2, cy2 + ch // 2,
-                    fill=hc, outline='', tags=(tag,),
+                    cx2 - ch // 2,
+                    cy2 - ch // 2,
+                    cx2 + ch // 2,
+                    cy2 + ch // 2,
+                    fill=hc,
+                    outline="",
+                    tags=(tag,),
                 )
 
     def _item_text_lines(self, uid: str, k: ItemKnowledge) -> List[str]:
@@ -2430,13 +2663,15 @@ class GridWindow:
         if uid in self._phantom_items:
             type_text = "手动"
         elif k.categories:
-            type_text = "/".join(_CAT_SHORT.get(c, str(c)) for c in sorted(k.categories))
+            type_text = "/".join(
+                _CAT_SHORT.get(c, str(c)) for c in sorted(k.categories)
+            )
 
         if k.shape:
             shape_text = ""
         elif uid in self._manual_shapes:
             mw, mh, mdc, mdr = self._manual_shapes[uid]
-            shape_text = f"{mw}x{mh}*"   # * 表示手动设置
+            shape_text = f"{mw}x{mh}*"  # * 表示手动设置
         elif uid in self._infer_shapes:
             iw, ih, _, _ = self._infer_shapes[uid]
             shape_text = f"{iw}x{ih}≈"  # ≈ 表示推算
@@ -2455,8 +2690,11 @@ class GridWindow:
 
         if k.price is not None and k.item_cid:
             # 精确已知（200021 或游戏结束揭晓）
-            name = (self.csv_index[k.item_cid].name
-                    if k.item_cid in self.csv_index else f"CID={k.item_cid}")
+            name = (
+                self.csv_index[k.item_cid].name
+                if k.item_cid in self.csv_index
+                else f"CID={k.item_cid}"
+            )
             lines.append(_short(name))
             mark = "★" if k.price >= HIGH_VALUE_THRESHOLD else ""
             lines.append(f"{mark}¥{k.price:,}")
@@ -2513,11 +2751,13 @@ class GridWindow:
 
         # 4. 空格左键拖幽灵：普通(推断) / Ctrl+左键=金（四角缩放已在上方处理）
         self._phantom_draw_state = {
-            'start_row': row, 'start_col': col,
-            'cur_row':   row, 'cur_col':   col,
-            'button':    1,
-            'default_quality': None,
-            'phantom_infer': not ctrl,
+            "start_row": row,
+            "start_col": col,
+            "cur_row": row,
+            "cur_col": col,
+            "button": 1,
+            "default_quality": None,
+            "phantom_infer": not ctrl,
         }
 
     def _on_middle_press(self, event: tk.Event) -> None:
@@ -2557,14 +2797,18 @@ class GridWindow:
             self._toggle_vacant_manual_suppress(row, col)
             return
         self._phantom_draw_state = {
-            'start_row': row, 'start_col': col,
-            'cur_row':   row, 'cur_col':   col,
-            'button':    3,
-            'default_quality': 6,
-            'phantom_infer': False,
+            "start_row": row,
+            "start_col": col,
+            "cur_row": row,
+            "cur_col": col,
+            "button": 3,
+            "default_quality": 6,
+            "phantom_infer": False,
         }
 
-    def _find_resize_corner_handle_at(self, cx: int, cy: int) -> Optional[Tuple[str, str]]:
+    def _find_resize_corner_handle_at(
+        self, cx: int, cy: int
+    ) -> Optional[Tuple[str, str]]:
         """
         Ctrl+左键：命中某物品矩形四角附近（圆形距离）则返回 (uid, 'nw'|'ne'|'sw'|'se')。
         取距离最近的角，避免小格上多角重叠。
@@ -2575,16 +2819,16 @@ class GridWindow:
             if k.shape is not None or k.box_id is None:
                 continue
             dc, dr = self._effective_display_origin(uid, k)
-            w, h   = self._effective_shape_wh(uid, k)
+            w, h = self._effective_shape_wh(uid, k)
             x1 = dc * CELL_W + 2
             y1 = dr * CELL_H + 2
             x2 = (dc + w) * CELL_W - 2
             y2 = (dr + h) * CELL_H - 2
             for name, px, py in (
-                ('nw', float(x1), float(y1)),
-                ('ne', float(x2), float(y1)),
-                ('sw', float(x1), float(y2)),
-                ('se', float(x2), float(y2)),
+                ("nw", float(x1), float(y1)),
+                ("ne", float(x2), float(y1)),
+                ("sw", float(x1), float(y2)),
+                ("se", float(x2), float(y2)),
             ):
                 d = ((cx - px) ** 2 + (cy - py) ** 2) ** 0.5
                 if d <= rmax and (best is None or d < best[2]):
@@ -2604,22 +2848,23 @@ class GridWindow:
             if k.shape is not None or k.box_id is None:
                 continue
             dc, dr = self._effective_display_origin(uid, k)
-            w, h   = self._effective_shape_wh(uid, k)
+            w, h = self._effective_shape_wh(uid, k)
             x1 = dc * CELL_W + 2
             y1 = dr * CELL_H + 2
             x2 = (dc + w) * CELL_W - 2
             y2 = (dr + h) * CELL_H - 2
             in_x = x1 <= cx <= x2
             in_y = y1 <= cy <= y2
+
             # 排除四角（交给 Ctrl+左键四角缩放）
             def _not_corner_zone() -> bool:
-                if (abs(cx - x1) <= corner_ex and abs(cy - y1) <= corner_ex):
+                if abs(cx - x1) <= corner_ex and abs(cy - y1) <= corner_ex:
                     return False
-                if (abs(cx - x2) <= corner_ex and abs(cy - y1) <= corner_ex):
+                if abs(cx - x2) <= corner_ex and abs(cy - y1) <= corner_ex:
                     return False
-                if (abs(cx - x1) <= corner_ex and abs(cy - y2) <= corner_ex):
+                if abs(cx - x1) <= corner_ex and abs(cy - y2) <= corner_ex:
                     return False
-                if (abs(cx - x2) <= corner_ex and abs(cy - y2) <= corner_ex):
+                if abs(cx - x2) <= corner_ex and abs(cy - y2) <= corner_ex:
                     return False
                 return True
 
@@ -2627,34 +2872,36 @@ class GridWindow:
                 continue
             # 东侧
             if x2 - HZ <= cx <= x2 and in_y:
-                return uid, 'e'
+                return uid, "e"
             # 西侧
             if x1 <= cx <= x1 + HZ and in_y:
-                return uid, 'w'
+                return uid, "w"
             # 南侧
             if y2 - HZ <= cy <= y2 and in_x:
-                return uid, 's'
+                return uid, "s"
             # 北侧
             if y1 <= cy <= y1 + HZ and in_x:
-                return uid, 'n'
+                return uid, "n"
         return None
 
-    def _start_drag(self, uid: str, direction: str, cx: int, cy: int, button: int = 1) -> None:
+    def _start_drag(
+        self, uid: str, direction: str, cx: int, cy: int, button: int = 1
+    ) -> None:
         k = self.state.items.get(uid)
         if not k:
             return
-        w, h   = self._effective_shape_wh(uid, k)
+        w, h = self._effective_shape_wh(uid, k)
         dc, dr = self._effective_display_origin(uid, k)
         self._drag_state = {
-            'uid':       uid,
-            'direction': direction,   # 'n'|'s'|'e'|'w'|'nw'|'ne'|'sw'|'se'
-            'button':    button,
-            'start_cx':  cx,
-            'start_cy':  cy,
-            'orig_w':    w,
-            'orig_h':    h,
-            'orig_dc':   dc,   # 拖拽起始显示列
-            'orig_dr':   dr,   # 拖拽起始显示行
+            "uid": uid,
+            "direction": direction,  # 'n'|'s'|'e'|'w'|'nw'|'ne'|'sw'|'se'
+            "button": button,
+            "start_cx": cx,
+            "start_cy": cy,
+            "orig_w": w,
+            "orig_h": h,
+            "orig_dc": dc,  # 拖拽起始显示列
+            "orig_dr": dr,  # 拖拽起始显示行
         }
 
     def _on_drag(self, event: tk.Event) -> None:  # noqa: C901
@@ -2674,37 +2921,37 @@ class GridWindow:
             col = max(0, min(cx // CELL_W, GRID_COLS - 1))
             row = max(0, min(cy // CELL_H, self.vis_rows - 1))
             pds = self._phantom_draw_state
-            if row != pds['cur_row'] or col != pds['cur_col']:
-                pds['cur_row'] = row
-                pds['cur_col'] = col
+            if row != pds["cur_row"] or col != pds["cur_col"]:
+                pds["cur_row"] = row
+                pds["cur_col"] = col
                 self._draw()
             return
 
         # ── 缩放把手模式 ──────────────────────────────────────────────
         if not self._drag_state:
             return
-        ds  = self._drag_state
-        uid = ds['uid']
-        k   = self.state.items.get(uid)
+        ds = self._drag_state
+        uid = ds["uid"]
+        k = self.state.items.get(uid)
         if not k:
             return
 
         cx = int(self.canvas.canvasx(event.x))
         cy = int(self.canvas.canvasy(event.y))
-        dx_cells = (cx - ds['start_cx']) / CELL_W
-        dy_cells = (cy - ds['start_cy']) / CELL_H
+        dx_cells = (cx - ds["start_cx"]) / CELL_W
+        dy_cells = (cy - ds["start_cy"]) / CELL_H
 
-        w0, h0   = ds['orig_w'], ds['orig_h']
-        dc0, dr0 = ds['orig_dc'], ds['orig_dr']
-        direction = ds['direction']
+        w0, h0 = ds["orig_w"], ds["orig_h"]
+        dc0, dr0 = ds["orig_dc"], ds["orig_dr"]
+        direction = ds["direction"]
 
         brow = (k.box_id // GRID_COLS) if k.box_id is not None else dr0
-        bcol = (k.box_id % GRID_COLS)  if k.box_id is not None else dc0
+        bcol = (k.box_id % GRID_COLS) if k.box_id is not None else dc0
 
         occ = self._build_occupied(exclude_uid=uid)
 
         # ── 各方向计算 ────────────────────────────────────────────────────
-        if direction == 'e':
+        if direction == "e":
             # 右边界移动，左上角(dc0,dr0)不变
             delta = round(dx_cells)
             # 扩张时检查新列
@@ -2720,10 +2967,10 @@ class GridWindow:
             new_h = h0
             new_dc, new_dr = dc0, dr0
 
-        elif direction == 'w':
+        elif direction == "w":
             # 左边界移动，右边(dc0+w0-1)不变
-            delta = round(dx_cells)   # 向左为负
-            if delta < 0:             # 扩张（往左）
+            delta = round(dx_cells)  # 向左为负
+            if delta < 0:  # 扩张（往左）
                 max_ext = 0
                 for c in range(dc0 - 1, -1, -1):
                     if any((dr0 + r, c) in occ for r in range(h0)):
@@ -2733,11 +2980,11 @@ class GridWindow:
             raw_dc = dc0 + delta
             # 不能越过 BoxId（BoxId 必须在矩形内）
             new_dc = max(0, min(raw_dc, bcol))
-            new_w  = max(1, dc0 + w0 - new_dc)
-            new_h  = h0
+            new_w = max(1, dc0 + w0 - new_dc)
+            new_h = h0
             new_dr = dr0
 
-        elif direction == 's':
+        elif direction == "s":
             # 下边界移动，左上角不变
             delta = round(dy_cells)
             if delta > 0:
@@ -2747,13 +2994,13 @@ class GridWindow:
                         break
                     max_ext += 1
                 delta = min(delta, max_ext)
-            new_h  = max(brow - dr0 + 1, max(1, h0 + delta))
-            new_w  = w0
+            new_h = max(brow - dr0 + 1, max(1, h0 + delta))
+            new_w = w0
             new_dc, new_dr = dc0, dr0
 
-        elif direction == 'n':
+        elif direction == "n":
             # 上边界移动，下边(dr0+h0-1)不变
-            delta = round(dy_cells)   # 向上为负
+            delta = round(dy_cells)  # 向上为负
             if delta < 0:
                 max_ext = 0
                 for r in range(dr0 - 1, -1, -1):
@@ -2763,11 +3010,11 @@ class GridWindow:
                 delta = max(delta, -max_ext)
             raw_dr = dr0 + delta
             new_dr = max(0, min(raw_dr, brow))
-            new_h  = max(1, dr0 + h0 - new_dr)
-            new_w  = w0
+            new_h = max(1, dr0 + h0 - new_dr)
+            new_w = w0
             new_dc = dc0
 
-        elif direction == 'se':
+        elif direction == "se":
             # 先东后南（南向外扩时用当前新宽度扫占用）
             delta_e = round(dx_cells)
             if delta_e > 0:
@@ -2790,7 +3037,7 @@ class GridWindow:
                 delta_s = min(delta_s, max_ext)
             new_h = max(brow - dr0 + 1, max(1, h0 + delta_s))
 
-        elif direction == 'sw':
+        elif direction == "sw":
             delta_s = round(dy_cells)
             if delta_s > 0:
                 max_ext = 0
@@ -2815,7 +3062,7 @@ class GridWindow:
             new_dc = max(0, min(raw_dc, bcol))
             new_w = max(1, dc0 + w0 - new_dc)
 
-        elif direction == 'ne':
+        elif direction == "ne":
             delta_n = round(dy_cells)
             if delta_n < 0:
                 max_ext = 0
@@ -2839,7 +3086,7 @@ class GridWindow:
                 delta_e = min(delta_e, max_ext)
             new_w = max(bcol - dc0 + 1, max(1, w0 + delta_e))
 
-        elif direction == 'nw':
+        elif direction == "nw":
             delta_n = round(dy_cells)
             if delta_n < 0:
                 max_ext = 0
@@ -2870,8 +3117,8 @@ class GridWindow:
         # 网格边界最终夹紧
         new_dc = max(0, min(new_dc, GRID_COLS - 1))
         new_dr = max(0, min(new_dr, GRID_ROWS - 1))
-        new_w  = max(1, min(new_w, GRID_COLS - new_dc))
-        new_h  = max(1, min(new_h, GRID_ROWS - new_dr))
+        new_w = max(1, min(new_w, GRID_COLS - new_dc))
+        new_h = max(1, min(new_h, GRID_ROWS - new_dr))
 
         new_shape = (new_w, new_h, new_dc, new_dr)
         if self._manual_shapes.get(uid) != new_shape:
@@ -2879,26 +3126,29 @@ class GridWindow:
             self._draw()
 
     def _on_drag_end(self, event: tk.Event) -> None:
-        btn = getattr(event, 'num', 1)
+        btn = getattr(event, "num", 1)
         if self._phantom_draw_state is not None:
             pds = self._phantom_draw_state
-            if btn != pds.get('button', 1):
+            if btn != pds.get("button", 1):
                 return
-            sr, sc = pds['start_row'], pds['start_col']
-            cr, cc = pds['cur_row'],   pds['cur_col']
+            sr, sc = pds["start_row"], pds["start_col"]
+            cr, cc = pds["cur_row"], pds["cur_col"]
             min_r, max_r = min(sr, cr), max(sr, cr)
             min_c, max_c = min(sc, cc), max(sc, cc)
-            dq = pds.get('default_quality')
-            use_infer = bool(pds.get('phantom_infer'))
+            dq = pds.get("default_quality")
+            use_infer = bool(pds.get("phantom_infer"))
             self._create_phantom(
-                min_r, min_c, max_c - min_c + 1, max_r - min_r + 1,
+                min_r,
+                min_c,
+                max_c - min_c + 1,
+                max_r - min_r + 1,
                 default_phantom_quality=dq,
                 use_infer_quality=use_infer,
             )
             self._phantom_draw_state = None
             self._refresh()
         elif self._drag_state:
-            if self._drag_state.get('button', 1) != btn:
+            if self._drag_state.get("button", 1) != btn:
                 return
             self._drag_state = None
             self._refresh()
@@ -2924,13 +3174,16 @@ class GridWindow:
     # ── 候选弹窗 ──────────────────────────────────────────────────────────
 
     def _show_popup(
-        self, uid: str, k: ItemKnowledge,
-        mouse_x: int = 200, mouse_y: int = 200,
+        self,
+        uid: str,
+        k: ItemKnowledge,
+        mouse_x: int = 200,
+        mouse_y: int = 200,
     ) -> None:
         popup = tk.Toplevel(self.root)
         popup.title(f"物品候选  BoxId={k.box_id}")
         popup.transient(self.root)
-        popup.configure(bg='#f5f5f8')
+        popup.configure(bg="#f5f5f8")
 
         # 弹窗尺寸（含幽灵品质行）
         pw, ph = 580, 400
@@ -2983,48 +3236,53 @@ class GridWindow:
             else:
                 hdr_parts.append("品质: Q5（金默认）")
         elif display_quality:
-            if (
-                self._unknown_quality_pref_eligible(uid, k)
-                and isinstance(self._unknown_cell_quality_pref.get(uid), int)
+            if self._unknown_quality_pref_eligible(uid, k) and isinstance(
+                self._unknown_cell_quality_pref.get(uid), int
             ):
                 hdr_parts.append(f"品质: Q{display_quality}（候选筛选）")
             else:
                 hdr_parts.append(f"品质: Q{display_quality}（唯一补齐）")
         if k.categories:
-            cats = " / ".join(CATEGORY_NAMES.get(c, str(c)) for c in sorted(k.categories))
+            cats = " / ".join(
+                CATEGORY_NAMES.get(c, str(c)) for c in sorted(k.categories)
+            )
             hdr_parts.append(f"类别: {cats}")
         if k.item_cid:
             hdr_parts.append(f"CID: {k.item_cid}")
         hdr_text = "    |    ".join(hdr_parts) if hdr_parts else "（属性未知）"
 
         q = display_quality or 0
-        hdr_bg = QUALITY_BG.get(q, '#888888')
+        hdr_bg = QUALITY_BG.get(q, "#888888")
         tk.Label(
-            popup, text=hdr_text,
-            bg=hdr_bg, fg='#ffffff',
-            font=('微软雅黑', 10, 'bold'),
-            pady=6, padx=10, anchor='w',
-        ).pack(fill='x')
+            popup,
+            text=hdr_text,
+            bg=hdr_bg,
+            fg="#ffffff",
+            font=("微软雅黑", 10, "bold"),
+            pady=6,
+            padx=10,
+            anchor="w",
+        ).pack(fill="x")
 
         # 幽灵物品：默认金（Q5）；取消勾选或选「原推断」恢复含金/红等原推断；下拉可指定其它 Q
         if uid in self._phantom_items:
             pq0 = self._phantom_quality_pref.get(uid)
             combo_vals = (
-                '金默认（Q5）',
-                '原推断（含金/红）',
-                'Q1',
-                'Q2',
-                'Q3',
-                'Q4',
-                'Q5',
-                'Q6',
+                "金默认（Q5）",
+                "原推断（含金/红）",
+                "Q1",
+                "Q2",
+                "Q3",
+                "Q4",
+                "Q5",
+                "Q6",
             )
             if pq0 == PHANTOM_Q_INFER:
-                combo_init = '原推断（含金/红）'
+                combo_init = "原推断（含金/红）"
             elif isinstance(pq0, int):
-                combo_init = f'Q{pq0}'
+                combo_init = f"Q{pq0}"
             else:
-                combo_init = '金默认（Q5）'
+                combo_init = "金默认（Q5）"
 
             def _phantom_q_apply_and_reopen() -> None:
                 self._validate_manual_confirmations()
@@ -3034,12 +3292,15 @@ class GridWindow:
                 self.root.after(
                     20,
                     lambda u=uid: self._show_popup(
-                        u, self._phantom_items[u], sx, sy,
+                        u,
+                        self._phantom_items[u],
+                        sx,
+                        sy,
                     ),
                 )
 
-            q_block = tk.Frame(popup, bg='#e8f4ff')
-            q_block.pack(fill='x', padx=8, pady=(4, 2))
+            q_block = tk.Frame(popup, bg="#e8f4ff")
+            q_block.pack(fill="x", padx=8, pady=(4, 2))
             chk_var = tk.IntVar(value=0 if pq0 == PHANTOM_Q_INFER else 1)
 
             def _on_phantom_gold_chk() -> None:
@@ -3054,41 +3315,41 @@ class GridWindow:
                 text="金品质（Q5）默认",
                 variable=chk_var,
                 command=_on_phantom_gold_chk,
-                bg='#e8f4ff',
-                fg='#223344',
-                activebackground='#e8f4ff',
-                font=('微软雅黑', 9),
-            ).pack(side='left', padx=(0, 8))
+                bg="#e8f4ff",
+                fg="#223344",
+                activebackground="#e8f4ff",
+                font=("微软雅黑", 9),
+            ).pack(side="left", padx=(0, 8))
 
             q_var = tk.StringVar(value=combo_init)
             cb = ttk.Combobox(
                 q_block,
                 textvariable=q_var,
                 width=16,
-                state='readonly',
-                font=('微软雅黑', 9),
+                state="readonly",
+                font=("微软雅黑", 9),
                 values=combo_vals,
             )
 
             def _on_phantom_q_selected(_evt: tk.Event) -> None:
                 val = q_var.get()
-                if val == '金默认（Q5）':
+                if val == "金默认（Q5）":
                     self._phantom_quality_pref.pop(uid, None)
-                elif val == '原推断（含金/红）':
+                elif val == "原推断（含金/红）":
                     self._phantom_quality_pref[uid] = PHANTOM_Q_INFER
                 else:
                     self._phantom_quality_pref[uid] = int(val[1:])
                 _phantom_q_apply_and_reopen()
 
-            cb.bind('<<ComboboxSelected>>', _on_phantom_q_selected)
-            cb.pack(side='left', padx=4)
+            cb.bind("<<ComboboxSelected>>", _on_phantom_q_selected)
+            cb.pack(side="left", padx=4)
             tk.Label(
                 q_block,
                 text="取消勾选=原推断",
-                bg='#e8f4ff',
-                fg='#556677',
-                font=('微软雅黑', 8),
-            ).pack(side='left', padx=6)
+                bg="#e8f4ff",
+                fg="#556677",
+                font=("微软雅黑", 8),
+            ).pack(side="left", padx=6)
 
         # 日志物品品质未知：下拉筛选候选品质（不限 = 与原先多品质候选一致）
         elif self._unknown_quality_pref_eligible(uid, k):
@@ -3107,40 +3368,40 @@ class GridWindow:
 
                 self.root.after(20, _reopen_unknown_popup)
 
-            u_block = tk.Frame(popup, bg='#fff4e8')
-            u_block.pack(fill='x', padx=8, pady=(4, 2))
+            u_block = tk.Frame(popup, bg="#fff4e8")
+            u_block.pack(fill="x", padx=8, pady=(4, 2))
             tk.Label(
                 u_block,
                 text="候选品质:",
-                bg='#fff4e8',
-                fg='#223344',
-                font=('微软雅黑', 9),
-            ).pack(side='left', padx=(0, 6))
-            combo_vals_u = ('不限品质', 'Q1', 'Q2', 'Q3', 'Q4', 'Q5', 'Q6')
+                bg="#fff4e8",
+                fg="#223344",
+                font=("微软雅黑", 9),
+            ).pack(side="left", padx=(0, 6))
+            combo_vals_u = ("不限品质", "Q1", "Q2", "Q3", "Q4", "Q5", "Q6")
             if isinstance(uq0, int) and 1 <= uq0 <= 6:
-                combo_init_u = f'Q{uq0}'
+                combo_init_u = f"Q{uq0}"
             else:
-                combo_init_u = '不限品质'
+                combo_init_u = "不限品质"
             uq_var = tk.StringVar(value=combo_init_u)
             cb_u = ttk.Combobox(
                 u_block,
                 textvariable=uq_var,
                 width=14,
-                state='readonly',
-                font=('微软雅黑', 9),
+                state="readonly",
+                font=("微软雅黑", 9),
                 values=combo_vals_u,
             )
 
             def _on_unknown_q_selected(_evt: tk.Event) -> None:
                 val = uq_var.get()
-                if val == '不限品质':
+                if val == "不限品质":
                     self._unknown_cell_quality_pref.pop(uid, None)
                 else:
                     self._unknown_cell_quality_pref[uid] = int(val[1:])
                 _unknown_q_apply_and_reopen()
 
-            cb_u.bind('<<ComboboxSelected>>', _on_unknown_q_selected)
-            cb_u.pack(side='left', padx=4)
+            cb_u.bind("<<ComboboxSelected>>", _on_unknown_q_selected)
+            cb_u.pack(side="left", padx=4)
 
         # ── 过滤候选（含负向约束 + 最大尺寸推断） ──────────────────────────
         candidates = self._candidate_items_for_grid(uid, k)
@@ -3157,10 +3418,13 @@ class GridWindow:
         if n > 1:
             prices = [i.base_value for i in candidates]
             min_p, max_p = min(prices), max(prices)
-            _best, _count, _unique, weighted_est, weighted_label = self._query_item_for_grid(uid, k)
+            _best, _count, _unique, weighted_est, weighted_label = (
+                self._query_item_for_grid(uid, k)
+            )
             weighted_text = (
                 f"{weighted_label}: ¥{weighted_est:,.0f}    "
-                if weighted_est is not None else ""
+                if weighted_est is not None
+                else ""
             )
             stat_text = (
                 f"共 {n} 个候选    "
@@ -3176,10 +3440,15 @@ class GridWindow:
             stat_text = "无匹配候选"
 
         tk.Label(
-            popup, text=stat_text,
-            bg='#ebebf0', fg='#444455',
-            font=('微软雅黑', 9), pady=4, padx=8, anchor='w',
-        ).pack(fill='x')
+            popup,
+            text=stat_text,
+            bg="#ebebf0",
+            fg="#444455",
+            font=("微软雅黑", 9),
+            pady=4,
+            padx=8,
+            anchor="w",
+        ).pack(fill="x")
 
         # ── 已排除类别 ──────────────────────────────────────────────────
         if k.excluded_categories:
@@ -3189,49 +3458,55 @@ class GridWindow:
             tk.Label(
                 popup,
                 text=f"  已排除类别（{len(k.excluded_categories)}个）: {excl_names}",
-                bg='#f5e8e8', fg='#883333',
-                font=('微软雅黑', 8), pady=3, padx=10, anchor='w',
-            ).pack(fill='x')
+                bg="#f5e8e8",
+                fg="#883333",
+                font=("微软雅黑", 8),
+                pady=3,
+                padx=10,
+                anchor="w",
+            ).pack(fill="x")
 
         # ── 候选列表 ────────────────────────────────────────────────────
-        frame = tk.Frame(popup, bg='#f5f5f8')
-        frame.pack(fill='both', expand=True, padx=8, pady=(5, 3))
+        frame = tk.Frame(popup, bg="#f5f5f8")
+        frame.pack(fill="both", expand=True, padx=8, pady=(5, 3))
 
         cols_def = [
-            ('名称',   125, 'w'),
-            ('品质',    45, 'center'),
-            ('形状',    50, 'center'),
-            ('类别',   120, 'w'),
-            ('概率',    65, 'e'),
-            ('价格',    75, 'e'),
+            ("名称", 125, "w"),
+            ("品质", 45, "center"),
+            ("形状", 50, "center"),
+            ("类别", 120, "w"),
+            ("概率", 65, "e"),
+            ("价格", 75, "e"),
         ]
         tree = ttk.Treeview(
             frame,
             columns=[c[0] for c in cols_def],
-            show='headings',
+            show="headings",
             height=10,
         )
         style = ttk.Style()
-        style.configure('Treeview', font=('微软雅黑', 9), rowheight=20)
-        style.configure('Treeview.Heading', font=('微软雅黑', 9, 'bold'))
+        style.configure("Treeview", font=("微软雅黑", 9), rowheight=20)
+        style.configure("Treeview.Heading", font=("微软雅黑", 9, "bold"))
 
         for col_name, width, anchor in cols_def:
             tree.heading(col_name, text=col_name)
             tree.column(col_name, width=width, anchor=anchor, minwidth=40)
 
-        vsb = ttk.Scrollbar(frame, orient='vertical', command=tree.yview)
+        vsb = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
         tree.configure(yscrollcommand=vsb.set)
-        vsb.pack(side='right', fill='y')
-        tree.pack(side='left', fill='both', expand=True)
+        vsb.pack(side="right", fill="y")
+        tree.pack(side="left", fill="both", expand=True)
 
         # 用颜色区分价格高低（高于中位价的标黄，最高价标橙）
-        median_val = statistics.median([i.base_value for i in candidates]) if n > 1 else 0
-        top_val    = candidates[0].base_value if candidates else 0
-        tree.tag_configure('top',    background='#ffe4b0')
-        tree.tag_configure('valuable', background='#ffd6d6')
-        tree.tag_configure('high',   background='#fffff0')
-        tree.tag_configure('normal', background='#ffffff')
-        tree.tag_configure('confirmed', background='#d9f7d9')
+        median_val = (
+            statistics.median([i.base_value for i in candidates]) if n > 1 else 0
+        )
+        top_val = candidates[0].base_value if candidates else 0
+        tree.tag_configure("top", background="#ffe4b0")
+        tree.tag_configure("valuable", background="#ffd6d6")
+        tree.tag_configure("high", background="#fffff0")
+        tree.tag_configure("normal", background="#ffffff")
+        tree.tag_configure("confirmed", background="#d9f7d9")
 
         iid_to_item: Dict[str, CsvItem] = {}
         selected_iid: Optional[str] = None
@@ -3241,28 +3516,35 @@ class GridWindow:
                 CATEGORY_NAMES.get(c, str(c)) for c in item.category_tags
             )
             if confirmed_cid and item.item_id == confirmed_cid:
-                tag = 'confirmed'
+                tag = "confirmed"
             elif item.base_value >= HIGH_VALUE_THRESHOLD:
-                tag = 'valuable'
+                tag = "valuable"
             elif item.base_value == top_val and n > 1:
-                tag = 'top'
+                tag = "top"
             elif item.base_value >= median_val:
-                tag = 'high'
+                tag = "high"
             else:
-                tag = 'normal'
-            iid = tree.insert('', 'end', values=(
-                item.name,
-                f"Q{item.quality}",
-                fmt_shape(item.shape),
-                cat_str,
-                f"{candidate_probs.get(item.item_id, 0.0) * 100:.2f}%",
-                f"¥{item.base_value:,}",
-            ), tags=(tag,))
+                tag = "normal"
+            iid = tree.insert(
+                "",
+                "end",
+                values=(
+                    item.name,
+                    f"Q{item.quality}",
+                    fmt_shape(item.shape),
+                    cat_str,
+                    f"{candidate_probs.get(item.item_id, 0.0) * 100:.2f}%",
+                    f"¥{item.base_value:,}",
+                ),
+                tags=(tag,),
+            )
             iid_to_item[iid] = item
             if confirmed_cid and item.item_id == confirmed_cid:
                 selected_iid = iid
 
-        status_var = tk.StringVar(value="双击候选可确认；确认后将用于价格/估算/品质显示。")
+        status_var = tk.StringVar(
+            value="双击候选可确认；确认后将用于价格/估算/品质显示。"
+        )
 
         def _update_status_from_item(item: CsvItem, confirmed: bool = False) -> None:
             if confirmed:
@@ -3301,8 +3583,8 @@ class GridWindow:
             self._refresh()
             popup.destroy()
 
-        tree.bind('<<TreeviewSelect>>', _on_select)
-        tree.bind('<Double-1>', _confirm_selected)
+        tree.bind("<<TreeviewSelect>>", _on_select)
+        tree.bind("<Double-1>", _confirm_selected)
         if selected_iid is not None:
             tree.selection_set(selected_iid)
             tree.focus(selected_iid)
@@ -3317,34 +3599,54 @@ class GridWindow:
 
         # ── 关闭按钮 ────────────────────────────────────────────────────
         tk.Label(
-            popup, textvariable=status_var,
-            bg='#eef3ff', fg='#334466',
-            font=('微软雅黑', 9), pady=4, padx=10, anchor='w',
-        ).pack(fill='x', padx=8, pady=(0, 3))
+            popup,
+            textvariable=status_var,
+            bg="#eef3ff",
+            fg="#334466",
+            font=("微软雅黑", 9),
+            pady=4,
+            padx=10,
+            anchor="w",
+        ).pack(fill="x", padx=8, pady=(0, 3))
 
-        btn_frame = tk.Frame(popup, bg='#f5f5f8')
+        btn_frame = tk.Frame(popup, bg="#f5f5f8")
         btn_frame.pack(pady=4)
         tk.Button(
-            btn_frame, text="确认所选后选项",
+            btn_frame,
+            text="确认所选后选项",
             command=_confirm_selected,
-            font=('微软雅黑', 9), relief='flat',
-            bg='#2f8f46', fg='white', padx=10, pady=4,
-            cursor='hand2',
-        ).pack(side='left', padx=4)
+            font=("微软雅黑", 9),
+            relief="flat",
+            bg="#2f8f46",
+            fg="white",
+            padx=10,
+            pady=4,
+            cursor="hand2",
+        ).pack(side="left", padx=4)
         tk.Button(
-            btn_frame, text="取消确认",
+            btn_frame,
+            text="取消确认",
             command=_clear_confirmation,
-            font=('微软雅黑', 9), relief='flat',
-            bg='#8f5f2f', fg='white', padx=10, pady=4,
-            cursor='hand2',
-        ).pack(side='left', padx=4)
+            font=("微软雅黑", 9),
+            relief="flat",
+            bg="#8f5f2f",
+            fg="white",
+            padx=10,
+            pady=4,
+            cursor="hand2",
+        ).pack(side="left", padx=4)
         tk.Button(
-            btn_frame, text="  关  闭  ",
+            btn_frame,
+            text="  关  闭  ",
             command=popup.destroy,
-            font=('微软雅黑', 9), relief='flat',
-            bg='#5566aa', fg='white', padx=10, pady=4,
-            cursor='hand2',
-        ).pack(side='left', padx=4)
+            font=("微软雅黑", 9),
+            relief="flat",
+            bg="#5566aa",
+            fg="white",
+            padx=10,
+            pady=4,
+            cursor="hand2",
+        ).pack(side="left", padx=4)
 
     # ── 启动 ──────────────────────────────────────────────────────────────
 
