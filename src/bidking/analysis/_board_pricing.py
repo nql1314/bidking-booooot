@@ -885,7 +885,7 @@ def build_snapshot_pricing_dict(
             and pts > 0
             and float(rnd_min) > _RANDOM_AVG_MIN_DOMINANCE_RATIO * float(pts)
         ):
-            pts = int((pts + rnd_min) / 2)
+            pts = rnd_min + pts/3
             pts_floor = pts
             pts_ceiling = pts
             early_pts_blended_with_random_avg = True

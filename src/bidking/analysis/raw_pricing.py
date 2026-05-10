@@ -335,10 +335,13 @@ def _finalize_tier_min_bounds(
     count_min_k: str,
     grid_min_k: str,
 ) -> None:
-    """合并 ``count_min`` / ``grid_min``：在件数/总格基础上与均价、均格启发式下界取大。
+    """合并 ``count_min`` / ``grid_min``。
 
-    均价为整数时合并下界为 ``1``；否则先取最小正整数 ``n`` 使 ``avg*n`` 接近整数
-    （``_min_positive_int_avg_product_near_integer_relaxed``：阈值逐级 ×10 放宽）；均格分支同理。
+    ``count_min``：在观测件数/总格基础上，与均价、均格启发式下界取大（均价为整数时侧下界为 ``1``；
+    否则取最小正整数使 ``avg*n`` 接近整数，见 ``_min_positive_int_avg_product_near_integer_relaxed``）。
+
+    ``grid_min``：有均格 ``ag`` 时为 ``ag * count_min``（总格下界，乘积四舍五入为整数）；
+    无均格时为 ``count_min``；再与由件数/总格观测得到的 ``base_grid`` 取大。
     """
     n = _as_int_count(d.get(count_k))
     G = _as_int_count(d.get(grid_k))
@@ -365,11 +368,16 @@ def _finalize_tier_min_bounds(
     )
     cm = _merge_with_min_from_avg(cm, ag, from_price=False)
 
-    gm = _max_optional_int(
-        base_grid,
-        _merge_with_min_from_avg(G, ag, from_price=False),
-    )
-    gm = _merge_with_min_from_avg(gm, ap, from_price=True)
+    gm: Optional[int]
+    if cm is not None and _is_positive_finite_float(ag):
+        gm = int(round(float(ag) * float(cm)))
+        if gm < 1:
+            gm = 1
+    elif cm is not None:
+        gm = int(cm)
+    else:
+        gm = None
+    gm = _max_optional_int(base_grid, gm)
 
     d[count_min_k] = cm
     d[grid_min_k] = gm
