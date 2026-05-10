@@ -34,17 +34,6 @@ def max_anchor_box_id_from_overlay_ui(
         return int(_grid_overlay.DEFAULT_GEOMETRIC_PREFIX_ANCHOR_BOX_ID)
     return max_box_id
 
-
-def max_confirmed_box_id_from_items(items: Dict[str, ItemKnowledge]) -> int:
-    """仅已确认 BoxId 的最大锚点（遗留名；空置与快照请用 :func:`max_anchor_box_id_from_overlay_ui`）。"""
-    max_box_id = -1
-    for k in items.values():
-        if k.box_id is None or not k.box_id_confirmed:
-            continue
-        max_box_id = max(max_box_id, k.box_id)
-    return max_box_id
-
-
 def build_grid_overlay_export_dict(
     *,
     game_state: GameState,
@@ -57,6 +46,7 @@ def build_grid_overlay_export_dict(
     occupied_cells: set,
     max_box_id: int,
 ) -> Dict[str, Any]:
+    """组装写入 ``grid_overlay`` 的字段；不含 ``vacant``（须用全量占位格在 :meth:`GridWindow._grid_overlay_to_json` 中计算）。"""
     ph = {uid: item_knowledge_to_json(k) for uid, k in phantom_items.items()}
     manual = {uid: [int(x) for x in tup] for uid, tup in manual_shapes.items()}
     pref: Dict[str, Union[int, str]] = {}
@@ -69,10 +59,6 @@ def build_grid_overlay_export_dict(
     }
     vacant_bids = sorted(r * GRID_COLS + c for r, c in vacant_manual_suppress)
     occ_bids = sorted(r * GRID_COLS + c for r, c in occupied_cells)
-    vacant_ctx = {
-        "game_state": game_state_to_json(game_state),
-        "raw_pricing": raw_pricing,
-    }
 
     infer = _grid_overlay.compute_grid_overlay_infer_shapes(
         game_state=game_state,
@@ -81,12 +67,6 @@ def build_grid_overlay_export_dict(
         vacant_manual_suppress=set(vacant_manual_suppress),
         max_box_id=int(max_box_id),
         raw_pricing=raw_pricing,
-    )
-    vacant_block = _grid_overlay.compute_overlay_vacant_dict(
-        occupied=occupied_cells,
-        max_box_id=int(max_box_id),
-        vacant_manual_suppress=set(vacant_manual_suppress),
-        board_snapshot=vacant_ctx,
     )
     infer_out = {uid: [int(x) for x in tup] for uid, tup in infer.items()}
     overlay_for_merged = {
@@ -106,7 +86,6 @@ def build_grid_overlay_export_dict(
         "unknown_cell_quality_pref": uq_pref,
         "vacant_manual_suppress_bids": vacant_bids,
         _grid_overlay.OCCUPIED_CELL_BIDS: occ_bids,
-        "vacant": vacant_block,
         "infer_shapes": infer_out,
         "merged_items_dict": merged_items,
     }
