@@ -25,6 +25,7 @@ from ..parsing.item_db import _weighted_est_price, map_category_ratios, query_it
 from . import scan_inference as _scan_inference
 from . import unknown_value as _unknown_value
 from . import grid_overlay as _grid_overlay
+from ._shape_wh import shape_wh_from_snapshot
 
 _item_prices_cache: Optional[Tuple[Dict[int, Any], List[Any]]] = None
 
@@ -71,17 +72,6 @@ def current_round_from_board_snapshot(board_snapshot: Dict[str, Any]) -> Optiona
         return None
     return v if v >= 1 else None
 
-
-def _shape_wh_from_snapshot(shape: Any) -> Tuple[int, int]:
-    if shape is None:
-        return 1, 1
-    s = str(shape)
-    if len(s) == 2:
-        try:
-            return int(s[0]), int(s[1])
-        except ValueError:
-            return 1, 1
-    return 1, 1
 
 def _int_set_from_field(raw: Any) -> Set[int]:
     out: Set[int] = set()
@@ -427,7 +417,7 @@ def _sum_known_contour_weighted_price_and_geo_cells(
             w_est = _weighted_est_price(cand, weights if weights else None, mid_n)
         val = float(w_est) if w_est is not None else float(best.base_value)
 
-        w, h = _shape_wh_from_snapshot(sh_geo)
+        w, h = shape_wh_from_snapshot(sh_geo)
         geo = max(1, int(w) * int(h))
         sum_val += val
         sum_geo += geo
@@ -439,7 +429,7 @@ def _geo_footprint_cells_from_shape_field(shape_val: Any) -> Optional[float]:
     sh = _parse_shape_int(shape_val)
     if sh is None:
         return None
-    w, h = _shape_wh_from_snapshot(sh)
+    w, h = shape_wh_from_snapshot(sh)
     return float(max(1, w * h))
 
 
