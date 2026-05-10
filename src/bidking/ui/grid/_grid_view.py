@@ -67,7 +67,10 @@ from ...analysis import grid_overlay as _grid_overlay
 from ...analysis.raw_pricing import build_raw_pricing_dict
 from ._client_profile import load_client_settings_beside_snapshot, sanitize_aisha_client_payload
 from ...analysis.snapshot import game_state_to_json, item_knowledge_to_json
-from ._grid_overlay_payload import build_grid_overlay_export_dict, max_confirmed_box_id_from_items
+from ._grid_overlay_payload import (
+    build_grid_overlay_export_dict,
+    max_anchor_box_id_from_overlay_ui,
+)
 from ._overlay_reconcile import (
     apply_scan_history_to_phantom_items,
     reconcile_overlay_after_refresh,
@@ -366,6 +369,8 @@ class GridWindow:
         self._drag_state: Optional[dict] = None
         # _draw() 期间的占位格缓存（单次绘制内复用，避免重复构建）
         self._occupied_for_draw: Optional[set] = None
+        # _compute_max_size 重入栈：打破「effective_shape → 手动确认候选 → max_size → build_occupied」互递归
+        self._compute_max_size_stack: List[str] = []
         # 用户右键手动剔除的空置候选格 (row,col)，不计入空置数、不画橘红（与扩展剩余格一致）
         self._vacant_manual_suppress: Set[Tuple[int, int]] = set()
         # 疑似诈骗格集合缓存：(limit, id(occupied)) → 避免同一 occupied 对象上重复全表扫描
@@ -910,11 +915,11 @@ class GridWindow:
 
     def _vacant_remaining_for_expand(self) -> Tuple[Optional[set], str]:
         """
-        与橘红空置区一致：从 BoxId=0 到「已确认物品最大 BoxId」之间的未占位格。
+        与橘红空置区一致：从 BoxId=0 到「最大锚格 BoxId」之间的未占位格（含未确认日志锚格；无锚时默认 30）。
         """
         max_box_id = self._empty_zone_max_box_id()
         if max_box_id < 0:
-            return None, "尚无 BoxId 已确认的物品，无法划定空置区域上界。"
+            return None, "无法划定空置区域上界。"
         occupied = self._build_occupied()
         limit = min(max_box_id, GRID_COLS * GRID_ROWS - 1)
         apply_fraud = _grid_overlay.fraud_zone_cell_exclusion_enabled(
@@ -1179,6 +1184,17 @@ class GridWindow:
         """
         if k.box_id is None:
             return GRID_COLS, GRID_ROWS
+        # 已在栈中说明存在 A↔B 互递归；返回满格尺寸使下游「按 max 筛形状」分支关闭，避免无限递归。
+        if uid in self._compute_max_size_stack:
+            return GRID_COLS, GRID_ROWS
+        self._compute_max_size_stack.append(uid)
+        try:
+            return self._compute_max_size_impl(uid, k)
+        finally:
+            if self._compute_max_size_stack and self._compute_max_size_stack[-1] == uid:
+                self._compute_max_size_stack.pop()
+
+    def _compute_max_size_impl(self, uid: str, k: ItemKnowledge) -> Tuple[int, int]:
         brow = k.box_id // GRID_COLS
         bcol = k.box_id % GRID_COLS
 
@@ -1236,13 +1252,8 @@ class GridWindow:
         return max_w, max_h
 
     def _empty_zone_max_box_id(self) -> int:
-        """空置提示生效后橘红覆盖层的最大 BoxId（含），无确认物品时返回 -1。"""
-        max_box_id = -1
-        for k in self.state.items.values():
-            if k.box_id is None or not k.box_id_confirmed:
-                continue
-            max_box_id = max(max_box_id, k.box_id)
-        return max_box_id
+        """橘红空置层与 ``grid_overlay.vacant`` 共用：最大锚格（含未确认日志/幽灵），无锚时默认 30。"""
+        return max_anchor_box_id_from_overlay_ui(self.state.items, self._phantom_items)
 
     # ── Bot 快照 JSON ───────────────────────────────────────────────────────
 
@@ -1317,7 +1328,7 @@ class GridWindow:
             unknown_cell_quality_pref=self._unknown_cell_quality_pref,
             vacant_manual_suppress=self._vacant_manual_suppress,
             occupied_cells=occupied,
-            max_box_id=max_confirmed_box_id_from_items(self.state.items),
+            max_box_id=max_anchor_box_id_from_overlay_ui(self.state.items, self._phantom_items),
         )
 
     def _emit_board_snapshot_unlocked(self) -> None:
@@ -1516,8 +1527,7 @@ class GridWindow:
             )
         else:
             lines.append(
-                "提示：当前回合未到空置提示起始回合或无有效锚点，"
-                "``grid_overlay.vacant.effective_count`` 为空；定价侧仍可能使用技能 200009 或历史 vacant_geometric。"
+                "提示：空置计数暂不可用（例如 ``compute_overlay_vacant_dict`` 未返回 effective_count）。"
             )
         return "\n".join(lines)
 

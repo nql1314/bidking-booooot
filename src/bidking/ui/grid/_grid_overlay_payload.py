@@ -12,7 +12,31 @@ from ...parsing.state import GameState, ItemKnowledge
 GRID_COLS = _grid_overlay.GRID_COLS
 
 
+def max_anchor_box_id_from_overlay_ui(
+    items: Dict[str, ItemKnowledge],
+    phantom_items: Dict[str, ItemKnowledge],
+) -> int:
+    """
+    画板空置前缀上界：与 ``analysis.grid_overlay.max_anchor_box_id_merged`` 一致——
+    任意有效日志/幽灵锚格（不要求 ``box_id_confirmed``）；全无锚点时退回
+    ``DEFAULT_GEOMETRIC_PREFIX_ANCHOR_BOX_ID``。
+    """
+    max_box_id = -1
+    for k in items.values():
+        if k.box_id is None:
+            continue
+        max_box_id = max(max_box_id, int(k.box_id))
+    for k in phantom_items.values():
+        if k.box_id is None:
+            continue
+        max_box_id = max(max_box_id, int(k.box_id))
+    if max_box_id < 0:
+        return int(_grid_overlay.DEFAULT_GEOMETRIC_PREFIX_ANCHOR_BOX_ID)
+    return max_box_id
+
+
 def max_confirmed_box_id_from_items(items: Dict[str, ItemKnowledge]) -> int:
+    """仅已确认 BoxId 的最大锚点（遗留名；空置与快照请用 :func:`max_anchor_box_id_from_overlay_ui`）。"""
     max_box_id = -1
     for k in items.values():
         if k.box_id is None or not k.box_id_confirmed:

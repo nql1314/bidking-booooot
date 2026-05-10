@@ -19,6 +19,9 @@ GRID_COLS = 10
 GRID_ROWS = 30
 GRID_MAX_BOX_ID = GRID_COLS * GRID_ROWS - 1
 
+# 合并物品表上无任何 BoxId 时，几何前缀空置仍需要一个上界；与定价共用 ``max_anchor_box_id_merged``。
+DEFAULT_GEOMETRIC_PREFIX_ANCHOR_BOX_ID = 30
+
 # 快照 ``grid_overlay`` 中序列化的占位格（BoxId 列表，与 UI ``_build_occupied`` 一致）
 OCCUPIED_CELL_BIDS = "occupied_cell_bids"
 
@@ -511,11 +514,16 @@ def board_display_occupied_cells_merged(board_snapshot: Dict[str, Any]) -> set:
 
 
 def max_anchor_box_id_merged(board_snapshot: Dict[str, Any]) -> int:
-    """已确认 BoxId 的物品在合并物品表上的最大锚点（无则 -1）。"""
+    """
+    合并物品表上任意有效 BoxId 的最大锚点（含仅日志未确认的锚格）。
+
+    无任何有效 ``box_id`` 时返回 :data:`DEFAULT_GEOMETRIC_PREFIX_ANCHOR_BOX_ID`（30），供几何前缀空置
+    与定价管线使用，避免 ``max_box_id < 0`` 无法数格。
+    """
     items = merged_items_dict(board_snapshot)
     max_b = -1
     for it in items.values():
-        if not isinstance(it, dict) or not it.get("box_id_confirmed"):
+        if not isinstance(it, dict):
             continue
         bid = it.get("box_id")
         if bid is None:
@@ -525,6 +533,8 @@ def max_anchor_box_id_merged(board_snapshot: Dict[str, Any]) -> int:
         except (TypeError, ValueError):
             continue
         max_b = max(max_b, b)
+    if max_b < 0:
+        return int(DEFAULT_GEOMETRIC_PREFIX_ANCHOR_BOX_ID)
     return max_b
 
 
@@ -661,6 +671,7 @@ def scam_span_vacant_deduction(board_snapshot: Dict[str, Any]) -> int:
     return n
 
 __all__ = [
+    "DEFAULT_GEOMETRIC_PREFIX_ANCHOR_BOX_ID",
     "OCCUPIED_CELL_BIDS",
     "apply_manual_confirm_projection",
     "apply_manual_shapes_to_items",
