@@ -104,9 +104,18 @@ def weighted_cell_equiv_for_unknown_contour_item(
     csv_cells_raw: Optional[Dict[str, float]],
     pricing: Dict[str, Any],
     map_id_normalized: Optional[int],
+    *,
+    require_box_id_confirmed: bool = True,
 ) -> Optional[float]:
+    """品质已知、快照无外形时：按 CSV 期望价与档内 ``u_cell`` 得加权格数。
+
+    默认要求 ``box_id_confirmed``（与定价占位一致）。空置扣减等场景可传
+    ``require_box_id_confirmed=False``。
+    """
     _ = board_snapshot
-    if not it.get("box_id_confirmed") or it.get("shape") is not None:
+    if it.get("shape") is not None:
+        return None
+    if require_box_id_confirmed and not it.get("box_id_confirmed"):
         return None
     csv_index, csv_items = _load_item_prices_db()
     if not csv_items:
