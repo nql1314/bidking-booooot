@@ -73,6 +73,7 @@ def build_grid_overlay_export_dict(
         "phantom_items": ph,
         "manual_shapes": manual,
         "infer_shapes": infer_out,
+        "phantom_quality_pref": pref,
     }
     snap_merged = {
         "game_state": game_state_to_json(game_state),
