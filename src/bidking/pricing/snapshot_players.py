@@ -3,16 +3,23 @@ from __future__ import annotations
 from typing import Any
 
 
+def _self_identity_from_board_snapshot(board_snapshot: dict[str, Any] | None) -> tuple[str, str]:
+    """快照根级 ``self_user_uid`` / ``self_name_substring``。"""
+    if not board_snapshot:
+        return "", ""
+    return (
+        str(board_snapshot.get("self_user_uid") or "").strip(),
+        str(board_snapshot.get("self_name_substring") or "").strip(),
+    )
+
+
 def board_snapshot_self_identity(
     config: dict[str, Any], board_snapshot: dict[str, Any] | None = None
 ) -> tuple[str, str]:
     if board_snapshot:
-        ac = board_snapshot.get("aisha_client") or {}
-        if isinstance(ac, dict):
-            u = str(ac.get("self_user_uid") or "").strip()
-            h = str(ac.get("self_name_substring") or "").strip()
-            if u or h:
-                return u, h
+        u, h = _self_identity_from_board_snapshot(board_snapshot)
+        if u or h:
+            return u, h
     bs = config.get("board_snapshot") or {}
     return str(bs.get("self_user_uid") or "").strip(), str(bs.get("self_name_substring") or "").strip()
 
@@ -43,14 +50,11 @@ def max_other_player_bid_from_snapshot_players(
     self_name_substring: str = "",
     board_snapshot: dict[str, Any] | None = None,
 ) -> int | None:
-    ac = (board_snapshot or {}).get("aisha_client") or {}
-    if isinstance(ac, dict):
-        u = str(ac.get("self_user_uid") or "").strip()
-        h = str(ac.get("self_name_substring") or "").strip()
-        if u:
-            self_user_uid = u
-        if h:
-            self_name_substring = h
+    u, h = _self_identity_from_board_snapshot(board_snapshot)
+    if u:
+        self_user_uid = u
+    if h:
+        self_name_substring = h
     key_int = int(bid_round - 1)
     key_str = str(key_int)
     self_uid = (self_user_uid or "").strip()

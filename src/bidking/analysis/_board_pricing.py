@@ -8,6 +8,11 @@
 不再维护独立的「艾莎 bid」分支；策略层直接消费 ``pricing.points`` / ``points_floor`` /
 ``points_ceiling``。
 
+当本地配置（``configs/runtime.json`` 与 ``configs/config.json`` 深合并）中
+``board_snapshot.self_user_uid`` 对应玩家 ``hero_cid`` 为 204（Ahmad）时，上述三字段与
+``pricing.ahmad_points`` 一致（由 ``raw_pricing.event_stats`` 多候选取 max）；通用画板空置主价仍写入
+``pricing.generic_points*`` 供 UI 对照。``pricing.ahmad_points_detail`` 含各候选分解。
+
 当 ``raw_pricing.event_stats`` 提供 ``q4_grid_min`` / ``q5_grid_min`` / ``q6_grid_min`` 时，
 对 ``max(0, 最少格 - 已确认该档占位格)`` 按 CSV 单档 ``q4``/``q5``/``q6`` 格均价计入总价，
 并对空置单价项使用扣减后的有效空置格数（``pricing.vacant`` 仍为几何/有效空置原值）。
@@ -18,6 +23,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from ..parsing import item_db
@@ -221,31 +227,283 @@ def _pricing_work_board_snapshot(board_snapshot: Dict[str, Any], items: Dict[str
     return out
 
 
-def _ahmad_points_from_raw_pricing(raw: Any) -> int:
+def _local_board_snapshot_branch() -> Dict[str, Any]:
+    """``config.json`` 覆盖后的 ``board_snapshot`` 段（含 ``self_user_uid``）。"""
+    try:
+        from ..config.runtime import load_runtime
+
+        raw = load_runtime().raw
+        bs = raw.get("board_snapshot")
+        return dict(bs) if isinstance(bs, dict) else {}
+    except Exception:
+        return {}
+
+
+def _self_player_hero_cid(
+    board_snapshot: Dict[str, Any],
+    *,
+    board_snapshot_config: Optional[Dict[str, Any]] = None,
+) -> Optional[int]:
+    """用本地配置 ``board_snapshot.self_user_uid`` 在 ``game_state.players`` 中解析己方 ``hero_cid``。"""
+    gs = board_snapshot.get("game_state")
+    if not isinstance(gs, dict):
+        return None
+    players = gs.get("players")
+    if not isinstance(players, dict) or not players:
+        return None
+    branch = (
+        board_snapshot_config
+        if board_snapshot_config is not None
+        else _local_board_snapshot_branch()
+    )
+    self_uid = str(branch.get("self_user_uid") or "").strip()
+    pdata: Any = None
+    if self_uid and self_uid in players:
+        pdata = players.get(self_uid)
+    elif len(players) == 1:
+        pdata = next(iter(players.values()))
+    if not isinstance(pdata, dict):
+        return None
+    try:
+        hc = int(pdata.get("hero_cid") or 0)
+    except (TypeError, ValueError):
+        return None
+    return hc if hc > 0 else None
+
+
+def _ahmad_pricing_detail_from_raw_pricing(raw: Any) -> Dict[str, Any]:
+    """Ahmad 估价算法（点数口径）及候选分解，由 ``raw_pricing`` 实现，多候选取最大值。
+
+    返回 dict：``ahmad_points``、``candidates``（每项含 ``id``/``label``/``points`` 及算式用中间量）、``winner``。
+
+    **候选 A — CSV 边际定价**（当 CSV 含 ``"all"`` 质量组时）：
+
+    .. code-block:: text
+
+        base   = total_count × q123456_件均价
+        溢价   = Σ q*_格数 × (q*_格均价 − q123456_格均价)   （紫/金/红，格均价高于全档时）
+        格数优先级：q*_grid_count（精确值）> q*_grid_min（推导下界）
+
+    **候选 B — Ahmad 原算法**（base + 各色溢价，与 ``ahmad_premium.compute_ahmad_premium_w`` 一致）：
+
+    .. code-block:: text
+
+        base   = total_count × 1000（0.1万/件）
+        各色溢价优先级：total_price > avg_price×count_min > grid_min×格单价
+        格单价默认：紫 1000 / 金 10000 / 红 40000（点/格），有 CSV 数据时用 CSV 值
+
+    **候选 D — q12/q3456 分组边际定价**（``q12_count`` 已知时，如第 5 回合后）：
+
+    .. code-block:: text
+
+        base   = q12_count × q12_件均价 + (total − q12_count) × q3456_件均价
+        溢价   = Σ q*_格数 × (q*格均价 − q3456_格均价)   （紫/金/红）
+
+    **候选 C — random_avg**：``random_avg_price_min``（n×均价总价下界）直接参与竞争。
+
+    缺失或非数字字段按 0，不影响其他项。
     """
-    由 ``raw_pricing.event_stats`` 简单汇总（与画板快照中该段字段一致）。
-    缺失或非数字字段按 0。
-    """
+    empty: Dict[str, Any] = {
+        "ahmad_points": 0,
+        "candidates": [],
+        "winner": "",
+    }
     if not isinstance(raw, dict):
-        return 0
+        return empty
     st = raw.get("event_stats")
     if not isinstance(st, dict):
-        return 0
+        return empty
 
-    def _nz(key: str) -> int:
+    def _ni(key: str) -> Optional[int]:
         v = st.get(key)
         if v is None:
-            return 0
+            return None
         try:
-            return int(v)
+            i = int(v)
+            return i if i >= 0 else None
         except (TypeError, ValueError):
-            return 0
+            return None
 
-    tc = _nz("total_count")
-    q4 = _nz("q4_grid_min")
-    q5 = _nz("q5_grid_min")
-    q6 = _nz("q6_grid_min")
-    return tc * 1000 + q4 * 1000 + q5 * 10000 + q6 * 56000
+    def _nf(key: str) -> Optional[float]:
+        v = st.get(key)
+        if v is None:
+            return None
+        try:
+            f = float(v)
+            return f if math.isfinite(f) and f >= 0 else None
+        except (TypeError, ValueError):
+            return None
+
+    def _csv_f(d: Any, key: str) -> Optional[float]:
+        if not isinstance(d, dict):
+            return None
+        v = d.get(key)
+        if v is None:
+            return None
+        try:
+            f = float(v)
+            return f if math.isfinite(f) and f > 0 else None
+        except (TypeError, ValueError):
+            return None
+
+    _UNIT_PTS = 1000
+    _GRID_RATE_DEFAULT: Dict[str, int] = {"q4": 1000, "q5": 10000, "q6": 40000}
+
+    csv_per_item = raw.get("csv_quality_groups_avg_per_item")
+    csv_per_cell = raw.get("csv_quality_groups_avg_per_cell")
+
+    tc = _ni("total_count") or 0
+    candidates_rows: List[Dict[str, Any]] = []
+
+    def _marginal_premium(ref_per_cell: float) -> float:
+        """Σ q*格数 × (q*格均价 − ref_per_cell)，仅取正边际。格数优先精确值，次之下界。"""
+        prem = 0.0
+        for q in ("q4", "q5", "q6"):
+            per_cell_q = _csv_f(csv_per_cell, q)
+            if per_cell_q is None:
+                continue
+            delta = per_cell_q - ref_per_cell
+            if delta <= 0:
+                continue
+            grid = _ni(f"{q}_grid_count") or _ni(f"{q}_grid_min")
+            if not grid:
+                continue
+            prem += int(grid) * delta
+        return prem
+
+    # ── 候选 A：CSV 边际定价（q123件均价铺底）─────────────────────────────
+    q123_per_item = _csv_f(csv_per_item, "q1+q2+q3")
+    q123_per_cell = _csv_f(csv_per_cell, "q1+q2+q3")
+    if tc > 0 and q123_per_item is not None:
+        csv_base = tc * q123_per_item
+        csv_prem = _marginal_premium(q123_per_cell) if q123_per_cell is not None else 0.0
+        pts_a = int(round(csv_base + csv_prem))
+        candidates_rows.append(
+            {
+                "id": "csv_q123_marginal",
+                "label": "CSV q123件均价 + 紫/金/红边际溢价",
+                "points": pts_a,
+                "base": float(csv_base),
+                "marginal_premium": float(csv_prem),
+                "ref_per_cell_q123": float(q123_per_cell) if q123_per_cell is not None else None,
+            }
+        )
+
+    # ── 候选 D：q12/q3 分组边际定价 ───────────────────────────────────
+    q12_count = _ni("q12_count")
+    per_item_q12 = _csv_f(csv_per_item, "q1+q2")
+    per_item_q3 = _csv_f(csv_per_item, "q3")
+    per_cell_q3 = _csv_f(csv_per_cell, "q3")
+    if (
+        tc > 0
+        and q12_count is not None
+        and per_item_q12 is not None
+        and per_item_q3 is not None
+    ):
+        q3_count = max(0, tc - q12_count)
+        split_base = q12_count * per_item_q12 + q3_count * per_item_q3
+        split_prem = _marginal_premium(per_cell_q3) if per_cell_q3 is not None else 0.0
+        pts_d = int(round(split_base + split_prem))
+        candidates_rows.append(
+            {
+                "id": "split_q12_q3",
+                "label": "q12 / q3 分组件均价 + 紫/金/红边际溢价",
+                "points": pts_d,
+                "q12_count": int(q12_count),
+                "q3_count": int(q3_count),
+                "base_q12": float(q12_count * per_item_q12),
+                "base_q3": float(q3_count * per_item_q3),
+                "marginal_premium": float(split_prem),
+                "ref_per_cell_q3": float(per_cell_q3) if per_cell_q3 is not None else None,
+            }
+        )
+
+    # ── 候选 B：Ahmad 原算法（base + 各色溢价）────────────────────────────
+    grid_rate: Dict[str, int] = {}
+    for _q, _fb in _GRID_RATE_DEFAULT.items():
+        _cv = _csv_f(csv_per_cell, _q)
+        grid_rate[_q] = int(round(_cv)) if _cv is not None else _fb
+
+    prem_pts = 0
+    tier_detail: List[Dict[str, Any]] = []
+    for q in ("q4", "q5", "q6"):
+        price_total = _ni(f"{q}_price_total")
+        if price_total is not None and price_total > 0:
+            prem_pts += price_total
+            tier_detail.append({"tier": q, "source": "price_total", "added": int(price_total)})
+            continue
+        price_avg = _nf(f"{q}_price_avg")
+        count_min = _ni(f"{q}_count_min")
+        if price_avg is not None and price_avg > 0 and count_min is not None and count_min > 0:
+            add_b = max(0, int(round(int(count_min) * price_avg - int(count_min) * _UNIT_PTS)))
+            prem_pts += add_b
+            tier_detail.append(
+                {
+                    "tier": q,
+                    "source": "avg_over_base",
+                    "count_min": int(count_min),
+                    "price_avg": float(price_avg),
+                    "added": int(add_b),
+                }
+            )
+            continue
+        grid_min = _ni(f"{q}_grid_min")
+        if grid_min is not None and grid_min > 0:
+            add_g = int(grid_min) * grid_rate[q]
+            prem_pts += add_g
+            tier_detail.append(
+                {
+                    "tier": q,
+                    "source": "grid_min_times_cell_rate",
+                    "grid_min": int(grid_min),
+                    "cell_rate": int(grid_rate[q]),
+                    "added": int(add_g),
+                }
+            )
+
+    pts_b = tc * _UNIT_PTS + prem_pts
+    candidates_rows.append(
+        {
+            "id": "classic_base_premium",
+            "label": "Ahmad 经典：total_count×1000 + 紫/金/红溢价",
+            "points": int(round(pts_b)),
+            "base_total_count_pts": int(tc * _UNIT_PTS),
+            "premium_total": int(prem_pts),
+            "grid_rate_used": dict(grid_rate),
+            "tier_breakdown": tier_detail,
+        }
+    )
+
+    # ── 候选 C：random_avg 总价下界 ───────────────────────────────────────
+    rnd_min = _ni("random_avg_price_min")
+    if rnd_min is not None and rnd_min > 0:
+        candidates_rows.append(
+            {
+                "id": "random_avg_price_min",
+                "label": "random_avg_price_min 事件下界",
+                "points": int(rnd_min),
+            }
+        )
+
+    if not candidates_rows:
+        return empty
+
+    best = max(int(c["points"]) for c in candidates_rows)
+    winner = ""
+    for c in candidates_rows:
+        if int(c["points"]) == best:
+            winner = str(c.get("id") or "")
+            break
+    return {
+        "ahmad_points": best,
+        "candidates": candidates_rows,
+        "winner": winner,
+    }
+
+
+def _ahmad_points_from_raw_pricing(raw: Any) -> int:
+    """兼容入口：等价于 ``_ahmad_pricing_detail_from_raw_pricing(raw)["ahmad_points"]``。"""
+    return int(_ahmad_pricing_detail_from_raw_pricing(raw).get("ahmad_points") or 0)
 
 
 def _item_value(
@@ -495,6 +753,7 @@ def build_snapshot_pricing_dict(
     board_snapshot: Dict[str, Any],
     *,
     snapshot_path_hint: Optional[str] = None,
+    board_snapshot_config: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     组装 ``board_snapshot.json`` 的 ``pricing`` 字段。
@@ -504,6 +763,9 @@ def build_snapshot_pricing_dict(
     有效空置 ``pricing.vacant`` 与快照 ``grid_overlay.vacant`` 一致时优先直接读取后者，
     否则由 :func:`grid_overlay.vacant_dict_from_board_snapshot` 计算；
     占位格优先 ``grid_overlay.occupied_cell_bids``。
+
+    ``board_snapshot_config``：可选，形状同应用配置里的 ``board_snapshot`` 段；省略时从
+    本地 ``configs``（runtime + config 深合并）读取。用于判定己方 ``hero_cid``（Ahmad 主价等）。
     """
     game_state_json = board_snapshot.get("game_state") or {}
     skill_logs = list(board_snapshot.get("skill_logs") or [])
@@ -602,13 +864,26 @@ def build_snapshot_pricing_dict(
         pts_floor = vacant_pts_base + float(vacant_adj) * float(u_orange)
         pts_ceiling = vacant_pts_base + float(vacant_adj) * float(u_red)
 
-    ahmad_points = _ahmad_points_from_raw_pricing(raw)
+    ahmad_detail = _ahmad_pricing_detail_from_raw_pricing(raw)
+    ahmad_points = int(ahmad_detail.get("ahmad_points") or 0)
+
+    generic_pts = int(round(pts))
+    generic_floor = int(round(pts_floor))
+    generic_ceil = int(round(pts_ceiling))
+    self_hc = _self_player_hero_cid(snap_full, board_snapshot_config=board_snapshot_config)
+    _AHMAD_HERO_CID = 204
+    ahmad_pricing_active = self_hc == _AHMAD_HERO_CID
+
+    if ahmad_pricing_active:
+        pts_out = pts_floor_out = pts_ceiling_out = ahmad_points
+    else:
+        pts_out, pts_floor_out, pts_ceiling_out = generic_pts, generic_floor, generic_ceil
 
     pricing: Dict[str, Any] = {
         "total": float(total_f),
-        "points": int(round(pts)),
-        "points_floor": int(round(pts_floor)),
-        "points_ceiling": int(round(pts_ceiling)),
+        "points": pts_out,
+        "points_floor": pts_floor_out,
+        "points_ceiling": pts_ceiling_out,
         "vacant": int(vacant_num),
         "est_orange": int(round(est_orange)),
         "est_gold_red": int(round(est_gold_red)),
@@ -622,9 +897,15 @@ def build_snapshot_pricing_dict(
         "early_vacant_possible_qualities": sorted(int(x) for x in pq_early),
         "map_quality_avg_hit": bool(csv_cells_for_est),
         "map_quality_avg_csv": str(raw.get("map_quality_avg_csv") or "") if isinstance(raw, dict) else "",
-        "ahmad_points": int(ahmad_points),
         "known_contour_weighted_cells": int(kcw_geo),
         "known_contour_weighted_price": float(kcw_val),
         "early_points_blended_with_random_avg": bool(early_pts_blended_with_random_avg),
+        "ahmad_points": ahmad_points,
+        "ahmad_points_detail": ahmad_detail,
+        "ahmad_pricing_active": bool(ahmad_pricing_active),
     }
+    if ahmad_pricing_active:
+        pricing["generic_points"] = generic_pts
+        pricing["generic_points_floor"] = generic_floor
+        pricing["generic_points_ceiling"] = generic_ceil
     return pricing
