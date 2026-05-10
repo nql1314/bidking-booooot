@@ -890,9 +890,9 @@ def build_snapshot_pricing_dict(
             pts_ceiling = pts
             early_pts_blended_with_random_avg = True
     else:
-        pts = vacant_pts_base + float(vacant_adj) * float(u_early)
+        pts = vacant_pts_base + float(vacant_adj) * float(u_orange)
         pts_floor = vacant_pts_base + float(vacant_adj) * float(u_orange)
-        pts_ceiling = vacant_pts_base + float(vacant_adj) * float(u_red)
+        pts_ceiling = vacant_pts_base + float(vacant_adj) * float(u_gr)
 
     ahmad_detail = _ahmad_pricing_detail_from_raw_pricing(
         raw, items_total=float(vacant_pts_base), vacant_adj=int(vacant_adj)
