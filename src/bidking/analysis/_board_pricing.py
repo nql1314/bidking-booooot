@@ -12,8 +12,8 @@
 对 ``max(0, 最少格 - 已确认该档占位格)`` 按 CSV 单档 ``q4``/``q5``/``q6`` 格均价计入总价，
 并对空置单价项使用扣减后的有效空置格数（``pricing.vacant`` 仍为几何/有效空置原值）。
 
-已知轮廓且品质未知、CSV 为多候选（权重价）的物品：几何占位格在边际上视同空置，参与 ``空置格 × 空置单价``；
-但 ``total`` 已含该件权重价，故在 ``points`` / ``est_*`` 基底中扣除对应权重价，避免重复计价。
+已知轮廓且品质未知、CSV 为多候选（权重价）的物品（含仅日志未确认的锚格）：几何占位格在边际上视同空置，参与 ``空置格 × 空置单价``；
+但 ``total`` / ``compute_items_total_and_footprint`` 已含该件权重价，故在 ``points`` / ``est_*`` 基底中扣除对应权重价，避免重复计价。
 """
 
 from __future__ import annotations
@@ -257,8 +257,6 @@ def _item_value_and_footprint(
     map_id_normalized: Optional[int],
     map_category_weights: Dict[int, float],
 ) -> Tuple[float, float]:
-    if not it.get("box_id_confirmed"):
-        return 0.0, 0.0
     bid_raw = it.get("box_id")
     if bid_raw is None:
         return 0.0, 0.0
@@ -340,6 +338,7 @@ def _sum_known_contour_weighted_price_and_geo_cells(
     已知轮廓（``shape`` 非空）、品质仍未知（``quality`` 为空），且 ``query_item`` 为多候选（权重价）的物品：
 
     返回 ``(sum(权重价), sum(几何格数))``，用于空置边际扩容并从 ``points`` 基底扣除权重价。
+    不要求 ``box_id_confirmed``，与 :func:`compute_items_total_and_footprint` 对未确认物品的计价一致。
     已确认品质的多候选不再计入，避免误扣 ``vacant_pts_base``、错抬空置格倍数。
     """
     mid = map_id_from_board_snapshot(board_snapshot)
@@ -353,8 +352,6 @@ def _sum_known_contour_weighted_price_and_geo_cells(
     sum_geo = 0
     for _uid, it in items.items():
         if not isinstance(it, dict):
-            continue
-        if not it.get("box_id_confirmed"):
             continue
         bid_raw = it.get("box_id")
         if bid_raw is None:
@@ -511,7 +508,7 @@ def compute_items_total_and_footprint(
     *,
     csv_cells_raw: Dict[str, float],
 ) -> Tuple[float, float]:
-    """对所有已确认 box 的物品求和：总价与权重占位（格）。"""
+    """对所有带有效 ``box_id`` 的物品求和：总价与权重占位（格）；含仅日志未确认的锚格。"""
     mid = map_id_from_board_snapshot(board_snapshot)
     mid_n = item_db.normalize_map_id(mid)
     items = _grid_overlay.merged_items_dict(board_snapshot)
