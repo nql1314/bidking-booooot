@@ -315,6 +315,85 @@ class BoardPricingTests(unittest.TestCase):
         }
         m = grid_overlay_mod.merged_items_dict(snap)
         self.assertEqual(m["x"]["shape"], 21)
+        self.assertEqual(m["x"].get("_overlay_shape_origin"), "manual")
+
+    def test_merged_items_applies_infer_shapes_when_no_manual_shape(self) -> None:
+        """``grid_overlay.infer_shapes`` 在无 shape 时写入几何外形并标记推断来源。"""
+        snap = {
+            "game_state": {
+                "items": {
+                    "y": {
+                        "uid": "y",
+                        "box_id": 0,
+                        "box_id_confirmed": True,
+                        "shape": None,
+                        "quality": 5,
+                        "categories": [],
+                        "item_cid": None,
+                        "price": None,
+                        "manual_confirm_item_id": None,
+                        "excluded_categories": [],
+                        "excluded_qualities": [],
+                    }
+                }
+            },
+            "grid_overlay": {"infer_shapes": {"y": [2, 1, 0, 0]}},
+        }
+        m = grid_overlay_mod.merged_items_dict(snap)
+        self.assertEqual(m["y"]["shape"], 21)
+        self.assertEqual(m["y"].get("_overlay_shape_origin"), "infer")
+
+    def test_infer_shapes_nonempty_when_only_anchor_occupancy(self) -> None:
+        """未确认物品仅占锚格时，可行性检测须剔除自身锚格，否则 ``infer_shapes`` 恒为空。"""
+        from bidking.parsing.state import GameState, ItemKnowledge
+
+        st = GameState()
+        st.map_id = 2101
+        st.items["x"] = ItemKnowledge(
+            uid="x",
+            box_id=0,
+            box_id_confirmed=False,
+            shape=None,
+            quality=5,
+        )
+        st.items["y"] = ItemKnowledge(
+            uid="y",
+            box_id=5,
+            box_id_confirmed=False,
+            shape=None,
+            quality=5,
+        )
+        occ = {(0, 0), (0, 5)}
+        inf = grid_overlay_mod.compute_grid_overlay_infer_shapes(
+            game_state=st,
+            manual_shapes={},
+            occupied_cells=set(occ),
+            vacant_manual_suppress=set(),
+            max_box_id=30,
+            raw_pricing={},
+        )
+        self.assertGreaterEqual(len(inf), 1)
+
+    def test_infer_pseudo_blocked_keeps_prior_infer_on_foreign_anchor(self) -> None:
+        """先前推断占住的格不能再借 ``baseline - self_base`` 排除误放行。"""
+        pb = grid_overlay_mod._infer_pseudo_blocked(
+            {(0, 0), (0, 1)},
+            {(0, 1)},
+            {(0, 1)},
+        )
+        self.assertIn((0, 1), pb)
+
+    def test_infer_default_placement_candidates_unconfirmed_hit_any_cell_in_rect(self) -> None:
+        """未确认 BoxId 时枚举顶左使命中格落在矩形内。"""
+        opts = grid_overlay_mod._infer_default_placement_candidates(
+            0, 1, 2, 1, box_id_confirmed=False
+        )
+        self.assertIn((0, 0), opts)
+        self.assertIn((0, 1), opts)
+        self.assertEqual(
+            grid_overlay_mod._infer_default_placement_candidates(0, 1, 2, 1, box_id_confirmed=True),
+            [(0, 1)],
+        )
 
     def test_unique_item_cid_without_snapshot_shape_price_matches_csv_row(self) -> None:
         """CSV 已唯一锁定 item_cid、快照无 shape 时：汇总价仍为该行 ``base_value``。"""
@@ -386,9 +465,7 @@ class BoardPricingTests(unittest.TestCase):
             "current_round": 2,
         }
         vb = grid_overlay_mod.vacant_dict_from_board_snapshot(snap)
-        self.assertEqual(vb.get("effective_count"), 5)
         self.assertEqual(vb.get("geometric"), 5)
-        self.assertEqual(vb.get("weighted_footprint_vacant_adjust"), 0.0)
         self.assertEqual(vb.get("source"), "geometric_empty_zone")
         p = bp.build_snapshot_pricing_dict(snap, snapshot_path_hint=None)
         self.assertEqual(p["vacant"], 5)
@@ -487,8 +564,7 @@ class BoardPricingTests(unittest.TestCase):
             },
             snapshot_path_hint=None,
         )
-        self.assertEqual(p.get("vacant_geometric"), 61)
-        self.assertEqual(p.get("vacant_effective_count"), 61)
+        self.assertEqual(p.get("vacant"), 61)
 
     def test_vacant_from_raw_pricing_when_skill_logs_empty(self) -> None:
         """``skill_logs`` 已剥离但 ``raw_pricing`` 含 200009 时，仍按总格数 − 占位算空置。"""
@@ -522,8 +598,7 @@ class BoardPricingTests(unittest.TestCase):
             snapshot_path_hint=None,
         )
         self.assertEqual(p.get("vacant_source"), "map_skill_total_hidden_minus_occupied")
-        self.assertEqual(p.get("vacant_geometric"), 61)
-        self.assertEqual(p.get("vacant_effective_count"), 61)
+        self.assertEqual(p.get("vacant"), 61)
 
     def test_build_snapshot_three_position_totals(self) -> None:
         """定价重算空置：需有已确认锚点，前缀区内 3 格空则 ``vacant==3``。"""
