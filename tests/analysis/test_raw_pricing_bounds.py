@@ -15,8 +15,10 @@ from bidking.analysis.raw_pricing import (
     _merge_with_min_from_avg,
     _min_merge_bound_from_price_avg,
     _min_positive_int_avg_product_near_integer,
-    _min_total_price_from_avg,
+    _min_total_from_avg,
+    _min_total_price_from_avg_times_hit_count,
 )
+from bidking.parsing.constants import MAP_SKILL_RANDOM3_AVG_PRICE
 
 
 class RawPricingBoundsTests(unittest.TestCase):
@@ -29,12 +31,24 @@ class RawPricingBoundsTests(unittest.TestCase):
         self.assertEqual(_min_merge_bound_from_price_avg(16800), 1)
         self.assertEqual(_min_merge_bound_from_price_avg(16800.0), 1)
 
-    def test_min_total_price_from_avg_integer_still_uses_numerator(self) -> None:
-        """总价下界路径不因「整数均价」收缩为 1。"""
-        self.assertEqual(_min_total_price_from_avg(16800), 16800)
+    def test_min_total_from_avg_integer_round_trip(self) -> None:
+        """总价整数化路径不因「整数均价」收缩为 1（合并路径与此无关）。"""
+        self.assertEqual(_min_total_from_avg(16800), 16800)
+
+    def test_min_total_price_random3_default_hit_count(self) -> None:
+        self.assertEqual(
+            _min_total_price_from_avg_times_hit_count(
+                16800, None, skill_cid=MAP_SKILL_RANDOM3_AVG_PRICE
+            ),
+            50400,
+        )
 
     def test_min_merge_bound_fractional_uses_smallest_multiplier(self) -> None:
         self.assertEqual(_min_merge_bound_from_price_avg(10.0 / 3.0), 3)
+
+    def test_min_merge_bound_loose_avg_price_like_skill(self) -> None:
+        """严格阈值下无整数倍乘积时，放宽阈值后应得到最小件数（如 5949.6665×3≈17850）。"""
+        self.assertEqual(_min_merge_bound_from_price_avg(5949.6665), 3)
 
     def test_merge_with_min_from_price_vs_grid(self) -> None:
         self.assertEqual(_merge_with_min_from_avg(3, 16800.0, from_price=True), 3)

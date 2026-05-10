@@ -14,7 +14,42 @@ run() 是整个解析流程的入口：
 import copy
 import io
 import sys
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
+
+
+class _TimestampPrefixedTextStream:
+    """为写入主输出流的每一行增加 ``[YYYY-MM-DD HH:MM:SS] `` 前缀。"""
+
+    __slots__ = ("_dest", "_buf")
+
+    def __init__(self, dest: Any) -> None:
+        self._dest = dest
+        self._buf = ""
+
+    @staticmethod
+    def _ts() -> str:
+        return datetime.now().strftime("[%Y-%m-%d %H:%M:%S] ")
+
+    def write(self, s: str) -> int:
+        if not s:
+            return 0
+        self._buf += s
+        n = len(s)
+        while True:
+            i = self._buf.find("\n")
+            if i < 0:
+                break
+            line = self._buf[:i]
+            self._buf = self._buf[i + 1 :]
+            self._dest.write(self._ts() + line + "\n")
+        return n
+
+    def flush(self) -> None:
+        if self._buf:
+            self._dest.write(self._ts() + self._buf)
+            self._buf = ""
+        self._dest.flush()
 
 from .handlers import handle_s2c33, handle_s2c37, handle_s2c39, handle_s2c45
 from .item_db import load_csv
@@ -57,6 +92,7 @@ def run(
     game_active = False
     catching_up = tail              # tail 模式：先静默追赶
     silent_out = io.StringIO()      # 追赶期间丢弃输出
+    out = _TimestampPrefixedTextStream(out)
 
     for line in iter_log_lines(log_path, tail=tail):
         if line is None:            # EOF 信号

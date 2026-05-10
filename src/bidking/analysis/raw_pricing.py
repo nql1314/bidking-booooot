@@ -5,8 +5,6 @@ from __future__ import annotations
 import csv
 import math
 import os
-from decimal import Decimal
-from fractions import Fraction
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from ..parsing import item_db
@@ -97,6 +95,7 @@ def _first_float_from_skills(
 
 
 def _min_total_from_avg(avg: Optional[float]) -> Optional[int]:
+    """浮点总价/乘积的整数化下界（四舍五入），不再用分数分子以免数值爆炸。"""
     if avg is None:
         return None
     try:
@@ -105,16 +104,13 @@ def _min_total_from_avg(avg: Optional[float]) -> Optional[int]:
         return None
     if a <= 0 or a != a:
         return None
-    try:
-        fr = Fraction(Decimal(str(a))).limit_denominator(512)
-    except (ArithmeticError, ValueError, TypeError):
-        return max(0, int(round(a)))
-    return max(0, int(fr.numerator))
+    return max(0, int(round(a)))
 
 _RANDOM_AVG_DEFAULT_HIT_COUNT: Dict[int, int] = {
     MAP_SKILL_RANDOM3_AVG_PRICE: 3,
     MAP_SKILL_RANDOM6_AVG_PRICE: 6,
     MAP_SKILL_RANDOM9_AVG_PRICE: 9,
+    MAP_SKILL_RANDOM12_AVG_PRICE: 12,
 }
 
 
@@ -124,7 +120,7 @@ def _min_total_price_from_avg_times_hit_count(
     *,
     skill_cid: int,
 ) -> Optional[int]:
-    """随机 3/6/9 均价 × ``HitItemIndex`` 命中件数 → 总价下界；件数缺失或非正时按技能默认 3/6/9。"""
+    """随机 3/6/9/12 均价 × ``HitItemIndex`` 命中件数 → 总价下界；件数缺失或非正时按技能默认 3/6/9。"""
     if avg is None:
         return None
     n = hit_count
@@ -150,6 +146,9 @@ _RATIO_INFER_TOL = 1e-4
 
 # ``avg * n`` 与最近整数距离 ≤ delta 时，``n`` 的上限搜索范围（防极端无理数/浮点噪声死循环）。
 _AVG_NEAR_INTEGER_MAX_MULTIPLIER = 200
+
+# 放宽距离阈值时上限：任意正数 ``avg`` 在 ``n=1`` 下距离最近整数恒 ≤ 0.5。
+_MAX_NEAR_INTEGER_DELTA = 0.5
 
 
 def _dist_to_nearest_integer_positive(x: float) -> float:
@@ -189,6 +188,21 @@ def _min_positive_int_avg_product_near_integer(
     return None
 
 
+def _min_positive_int_avg_product_near_integer_relaxed(
+    avg: Optional[float],
+    *,
+    max_n: int = _AVG_NEAR_INTEGER_MAX_MULTIPLIER,
+) -> Optional[int]:
+    """在 ``1..max_n`` 内找最小 ``n`` 使 ``avg*n`` 接近整数；阈值从 ``_RATIO_INFER_TOL`` 起每次 ×10 放宽直至 ``_MAX_NEAR_INTEGER_DELTA``（此时 ``n=1`` 必成立）。"""
+    delta = float(_RATIO_INFER_TOL)
+    while delta <= _MAX_NEAR_INTEGER_DELTA + 1e-15:
+        n = _min_positive_int_avg_product_near_integer(avg, delta=delta, max_n=max_n)
+        if n is not None:
+            return n
+        delta *= 10.0
+    return None
+
+
 def _is_positive_finite_float(x: Any) -> bool:
     if not isinstance(x, (int, float)):
         return False
@@ -207,7 +221,7 @@ def _near_int(x: float, tol: float = _RATIO_INFER_TOL) -> bool:
 
 
 def _min_merge_bound_from_price_avg(avg: Optional[float]) -> Optional[int]:
-    """与 ``count_min`` / ``grid_min`` 合并用的均价侧下界：整数均价为 ``1``；否则取最小倍数 ``n``（见 ``_min_positive_int_avg_product_near_integer``），失败则退回分数分子。"""
+    """与 ``count_min`` / ``grid_min`` 合并用的均价侧下界：整数均价为 ``1``；否则取最小倍数 ``n``（阈值逐级放宽，见 ``_min_positive_int_avg_product_near_integer_relaxed``）。"""
     if avg is None:
         return None
     try:
@@ -218,9 +232,7 @@ def _min_merge_bound_from_price_avg(avg: Optional[float]) -> Optional[int]:
         return None
     if _near_int(a):
         return 1
-    return _min_positive_int_avg_product_near_integer(
-        avg
-    ) or _min_total_from_avg(avg)
+    return _min_positive_int_avg_product_near_integer_relaxed(avg)
 
 
 def _merge_with_min_from_avg(
@@ -233,9 +245,7 @@ def _merge_with_min_from_avg(
     if from_price:
         inferred = _min_merge_bound_from_price_avg(avg)
     else:
-        inferred = _min_positive_int_avg_product_near_integer(
-            avg
-        ) or _min_total_from_avg(avg)
+        inferred = _min_positive_int_avg_product_near_integer_relaxed(avg)
     return _max_optional_int(existing, inferred)
 
 
@@ -328,7 +338,7 @@ def _finalize_tier_min_bounds(
     """合并 ``count_min`` / ``grid_min``：在件数/总格基础上与均价、均格启发式下界取大。
 
     均价为整数时合并下界为 ``1``；否则先取最小正整数 ``n`` 使 ``avg*n`` 接近整数
-    （``_min_positive_int_avg_product_near_integer``），失败则退回 ``_min_total_from_avg`` 分数分子；均格分支同理。
+    （``_min_positive_int_avg_product_near_integer_relaxed``：阈值逐级 ×10 放宽）；均格分支同理。
     """
     n = _as_int_count(d.get(count_k))
     G = _as_int_count(d.get(grid_k))
@@ -564,6 +574,7 @@ def build_raw_pricing_dict(
         MAP_SKILL_RANDOM3_AVG_PRICE,
         MAP_SKILL_RANDOM6_AVG_PRICE,
         MAP_SKILL_RANDOM9_AVG_PRICE,
+        MAP_SKILL_RANDOM12_AVG_PRICE,
     ):
         ent = skill_entries.get(_rnd_cid)
         avg_f = _safe_float_field(ent, "AllHitItemAvgPrice") if isinstance(ent, dict) else None
