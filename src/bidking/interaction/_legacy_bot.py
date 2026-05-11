@@ -251,13 +251,6 @@ def format_bid_details_line(details: dict[str, Any]) -> str:
     if isinstance(bc, dict) and bc.get("applied"):
         parts.append(f"bid_cap->{bc.get('cap_price')}")
 
-    sg = details.get("safe_guard")
-    if isinstance(sg, dict) and sg.get("triggered"):
-        parts.append(f"safe_guard cap={sg.get('limit_price')}")
-
-    if details.get("skip_submit"):
-        parts.append("skip_submit")
-
     return " | ".join(parts) if parts else "(empty details)"
 
 
@@ -1091,14 +1084,14 @@ def _default_warehouse_auto_sort_settings() -> dict[str, Any]:
         "wait_after_warehouse_click_seconds": 5.0,
         "wait_after_auto_sort_click_seconds": 5.0,
         "warehouse_button_region": {"left": 71, "top": 992, "width": 111, "height": 53},
-        "auto_sort_region": {"left": 1436, "top": 1010, "width": 155, "height": 34},
+        "auto_sort_region": {"left": 1524, "top": 1031, "width": 155, "height": 34},
     }
 
 
 def merge_warehouse_auto_sort_settings(config: dict[str, Any]) -> dict[str, Any]:
-    """合并 ``automation.aisha_warehouse_auto_sort``（保留配置键名以兼容旧档）。"""
+    """合并 ``automation.warehouse_auto_sort``（保留配置键名以兼容旧档）。"""
     defaults = _default_warehouse_auto_sort_settings()
-    raw = (config.get("automation") or {}).get("aisha_warehouse_auto_sort")
+    raw = (config.get("automation") or {}).get("warehouse_auto_sort")
     if not isinstance(raw, dict):
         return defaults
     out = dict(defaults)
@@ -1230,9 +1223,6 @@ def handle_round(
             "ocr snippet: " + compact_text(observation.capture.text)[:160],
             gui_verbose_only=True,
         )
-    if details.get("skip_submit"):
-        log(f"bid skipped: {details.get('reason')}")
-        return knowledge_patch
     input_bid(config, price, config_path=config_path)
     return knowledge_patch
 
@@ -1470,7 +1460,7 @@ def run_loop(
 
             if observation.auction_lobby:
                 if time.monotonic() - last_lobby_at >= transition_debounce:
-                    if mode_loop == "aisha_premium" and preflight_esc_before_next_map_select:
+                    if preflight_esc_before_next_map_select:
                         log(
                             f"loop {loop_index}: auction lobby: 开局前先 ESC 回主界面，"
                             "再由主页进入选图",
@@ -1480,7 +1470,7 @@ def run_loop(
                         preflight_esc_before_next_map_select = False
                         await_non_lobby_after_preflight_esc = True
                         last_lobby_at = time.monotonic()
-                    elif mode_loop == "aisha_premium" and await_non_lobby_after_preflight_esc:
+                    elif await_non_lobby_after_preflight_esc:
                         log(
                             f"loop {loop_index}: auction lobby: 已 ESC，"
                             "等待退出大厅界面后再从主页进入选图",
@@ -1492,10 +1482,9 @@ def run_loop(
                         confirm_at = run_map_selection_transition(config, selected_map)
                         if confirm_at:
                             last_post_continue_confirm_at = confirm_at
-                            if mode_loop == "aisha_premium":
-                                pending_game_start_deadline = (
-                                    time.monotonic() + game_start_timeout_seconds
-                                )
+                            pending_game_start_deadline = (
+                                time.monotonic() + game_start_timeout_seconds
+                            )
                         handled_rounds.clear()
                         knowledge_patch = None
                         reset_capture_scan_session(scan_session)
@@ -1507,33 +1496,30 @@ def run_loop(
 
             if observation.home_bid_button:
                 if time.monotonic() - last_home_bid_at >= transition_debounce:
-                    if mode_loop == "aisha_premium":
-                        wc = merge_warehouse_auto_sort_settings(config)
-                        if bool(wc.get("enabled", True)):
-                            need_wh_sort = False
-                            reason = ""
-                            if not startup_warehouse_sort_done:
-                                need_wh_sort = True
-                                reason = "开局首次回到主页"
-                            elif (
-                                completed_runs > 0
-                                and completed_runs % 5 == 0
-                                and completed_runs not in warehouse_sort_milestones_done
-                            ):
-                                need_wh_sort = True
-                                reason = f"已完成 {completed_runs} 局（每 5 局整理）"
-                            if need_wh_sort:
-                                log(f"warehouse auto_sort: 触发整理 ({reason})", gui_verbose_only=True)
-                                run_warehouse_auto_sort(config)
-                                startup_warehouse_sort_done = True
-                                if completed_runs > 0 and completed_runs % 5 == 0:
-                                    warehouse_sort_milestones_done.add(int(completed_runs))
-                    run_home_bid_button_transition(config)
-                    knowledge_patch = None
-                    reset_capture_scan_session(scan_session)
-                    last_home_bid_at = time.monotonic()
-                else:
-                    log(f"loop {loop_index}: home bid button ignored by debounce", gui_verbose_only=True)
+                    wc = merge_warehouse_auto_sort_settings(config)
+                    if bool(wc.get("enabled", True)):
+                        need_wh_sort = False
+                        reason = ""
+                        if not startup_warehouse_sort_done:
+                            need_wh_sort = True
+                            reason = "开局首次回到主页"
+                        elif (
+                            completed_runs > 0
+                            and completed_runs % 5 == 0
+                            and completed_runs not in warehouse_sort_milestones_done
+                        ):
+                            need_wh_sort = True
+                            reason = f"已完成 {completed_runs} 局（每 5 局整理）"
+                        if need_wh_sort:
+                            log(f"warehouse auto_sort: 触发整理 ({reason})", gui_verbose_only=True)
+                            run_warehouse_auto_sort(config)
+                            startup_warehouse_sort_done = True
+                            if completed_runs > 0 and completed_runs % 5 == 0:
+                                warehouse_sort_milestones_done.add(int(completed_runs))
+                run_home_bid_button_transition(config)
+                knowledge_patch = None
+                reset_capture_scan_session(scan_session)
+                last_home_bid_at = time.monotonic()
                 sleep_interruptible(poll_seconds)
                 continue
 

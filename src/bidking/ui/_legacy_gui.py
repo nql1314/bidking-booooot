@@ -6,7 +6,7 @@ import threading
 import traceback
 from pathlib import Path
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 
 from ..interaction import _legacy_bot as bot
@@ -19,9 +19,11 @@ CONFIG_OVERLAY_PATH = config_overlay_path()
 
 MAP_KEYS = ("1", "2", "3", "4", "5", "6", "7")
 
+DEFAULT_BID_RATIO_BY_ROUND = {"1": 0.9, "2": 1.0, "3": 1.1, "4": 1.15, "5": 1.2}
+
 BOT_RUNNER_LABEL_TO_KEY = {
-    "通用 bot（fresh_bidking_bot.py）": "fresh_bidking_bot",
-    "艾莎入口（fresh_aisha_bot.py）": "fresh_aisha_bot",
+    "ahmad跑刀": "fresh_bidking_bot",
+    "aisha通用": "fresh_aisha_bot",
 }
 BOT_RUNNER_KEY_TO_LABEL = {value: key for key, value in BOT_RUNNER_LABEL_TO_KEY.items()}
 BOT_RUNNER_COMBO_VALUES = tuple(BOT_RUNNER_LABEL_TO_KEY.keys())
@@ -42,10 +44,7 @@ def resolve_bot_runner(cfg: dict) -> str:
 
 
 def tip_text_for_bot_runner_label(label: str) -> str:
-    key = BOT_RUNNER_LABEL_TO_KEY.get(label, "fresh_bidking_bot")
-    if key == "fresh_aisha_bot":
-        return "艾莎入口：启动时清空 board_snapshot 文件；主循环与通用 bot 相同，出价由 pricing.compute_price 计算。"
-    return "通用 bot：整窗 OCR + 固定流程；出价由 pricing.compute_price（快照 pricing）驱动。"
+    return "游戏分辨率 1920*1080 禁止倒卖 Q群 956946772 B站 https://space.bilibili.com/1934731"
 
 
 class GuiLogger:
@@ -80,11 +79,18 @@ class BidKingApp:
         self.bot_runner_var = tk.StringVar(value=BOT_RUNNER_COMBO_VALUES[0])
         self.fallback_bid_var = tk.StringVar(value="22223")
         self.bid_cap_var = tk.StringVar(value="0")
-        self.safe_guard_enabled_var = tk.BooleanVar(value=False)
-        self.safe_guard_ratio_var = tk.StringVar(value="0")
+        self.bid_ratio_vars: dict[int, tk.StringVar] = {
+            r: tk.StringVar(value=str(DEFAULT_BID_RATIO_BY_ROUND[str(r)])) for r in range(1, 6)
+        }
         self.config_json_auto_apply_var = tk.BooleanVar(value=True)
         self._config_json_apply_after_id: str | None = None
         self._config_editor_syncing = False
+        self.map_overlay_auto_apply_var = tk.BooleanVar(value=True)
+        self._map_overlay_apply_after_id: str | None = None
+        self._map_overlay_syncing = False
+        self.board_snapshot_path_var = tk.StringVar(value="")
+        self.self_user_uid_var = tk.StringVar(value="")
+        self.self_name_substring_var = tk.StringVar(value="")
 
         self.build_ui()
         self.load_into_form()
@@ -106,12 +112,13 @@ class BidKingApp:
             self.refresh_config_json_editor_from_model()
 
     def build_ui(self) -> None:
-        notebook = ttk.Notebook(self.root)
-        notebook.pack(fill="both", expand=True)
-        main = ttk.Frame(notebook, padding=12)
-        notebook.add(main, text="自动化")
-        config_page = ttk.Frame(notebook, padding=8)
-        notebook.add(config_page, text="本地覆盖 (config.json)")
+        self.notebook = ttk.Notebook(self.root)
+        self.notebook.pack(fill="both", expand=True)
+        main = ttk.Frame(self.notebook, padding=12)
+        self.notebook.add(main, text="自动化")
+        config_page = ttk.Frame(self.notebook, padding=8)
+        self.notebook.add(config_page, text="本地覆盖 (config.json)")
+        self.notebook.bind("<<NotebookTabChanged>>", self._on_notebook_tab_changed)
         self.build_config_json_tab(config_page)
 
         settings_box = ttk.LabelFrame(main, text="1. 选图与重复轮数", padding=10)
@@ -136,7 +143,7 @@ class BidKingApp:
         )
         self.bot_runner_combo.grid(row=2, column=1, sticky="w", pady=4)
 
-        button_box = ttk.LabelFrame(main, text="2. 控制", padding=10)
+        button_box = ttk.LabelFrame(main, text="2. 控制 F9强制停止", padding=10)
         button_box.pack(fill="x", pady=(10, 0))
         self.start_btn = ttk.Button(button_box, text="开启", command=self.start_bot)
         self.start_btn.pack(side="left")
@@ -157,9 +164,9 @@ class BidKingApp:
         ttk.Label(
             price_box,
             text="以下写入 configs/pricing.maps/<地图编号>.json（与当前下拉所选地图对应）；"
-            "bid_ratio_by_round 等可在该文件或「本地覆盖」JSON 中编辑。",
+            "亦可在本页「本地覆盖」里编辑该文件的完整 JSON。",
             wraplength=720,
-        ).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 6))
+        ).grid(row=0, column=0, columnspan=6, sticky="w", pady=(0, 6))
 
         ttk.Label(price_box, text="兜底价").grid(row=1, column=0, sticky="w", pady=2)
         ttk.Entry(price_box, textvariable=self.fallback_bid_var, width=12).grid(row=1, column=1, sticky="w", padx=(4, 16))
@@ -167,14 +174,38 @@ class BidKingApp:
         ttk.Label(price_box, text="封顶价").grid(row=1, column=2, sticky="w", pady=2)
         ttk.Entry(price_box, textvariable=self.bid_cap_var, width=12).grid(row=1, column=3, sticky="w", padx=(4, 0))
 
-        ttk.Label(price_box, text="环比护栏").grid(row=2, column=0, sticky="w", pady=2)
-        ttk.Checkbutton(price_box, text="启用 safe_guard", variable=self.safe_guard_enabled_var).grid(
-            row=2, column=1, sticky="w"
-        )
-        ttk.Label(price_box, text="最大加价比例").grid(row=2, column=2, sticky="w", padx=(8, 0))
-        ttk.Entry(price_box, textvariable=self.safe_guard_ratio_var, width=10).grid(row=2, column=3, sticky="w", padx=(4, 0))
+        ttk.Label(price_box, text="automation.bid_ratio_by_round").grid(row=2, column=0, sticky="nw", pady=(8, 2))
+        ratio_wrap = ttk.Frame(price_box)
+        ratio_wrap.grid(row=2, column=1, columnspan=5, sticky="w", pady=(8, 2))
+        for round_no in range(1, 6):
+            col = ttk.Frame(ratio_wrap)
+            col.pack(side="left", padx=(0, 10))
+            ttk.Label(col, text=f"第{round_no}回合").pack(anchor="w")
+            ttk.Entry(col, textvariable=self.bid_ratio_vars[round_no], width=8).pack(anchor="w")
 
-        tip_box = ttk.LabelFrame(main, text="5. 说明", padding=10)
+        snap_box = ttk.LabelFrame(main, text="5. 棋盘快照（board_snapshot）", padding=10)
+        snap_box.pack(fill="x", pady=(10, 0))
+        ttk.Label(
+            snap_box,
+            text="写入 configs/config.json 的 board_snapshot：快照 JSON 路径；「己方 UID」与「名称关键字」至少填其一。",
+            wraplength=720,
+        ).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 6))
+
+        ttk.Label(snap_box, text="快照文件 path").grid(row=1, column=0, sticky="nw", pady=2)
+        path_row = ttk.Frame(snap_box)
+        path_row.grid(row=1, column=1, columnspan=3, sticky="ew", pady=2)
+        snap_box.columnconfigure(1, weight=1)
+        ttk.Entry(path_row, textvariable=self.board_snapshot_path_var).pack(side="left", fill="x", expand=True)
+        ttk.Button(path_row, text="选择目录…", command=self.browse_board_snapshot_directory, width=12).pack(
+            side="left", padx=(6, 0)
+        )
+
+        ttk.Label(snap_box, text="己方 UID").grid(row=2, column=0, sticky="w", pady=2)
+        ttk.Entry(snap_box, textvariable=self.self_user_uid_var, width=28).grid(row=2, column=1, sticky="w", pady=2)
+        ttk.Label(snap_box, text="名称关键字").grid(row=2, column=2, sticky="w", padx=(12, 4), pady=2)
+        ttk.Entry(snap_box, textvariable=self.self_name_substring_var, width=20).grid(row=2, column=3, sticky="w", pady=2)
+
+        tip_box = ttk.LabelFrame(main, text="6. 说明", padding=10)
         tip_box.pack(fill="x", pady=(10, 0))
         self.tip_label = ttk.Label(tip_box, text=tip_text_for_bot_runner_label(BOT_RUNNER_COMBO_VALUES[0]))
         self.tip_label.pack(anchor="w")
@@ -197,11 +228,34 @@ class BidKingApp:
         self.config_json_status_var = tk.StringVar(value="")
         ttk.Label(bar, textvariable=self.config_json_status_var, foreground="gray").pack(side="left", padx=(10, 0))
 
-        self.config_json_text = ScrolledText(parent, wrap="word", font=("Consolas", 10), height=32, width=92)
+        self.config_json_text = ScrolledText(parent, wrap="word", font=("Consolas", 10), height=20, width=92)
         self.config_json_text.pack(fill="both", expand=True, pady=(8, 0))
 
         self.refresh_config_json_editor_from_model()
         self.config_json_text.bind("<KeyRelease>", self._on_config_json_editor_keyrelease)
+
+        ttk.Separator(parent, orient="horizontal").pack(fill="x", pady=(12, 8))
+        map_box = ttk.LabelFrame(
+            parent,
+            text="当前地图自定义（configs/pricing.maps/<地图编号>.json，与「自动化」页所选地图一致）",
+            padding=8,
+        )
+        map_box.pack(fill="both", expand=True)
+        map_bar = ttk.Frame(map_box)
+        map_bar.pack(fill="x")
+        self.map_overlay_path_var = tk.StringVar(value="")
+        ttk.Label(map_bar, textvariable=self.map_overlay_path_var).pack(side="left")
+        ttk.Checkbutton(map_bar, text="编辑合法后自动保存", variable=self.map_overlay_auto_apply_var).pack(
+            side="left", padx=(14, 0)
+        )
+        ttk.Button(map_bar, text="保存", command=self.save_map_overlay_from_editor).pack(side="left", padx=(8, 0))
+        ttk.Button(map_bar, text="从磁盘重载", command=self.reload_map_overlay_from_disk).pack(side="left", padx=(4, 0))
+        self.map_overlay_status_var = tk.StringVar(value="")
+        ttk.Label(map_bar, textvariable=self.map_overlay_status_var, foreground="gray").pack(side="left", padx=(10, 0))
+
+        self.map_overlay_text = ScrolledText(map_box, wrap="word", font=("Consolas", 10), height=14, width=92)
+        self.map_overlay_text.pack(fill="both", expand=True, pady=(8, 0))
+        self.map_overlay_text.bind("<KeyRelease>", self._on_map_overlay_editor_keyrelease)
 
     def refresh_config_json_editor_from_model(self) -> None:
         if not hasattr(self, "config_json_text"):
@@ -231,6 +285,109 @@ class BidKingApp:
         except (json.JSONDecodeError, ValueError, TypeError) as exc:
             self.config_json_status_var.set(f"JSON 未就绪: {exc}")
 
+    def _on_notebook_tab_changed(self, event: tk.Event | None = None) -> None:  # noqa: ARG002
+        try:
+            tab_id = self.notebook.select()
+            tab_text = self.notebook.tab(tab_id, "text")
+        except tk.TclError:
+            return
+        if tab_text == "本地覆盖 (config.json)":
+            self.refresh_map_overlay_editor_from_disk()
+
+    def _map_overlay_doc_from_form(self) -> dict:
+        try:
+            fb = int(str(self.fallback_bid_var.get()).strip() or "22223")
+        except ValueError:
+            fb = 22223
+        try:
+            cap = int(str(self.bid_cap_var.get()).strip() or "0")
+        except ValueError:
+            cap = 0
+        bid_ratio: dict[str, float] = {}
+        for round_no in range(1, 6):
+            raw = self.bid_ratio_vars[round_no].get().strip()
+            key = str(round_no)
+            try:
+                bid_ratio[key] = float(raw) if raw else DEFAULT_BID_RATIO_BY_ROUND[key]
+            except ValueError:
+                bid_ratio[key] = DEFAULT_BID_RATIO_BY_ROUND[key]
+        return {
+            "pricing": {"fallback_bid_price": fb},
+            "automation": {
+                "bid_cap_price": cap,
+                "bid_ratio_by_round": bid_ratio,
+            },
+        }
+
+    def refresh_map_overlay_editor_from_disk(self) -> None:
+        if not hasattr(self, "map_overlay_text"):
+            return
+        mk = self.effective_map_key()
+        path = pricing_map_overlay_path(mk)
+        self.map_overlay_path_var.set(str(path))
+        self._map_overlay_syncing = True
+        try:
+            self.map_overlay_text.delete("1.0", "end")
+            if path.is_file():
+                doc = self.load_json(path)
+            else:
+                doc = self._map_overlay_doc_from_form()
+            self.map_overlay_text.insert("1.0", json.dumps(doc, ensure_ascii=False, indent=2))
+        finally:
+            self._map_overlay_syncing = False
+
+    def _on_map_overlay_editor_keyrelease(self, event: tk.Event | None = None) -> None:  # noqa: ARG002
+        if self._map_overlay_syncing:
+            return
+        if not self.map_overlay_auto_apply_var.get():
+            return
+        if self._map_overlay_apply_after_id is not None:
+            self.root.after_cancel(self._map_overlay_apply_after_id)
+        self._map_overlay_apply_after_id = self.root.after(600, self._debounced_apply_map_overlay)
+
+    def _debounced_apply_map_overlay(self) -> None:
+        self._map_overlay_apply_after_id = None
+        try:
+            self._parse_and_apply_map_overlay_editor(write_file=True)
+            self.map_overlay_status_var.set("已自动保存")
+        except (json.JSONDecodeError, ValueError, TypeError) as exc:
+            self.map_overlay_status_var.set(f"JSON 未就绪: {exc}")
+
+    def _parse_and_apply_map_overlay_editor(self, *, write_file: bool) -> None:
+        if not hasattr(self, "map_overlay_text"):
+            return
+        raw = self.map_overlay_text.get("1.0", "end-1c").strip()
+        if not raw:
+            raise ValueError("地图自定义内容为空")
+        parsed = json.loads(raw)
+        if not isinstance(parsed, dict):
+            raise ValueError("地图自定义根节点必须是 JSON 对象")
+        mk = self.effective_map_key()
+        path = pricing_map_overlay_path(mk)
+        if write_file:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            self.save_json(path, parsed)
+        self._load_map_pricing_fields(mk)
+
+    def save_map_overlay_from_editor(self) -> None:
+        try:
+            self._parse_and_apply_map_overlay_editor(write_file=True)
+            self.map_overlay_status_var.set("已保存")
+        except (json.JSONDecodeError, ValueError, TypeError) as exc:
+            messagebox.showerror("地图自定义", f"无法保存：\n{exc}")
+            self.map_overlay_status_var.set("保存失败")
+
+    def reload_map_overlay_from_disk(self) -> None:
+        try:
+            self.reload_config_sources()
+            self.load_into_form()
+            self.refresh_map_overlay_editor_from_disk()
+            self.map_overlay_status_var.set("已从磁盘加载")
+        except OSError as exc:
+            messagebox.showerror("地图自定义", str(exc))
+        except json.JSONDecodeError as exc:
+            messagebox.showerror("地图自定义", f"JSON 无效：{exc}")
+
     def _parse_and_apply_config_json_editor(self, *, write_file: bool) -> None:
         raw = self.config_json_text.get("1.0", "end-1c").strip()
         if not raw:
@@ -256,6 +413,7 @@ class BidKingApp:
         try:
             self.reload_config_sources()
             self.load_into_form()
+            self.refresh_map_overlay_editor_from_disk()
             self.config_json_status_var.set("已从磁盘加载")
         except OSError as exc:
             messagebox.showerror("主配置", str(exc))
@@ -298,13 +456,18 @@ class BidKingApp:
             au = self.config.get("automation") or {}
         self.fallback_bid_var.set(str(pr.get("fallback_bid_price", 22223)))
         self.bid_cap_var.set(str(au.get("bid_cap_price", 0)))
-        self.safe_guard_enabled_var.set(bool(au.get("safe_guard_enabled", False)))
-        self.safe_guard_ratio_var.set(str(au.get("safe_guard_max_increase_ratio", 0.0)))
+        br_src = au.get("bid_ratio_by_round") if isinstance(au.get("bid_ratio_by_round"), dict) else {}
+        for round_no in range(1, 6):
+            key = str(round_no)
+            if key in br_src:
+                self.bid_ratio_vars[round_no].set(str(br_src[key]))
+            else:
+                self.bid_ratio_vars[round_no].set(str(DEFAULT_BID_RATIO_BY_ROUND[key]))
 
     def _on_map_combo_selected(self, event: tk.Event | None = None) -> None:  # noqa: ARG002
-        mk = self.selected_map_key()
-        if mk:
-            self._load_map_pricing_fields(mk)
+        mk = self.selected_map_key() or self.effective_map_key()
+        self._load_map_pricing_fields(mk)
+        self.refresh_map_overlay_editor_from_disk()
 
     def load_into_form(self) -> None:
         auto = self.config.get("automation") or {}
@@ -321,9 +484,21 @@ class BidKingApp:
         runner_key = resolve_bot_runner(self.config)
         self.bot_runner_var.set(BOT_RUNNER_KEY_TO_LABEL.get(runner_key, BOT_RUNNER_COMBO_VALUES[0]))
         self.tip_label.config(text=tip_text_for_bot_runner_label(self.bot_runner_var.get()))
+        bs = self.config.get("board_snapshot") if isinstance(self.config.get("board_snapshot"), dict) else {}
+        self.board_snapshot_path_var.set(str(bs.get("path", "")))
+        self.self_user_uid_var.set(str(bs.get("self_user_uid", "")))
+        self.self_name_substring_var.set(str(bs.get("self_name_substring", "")))
+        self.refresh_map_overlay_editor_from_disk()
 
     def _on_bot_runner_combo_change(self, event: tk.Event | None = None) -> None:  # noqa: ARG002
         self.tip_label.config(text=tip_text_for_bot_runner_label(self.bot_runner_var.get()))
+
+    def browse_board_snapshot_directory(self) -> None:
+        picked = filedialog.askdirectory(title="选择目录（将使用其中的 board_snapshot.json）")
+        if not picked:
+            return
+        path = (Path(picked) / "board_snapshot.json").resolve()
+        self.board_snapshot_path_var.set(str(path).replace("\\", "/"))
 
     def append_log(self, message: str) -> None:
         line = f"[{bot.log_timestamp()}] {message}"
@@ -338,10 +513,17 @@ class BidKingApp:
         text = self.map_var.get().strip()
         return text.split(".", 1)[0].strip() if "." in text else text
 
+    def effective_map_key(self) -> str:
+        mk = self.selected_map_key()
+        if mk:
+            return mk
+        auto = self.config.get("automation") or {}
+        return str(auto.get("selected_map") or auto.get("default_map", "4"))
+
     def apply_form_to_config(self) -> None:
         self.sync_config_json_editor_to_model_for_run()
         runs_value = int(self.runs_var.get()) if self.runs_var.get().isdigit() and int(self.runs_var.get()) > 0 else 1
-        selected_map = self.selected_map_key() or "4"
+        selected_map = self.selected_map_key() or self.effective_map_key() or "4"
         selected_tool_rounds = [round_no for round_no, var in self.tool_round_vars.items() if var.get()]
 
         self.config.setdefault("automation", {})
@@ -366,6 +548,22 @@ class BidKingApp:
         self.overlay["automation"]["tool_rounds"] = self.config["automation"]["tool_rounds"]
         self.overlay.setdefault("advisor", {})["role"] = self.config["advisor"]["role"]
 
+        path_snap = str(self.board_snapshot_path_var.get()).strip()
+        if not path_snap:
+            raise ValueError("请填写「快照文件 path」，或点击「选择目录…」生成 board_snapshot.json 路径")
+        uid = str(self.self_user_uid_var.get()).strip()
+        name_sub = str(self.self_name_substring_var.get()).strip()
+        if not uid and not name_sub:
+            raise ValueError("「己方 UID」与「名称关键字」须至少填写一项")
+
+        bs_overlay = self.overlay.setdefault("board_snapshot", {})
+        bs_overlay.setdefault("enabled", True)
+        bs_overlay.setdefault("write_mode", "both")
+        bs_overlay.setdefault("schema_version_min", 1)
+        bs_overlay["path"] = path_snap.replace("\\", "/")
+        bs_overlay["self_user_uid"] = uid
+        bs_overlay["self_name_substring"] = name_sub
+
         try:
             fb = int(str(self.fallback_bid_var.get()).strip() or "22223")
         except ValueError:
@@ -374,11 +572,15 @@ class BidKingApp:
             cap = int(str(self.bid_cap_var.get()).strip() or "0")
         except ValueError:
             cap = 0
-        try:
-            sgr = float(str(self.safe_guard_ratio_var.get()).strip() or "0")
-        except ValueError:
-            sgr = 0.0
-        sgr = max(0.0, sgr)
+
+        bid_ratio_by_round: dict[str, float] = {}
+        for round_no in range(1, 6):
+            raw = self.bid_ratio_vars[round_no].get().strip()
+            key = str(round_no)
+            try:
+                bid_ratio_by_round[key] = float(raw) if raw else DEFAULT_BID_RATIO_BY_ROUND[key]
+            except ValueError as exc:
+                raise ValueError(f"第{round_no}回合出价系数无效，请输入数字（例：1.1）") from exc
 
         map_path = pricing_map_overlay_path(selected_map)
         prior: dict = {}
@@ -390,11 +592,14 @@ class BidKingApp:
                 "pricing": {"fallback_bid_price": fb},
                 "automation": {
                     "bid_cap_price": cap,
-                    "safe_guard_enabled": bool(self.safe_guard_enabled_var.get()),
-                    "safe_guard_max_increase_ratio": sgr,
+                    "bid_ratio_by_round": bid_ratio_by_round,
                 },
             },
         )
+        au_doc = map_doc.get("automation")
+        if isinstance(au_doc, dict):
+            au_doc.pop("safe_guard_enabled", None)
+            au_doc.pop("safe_guard_max_increase_ratio", None)
         map_path.parent.mkdir(parents=True, exist_ok=True)
         self.save_json(map_path, map_doc)
 
@@ -402,6 +607,7 @@ class BidKingApp:
         self.config = deep_merge(self.config, map_doc)
         self.save_json(CONFIG_OVERLAY_PATH, self.overlay)
         self.refresh_config_json_editor_from_model()
+        self.refresh_map_overlay_editor_from_disk()
 
     def start_bot(self) -> None:
         if self.worker and self.worker.is_alive():

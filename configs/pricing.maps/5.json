@@ -5,14 +5,12 @@
   "automation": {
     "default_map": "1",
     "bid_cap_price": 800000,
-    "safe_guard_enabled": true,
-    "safe_guard_max_increase_ratio": 0.05,
     "bid_ratio_by_round": {
       "1": 0.55,
       "2": 0.6,
       "3": 0.75,
       "4": 0.95,
-      "5": 1
+      "5": 1.0
     }
   }
 }
