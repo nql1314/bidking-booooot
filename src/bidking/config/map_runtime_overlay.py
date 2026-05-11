@@ -1,6 +1,6 @@
 """按当前选中地图合并 ``configs/pricing.maps/<map_id>.json`` 到运行时 config。
 
-GUI 将兜底价、封顶、护栏、``bid_ratio_by_round`` 等写入地图文件；
+GUI 将兜底价、封顶、``bid_ratio_by_round`` 等写入地图文件；
 :func:`merged_runtime_with_map_pricing` 在出价计算前叠加以便与 bot 主配置一致。
 """
 

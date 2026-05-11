@@ -1,8 +1,4 @@
 {
-  "advisor": {
-    "price_config_path": "price_config.json",
-    "role": "ahmad"
-  },
   "board_snapshot": {
     "enabled": true,
     "path": "C:/bidking/board_snapshot.json",
@@ -12,20 +8,17 @@
     "self_name_substring": "Nico666"
   },
   "automation": {
-    "preflight_esc_before_next_map_select": true,
-    "bot_runner": "fresh_bidking_bot",
-    "selected_mode": "ahmad_premium",
+    "bot_runner": "fresh_aisha_bot",
+    "selected_mode": "aisha_premium",
     "tool_rounds": [],
     "default_map": "1",
     "default_runs": 1,
-    "selected_map": "1",
-    "selected_runs": 96,
+    "selected_map": "5",
+    "selected_runs": 2,
     "warehouse_auto_sort": {
-      "enabled": true,
+      "enabled": false,
       "wait_after_warehouse_click_seconds": 5.0,
-      "wait_after_auto_sort_click_seconds": 5.0,
-      "warehouse_button_region": {"left": 71, "top": 992, "width": 111, "height": 53},
-      "auto_sort_region": {"left": 1524, "top": 1031, "width": 155, "height": 34}
+      "wait_after_auto_sort_click_seconds": 5.0
     }
   },
   "debug": {
@@ -49,4 +42,7 @@
     "transition_debounce_seconds": 5.0,
     "reward_continue_debounce_seconds": 1.0
   },
+  "advisor": {
+    "role": "aisha"
+  }
 }

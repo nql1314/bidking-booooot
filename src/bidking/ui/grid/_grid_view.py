@@ -20,7 +20,7 @@
   - 后台线程从文件当前 EOF 开始 tail，解析新增事件并更新 GameState
   - 通过 queue.SimpleQueue 传信号给 UI 主线程
   - UI 主线程每 300ms 通过 root.after() 轮询队列，按需重绘
-  - 新对局开始（S2C_33）时：若配置了快照路径则先备份至该路径同级 ``run/`` 再删除旧快照文件，随后清空并重置界面并写入新快照
+  - 新对局开始（S2C_33）时：若配置了快照路径则先备份至该路径同级 ``run/`` 再删除旧快照文件（``run/`` 内 ``*.json`` 超过 100 个时按修改时间删最早的），随后清空并重置界面并写入新快照
   - 日志监听与写快照均在 threading.RLock 保护下进行；``_refresh`` 结束时会写出 ``snapshot_path``
    （含 ``grid_overlay`` 手画幽灵/轮廓/空置剔除等），手动画框与拖调轮廓也会触发刷新从而落盘
 
@@ -40,6 +40,7 @@ import shutil
 import statistics
 import threading
 import time
+from datetime import datetime
 import tkinter as tk
 from pathlib import Path
 from copy import deepcopy
@@ -170,6 +171,9 @@ def _lines_from_ahmad_points_detail(detail: Any) -> List[str]:
 # 写入 board_snapshot.json 的 schema 版本（与 bot 侧校验一致）
 BOARD_SNAPSHOT_SCHEMA_VERSION = 2
 
+# ``run/`` 下历史快照 JSON 上限；超出则按修改时间删最早的归档。
+BOARD_SNAPSHOT_RUN_ARCHIVE_MAX = 100
+
 # 供 fresh_aisha_bot 等读取的 JSON 快照输出路径；空字符串表示不写快照。
 # 构造 ``GridWindow(snapshot_path=...)`` 时若传入非空字符串则覆盖本常量。
 DEFAULT_BOARD_SNAPSHOT_PATH = r"C:\bidking\board_snapshot.json"
@@ -241,6 +245,31 @@ def _archive_board_snapshot_then_unlink(snapshot_path: str) -> None:
         path.unlink()
     except OSError:
         pass
+
+    _prune_board_snapshot_run_archives(run_dir)
+
+
+def _prune_board_snapshot_run_archives(
+    run_dir: Path, max_files: int = BOARD_SNAPSHOT_RUN_ARCHIVE_MAX
+) -> None:
+    """保留 ``run_dir`` 内至多 ``max_files`` 个 ``*.json``，按 mtime 删最早的。"""
+    try:
+        files = [
+            p
+            for p in run_dir.iterdir()
+            if p.is_file() and p.suffix.lower() == ".json"
+        ]
+    except OSError:
+        return
+    excess = len(files) - max_files
+    if excess <= 0:
+        return
+    files.sort(key=lambda p: p.stat().st_mtime)
+    for p in files[:excess]:
+        try:
+            p.unlink()
+        except OSError:
+            pass
 
 
 # 地图质量 CSV、快照定价与 bid 元数据见 ``board_pricing`` 模块。
@@ -1556,7 +1585,7 @@ class GridWindow:
         gs = base["game_state"]
         payload = {
             "schema_version": BOARD_SNAPSHOT_SCHEMA_VERSION,
-            "written_at_unix": time.time(),
+            "written_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "board_mode": self._board_mode,
             "game_uid": gs["uid"],
             "current_round": gs["current_round"],
