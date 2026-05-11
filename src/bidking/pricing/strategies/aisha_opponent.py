@@ -46,7 +46,7 @@ def apply_opponent_bid_adjustment_core(
     if r_no >= 5:
         out = int(
             max(
-                (bid_i + o_poss * 1.05) / 2.0 + random.randint(1000, 1500),
+                (bid_i + o_poss) / 2.0 * 1.05+ random.randint(1000, 1500),
                 float(o_poss * 1.05) + random.randint(1000, 1500),
             )
         )
