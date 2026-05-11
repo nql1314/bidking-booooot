@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import math
 import random
 from typing import Any
 
-from ._numeric import parse_float_config, parse_int_config
+from ._numeric import parse_int_config
 
 
 def apply_human_like_price_tail(fin: int, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
@@ -103,37 +102,3 @@ def apply_bid_cap(config: dict[str, Any], final_price: int, payload: dict[str, A
         "original_price": int(final_price),
     }
     return int(capped), payload
-
-
-def apply_safe_guard(config: dict[str, Any], final_price: int, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
-    automation = config.get("automation") or {}
-    safe_enabled = bool(automation.get("safe_guard_enabled", False))
-    safe_limit = max(0.0, parse_float_config(automation.get("safe_guard_max_increase_ratio"), 0.0))
-    previous_price = config.get("pricing", {}).get("last_submitted_price")
-    if not safe_enabled:
-        payload["safe_guard"] = {"enabled": False, "triggered": False}
-        return int(final_price), payload
-    try:
-        previous = int(previous_price) if previous_price not in (None, "") else None
-    except Exception:
-        previous = None
-    if previous is None or previous <= 0:
-        payload["safe_guard"] = {"enabled": True, "triggered": False, "previous_price": previous}
-        return int(final_price), payload
-    limit_price = int(math.floor(previous * (1.0 + safe_limit)))
-    triggered = final_price > limit_price
-    payload["safe_guard"] = {
-        "enabled": True,
-        "triggered": triggered,
-        "previous_price": previous,
-        "limit_price": limit_price,
-        "safe_limit_ratio": safe_limit,
-    }
-    if triggered:
-        payload["skip_submit"] = True
-        payload["reason"] = (
-            f"safe_guard blocked: {final_price} > {limit_price} "
-            f"(previous={previous}, ratio={safe_limit:.4f})"
-        )
-        return int(final_price), payload
-    return int(final_price), payload

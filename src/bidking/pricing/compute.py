@@ -13,7 +13,6 @@ from .postprocess import (
     apply_ceiling_points,
     apply_early_round_fallback_floor,
     apply_human_like_price_tail,
-    apply_safe_guard,
 )
 from .price_config_load import load_price_config
 from .strategies import compute_role_base, resolve_strategy_role
@@ -30,7 +29,7 @@ def compute_price(
     """
     读快照 ``pricing`` → ``compute_role_base``（艾莎在 ``compute_base_bid_points`` 内含空置红择优）→
     回合倍数 → 对手调整 →
-    ``points_ceiling`` 锚 → 人性化尾数 → 前两回合兜底 → bid_cap → safe_guard。
+    ``points_ceiling`` 锚 → 人性化尾数 → 前两回合兜底 → bid_cap。
     """
     effective_config = merged_runtime_with_map_pricing(config)
 
@@ -133,6 +132,5 @@ def compute_price(
         fin, effective_round, int(fallback), payload
     )
     fin, payload = apply_bid_cap(effective_config, fin, payload)
-    fin, payload = apply_safe_guard(effective_config, fin, payload)
     payload["final_round_used"] = effective_round
     return int(fin), payload
