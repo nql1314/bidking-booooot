@@ -14,9 +14,9 @@
     "default_map": "1",
     "default_runs": 1,
     "selected_map": "5",
-    "selected_runs": 2,
+    "selected_runs": 300,
     "warehouse_auto_sort": {
-      "enabled": false,
+      "enabled": true,
       "wait_after_warehouse_click_seconds": 5.0,
       "wait_after_auto_sort_click_seconds": 5.0
     }
