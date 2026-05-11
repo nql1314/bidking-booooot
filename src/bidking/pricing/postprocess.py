@@ -34,7 +34,7 @@ def apply_ceiling_points(
         return int(fin), payload
     if int(round_no) <= 3:
         return int(fin), payload
-    if int(fin) <= int(ceiling_pts):
+    if int(fin) <= int(ceiling_pts * 1.2):
         payload["ceiling_points"] = {
             "applied": True,
             "q5_q6_ceiling": int(ceiling_pts),
