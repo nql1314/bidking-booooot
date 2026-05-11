@@ -1183,6 +1183,7 @@ def handle_round(
     ran_tool_this_round = int(round_no) in tool_rounds
     seconds = float(config.get("timing", {}).get("tool_after_wait_seconds", 5.0))
     if ran_tool_this_round:
+        sleep_interruptible(5)
         run_tool_sequence(config)
         log(f"after tool: wait {seconds:g}s", gui_verbose_only=True)
         if seconds > 0:
