@@ -54,7 +54,33 @@ python -m unittest discover -s tests -t .             # 测试
 `calculator_data_merged.csv`、`map_quality_avg_out.csv`、
 `物品轮廓爆率推断器.html`。
 
+## Windows 打包（GUI）
+
+生成两个 GUI 启动程序：
+
+- `bot_runner.exe`（总控 GUI）
+- `grid_view.exe`（看板/回放）
+
+```powershell
+cd D:/workzone/bidking-booooot
+.\scripts\build_windows.ps1
+```
+
+可选参数：
+
+- `-NoObfuscation`：禁用 PyArmor 混淆，只做普通 PyInstaller 打包
+
+说明：
+
+- 默认会尝试安装并使用 PyArmor 先混淆 `src/bidking`，再交给 PyInstaller 打包；
+- 脚本会先执行 `pip install -e ".[build]"`，确保 `pyautogui` 等运行依赖一并打入 exe；
+- 若 PyArmor 不可用，会自动降级为普通打包（仍不直接携带 `.py` 源文件）。
+
+兼容性提示：
+
+- 产物是 **Windows x64 单文件 exe**，目标机器通常不需要额外安装 Python；
+- 仅保证同平台（Windows）运行，跨平台（Linux/macOS）需分别打包。
+
 ## 不在范围
 
 - 拉文（Raven）相关分支 —— `pricing/strategy.py` 仅保留接口位
-- PyInstaller 打包脚本 —— 后续再补

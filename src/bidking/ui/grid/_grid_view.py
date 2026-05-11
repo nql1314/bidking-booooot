@@ -47,6 +47,7 @@ from copy import deepcopy
 from tkinter import messagebox, ttk
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 
+from ... import __version__
 from ...parsing.constants import (
     CATEGORY_NAMES,
     fmt_shape,
@@ -1727,7 +1728,7 @@ class GridWindow:
         self._vacant_manual_suppress.clear()
 
         self.root.title(
-            f"BidKing 可视化鉴影 "
+            f"BidKing 可视化鉴影 v{__version__} "
             f"第 {self.state.current_round} 回合  ● LIVE"
             f"{self._board_mode_title_suffix()}"
         )
@@ -1875,6 +1876,8 @@ class GridWindow:
             f"其中 U = ¥{u:,.0f}",
             f"数字：{num}",
         ]
+        if key in ("red", "orange", "gold_red"):
+            lines.append("说明：适用于金红总格明确的情况下。")
         return "\n".join(lines)
 
     def _tooltip_text_early_exclusions(self) -> str:
@@ -1974,6 +1977,29 @@ class GridWindow:
         )
         return "\n".join(lines)
 
+    def _tooltip_text_event_stats(self) -> str:
+        """展示 raw_pricing.event_stats（过滤 None）。"""
+        rp = self._last_raw_pricing
+        if not isinstance(rp, dict):
+            rp = self._make_board_snapshot().get("raw_pricing")
+            if isinstance(rp, dict):
+                self._last_raw_pricing = rp
+        st = rp.get("event_stats") if isinstance(rp, dict) else None
+        if not isinstance(st, dict):
+            return "当局数据（event_stats）\n（暂无数据）"
+
+        lines: List[str] = ["当局数据（event_stats）"]
+        for k, v in st.items():
+            if v is None:
+                continue
+            if isinstance(v, float):
+                lines.append(f"{k}: {v:g}")
+            else:
+                lines.append(f"{k}: {v}")
+        if len(lines) == 1:
+            lines.append("（暂无非空字段）")
+        return "\n".join(lines)
+
     def _update_total_label(self) -> None:
         """更新估算总价标签（pricing.total）。"""
         p = self._last_pricing_for_tooltips
@@ -2045,8 +2071,7 @@ class GridWindow:
             pc = int(p.get("points_ceiling") or 0)
             self._est_label_floor.config(text=f"主价区间  ¥{pf:,.0f} – ¥{pc:,.0f}")
         else:
-            pi = int(p.get("points") or 0)
-            self._est_label_floor.config(text=f"主价  ¥{pi:,.0f}")
+            self._est_label_floor.config(text="")
 
     # ── 界面构建 ──────────────────────────────────────────────────────────
 
@@ -2054,7 +2079,7 @@ class GridWindow:
         live_tag = "  ● LIVE" if self._log_path else ""
         self.root = tk.Tk()
         self.root.title(
-            f"BidKing 鉴影可视化"
+            f"BidKing 鉴影可视化 v{__version__} "
             f"第 {self.state.current_round} 回合{live_tag}"
             f"{self._board_mode_title_suffix()}"
         )
@@ -2126,6 +2151,17 @@ class GridWindow:
             cursor="hand2",
         )
         self._est_label_early.pack(side="left")
+        self._event_stats_wrap = tk.Frame(row1, bg="#152030")
+        self._event_stats_label = tk.Label(
+            self._event_stats_wrap,
+            text="当局数据",
+            bg="#152030",
+            fg="#9fd9ff",
+            font=("微软雅黑", 10),
+            cursor="hand2",
+        )
+        self._event_stats_label.pack(side="left")
+        self._event_stats_wrap.pack(side="left", padx=(0, 16))
         row2 = tk.Frame(bar, bg="#152030")
         row2.pack(fill="x", padx=10, pady=(6, 0))
         tip_lbl = dict(
@@ -2141,6 +2177,7 @@ class GridWindow:
         self._est_label_floor.pack(side="left", padx=(0, 0))
         _PricingHoverTip(self._est_label_aisha, self._tooltip_text_main_points)
         _PricingHoverTip(self._est_label_early, self._tooltip_text_early_exclusions)
+        _PricingHoverTip(self._event_stats_label, self._tooltip_text_event_stats)
         _PricingHoverTip(
             self._est_label_red, lambda: self._tooltip_text_position_estimate("red")
         )
@@ -2160,10 +2197,14 @@ class GridWindow:
     def _build_legend(self) -> None:
         bar = tk.Frame(self.root, bg="#222233", pady=5)
         bar.pack(fill="x", padx=8)
+        row1 = tk.Frame(bar, bg="#222233")
+        row1.pack(fill="x")
+        row2 = tk.Frame(bar, bg="#222233")
+        row2.pack(fill="x", pady=(2, 0))
 
         # 只保留未知品质色块，已知品质直接通过格子颜色区分。
         tk.Label(
-            bar,
+            row1,
             text=" 未知 ",
             bg=UNKNOWN_BG,
             fg="#ffffff",
@@ -2173,7 +2214,7 @@ class GridWindow:
         ).pack(side="left", padx=(6, 2))
 
         tk.Button(
-            bar,
+            row1,
             text="扩展日志物品",
             command=self._on_expand_log_items_into_vacant,
             bg="#355545",
@@ -2186,7 +2227,7 @@ class GridWindow:
         ).pack(side="left", padx=(8, 4))
 
         tk.Button(
-            bar,
+            row1,
             text="还原轮廓",
             command=self._on_restore_manual_shapes,
             bg="#554535",
@@ -2199,7 +2240,7 @@ class GridWindow:
         ).pack(side="left", padx=(0, 4))
 
         tk.Label(
-            bar,
+            row1,
             text="空置格·右键剔除/恢复",
             bg="#222233",
             fg="#aaaabb",
@@ -2208,7 +2249,7 @@ class GridWindow:
 
         # 右侧：估算总价（首次绘制后由 _update_total_label 刷新）
         self._total_label = tk.Label(
-            bar,
+            row1,
             text="估算总价  ¥0",
             bg="#222233",
             fg="#e8d080",
@@ -2219,7 +2260,7 @@ class GridWindow:
         _PricingHoverTip(self._total_label, self._tooltip_text_grid_total)
 
         tk.Label(
-            bar,
+            row2,
             text=(
                 "左键空格拖普通幽灵；Ctrl+左键空格拖金幽灵；Ctrl+右键空格拖红幽灵；"
                 "Ctrl+左键命中四角：对角缩放；四边把手仍左键拖；"
@@ -2229,7 +2270,7 @@ class GridWindow:
             bg="#222233",
             fg="#555577",
             font=("微软雅黑", 8),
-        ).pack(side="right", padx=8)
+        ).pack(side="left", padx=8)
 
     def _build_nav_bar(self) -> None:
         """快照导航栏：上一步 / 当前位置 / 下一步（仅快照模式显示）。"""
@@ -2307,7 +2348,7 @@ class GridWindow:
         # 更新窗口标题、信息栏、画布
         label = self._snapshots[idx][0]
         self.root.title(
-            f"BidKing 物品格局  —  对局 {self.state.uid}  {label}"
+            f"BidKing 物品格局 v{__version__}  —  对局 {self.state.uid}  {label}"
             f"{self._board_mode_title_suffix()}"
         )
         self._refresh()

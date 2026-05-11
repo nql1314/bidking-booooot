@@ -8,6 +8,7 @@ import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox
 
+from .. import __version__
 from ..parsing.constants import (
     DEFAULT_GAME_LOG,
     LOCAL_COPY_LOG,
@@ -73,7 +74,7 @@ def _open_grid(
 
 def _show_start_page(default_log: str, csv_path: str) -> None:
     root = tk.Tk()
-    root.title("BidKing 鉴影可视化 - 启动")
+    root.title(f"BidKing 鉴影可视化 v{__version__} - 启动")
 
     log_var = tk.StringVar(value=default_log)
     mode_var = tk.StringVar(value="replay")
@@ -101,7 +102,7 @@ def _show_start_page(default_log: str, csv_path: str) -> None:
     tk.Radiobutton(frame, text="实时 tail", variable=mode_var, value="tail").pack(anchor="w")
     tk.Label(frame, text="看板角色").pack(anchor="w", pady=(8, 0))
     tk.Radiobutton(frame, text="艾莎", variable=board_var, value="elsa").pack(anchor="w")
-    tk.Radiobutton(frame, text="拉文", variable=board_var, value="raven").pack(anchor="w")
+    # tk.Radiobutton(frame, text="拉文", variable=board_var, value="raven").pack(anchor="w")
 
     def start() -> None:
         log_path = log_var.get().strip()
@@ -124,7 +125,7 @@ def _show_start_page(default_log: str, csv_path: str) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(description="BidKing 物品格局可视化")
+    parser = argparse.ArgumentParser(description=f"BidKing 物品格局可视化 v{__version__}")
     parser.add_argument("--log", default=None, help="日志文件路径")
     parser.add_argument(
         "--csv",
@@ -132,12 +133,12 @@ def main(argv: list[str] | None = None) -> None:
         help="物品 CSV 路径",
     )
     parser.add_argument("--tail", action="store_true", help="实时监听模式")
-    parser.add_argument("--raven", action="store_true", help="拉文看板")
+    # parser.add_argument("--raven", action="store_true", help="拉文看板")
     parser.add_argument("--snapshot-path", default=None, help="覆盖快照写出路径")
     parser.add_argument("--snapshot-no-overlay", action="store_true", help="快照不含 grid_overlay")
     args = parser.parse_args(argv)
 
-    board_mode = "raven" if args.raven else "elsa"
+    board_mode = "elsa"
 
     if argv is None and len(sys.argv) == 1:
         _show_start_page(_default_log_path(), args.csv)

@@ -1,6 +1,6 @@
 [project]
 name = "bidking"
-version = "0.1.0"
+version = "1.0"
 description = "BidKing: 分层架构的自动化竞拍机器人 + 画板看板"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -21,6 +21,8 @@ bidking-bot = "bidking.runner.bot_main:main"
 bidking-aisha = "bidking.runner.aisha_main:main"
 bidking-viewer = "bidking.runner.viewer_main:main"
 bidking-parse-log = "bidking.parsing.parse_log:main"
+bot_runner = "bidking.ui.app:main"
+grid_view = "bidking.runner.viewer_main:main"
 
 [project.optional-dependencies]
 build = ["pyinstaller>=6.20.0"]
