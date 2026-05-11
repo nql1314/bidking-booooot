@@ -31,19 +31,6 @@
       "poll_dismiss_min_seconds": 2.5
     }
   },
-  "timing": {
-    "poll_seconds": 1,
-    "round_detect_wait_seconds": 8.0,
-    "round1_extra_wait_seconds": 2.0,
-    "tool_after_wait_seconds": 5.0,
-    "click_pause_seconds": 0.12,
-    "after_bid_confirm_wait_seconds": 1.0,
-    "bid_confirm_verify_max_seconds": 30,
-    "bid_confirm_retry_pause_seconds": 0.35,
-    "bid_confirm_capture_delay_seconds": 0,
-    "transition_debounce_seconds": 5.0,
-    "reward_continue_debounce_seconds": 1.0
-  },
   "window": {
     "title_keyword": "BidKing",
     "title_regex": "",
@@ -138,6 +125,12 @@
   "automation": {
     "unknown_escape_cooldown_seconds": 2.0,
     "post_confirm_escape_block_seconds": 60.0,
+    "warehouse_auto_sort": {
+      "wait_after_warehouse_click_seconds": 5.0,
+      "wait_after_auto_sort_click_seconds": 5.0,
+      "warehouse_button_region": {"left": 71, "top": 992, "width": 111, "height": 53},
+      "auto_sort_region": {"left": 1436, "top": 1010, "width": 155, "height": 34}
+    },
     "maps": {
       "1": {
         "name": "快递盲盒堆",
@@ -159,16 +152,16 @@
         "name": "深海沉船",
         "point": {
           "origin": "left_top",
-          "x": 0,
-          "y": 0
+          "x": 1617,
+          "y": 477
         }
       },
       "4": {
         "name": "沉船密封舱",
         "point": {
           "origin": "left_top",
-          "x": 0,
-          "y": 0
+          "x": 1839,
+          "y": 682
         }
       },
       "5": {
@@ -183,16 +176,16 @@
         "name": "空置别墅",
         "point": {
           "origin": "left_top",
-          "x": 0,
-          "y": 0
+          "x": 1564,
+          "y": 734
         }
       },
       "7": {
         "name": "幽静别墅",
         "point": {
           "origin": "left_top",
-          "x": 0,
-          "y": 0
+          "x": 1740,
+          "y": 873
         }
       }
     }
