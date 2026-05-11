@@ -26,18 +26,12 @@ def apply_opponent_bid_adjustment_core(
         config, board_snapshot, None, int(round_no), int(o_prev)
     )
     mult = resolve_round_multiplier(round_no, price_config)
-    adj = o_poss * mult + 1000
+    adj = o_poss * mult + 100
     bid_i = int(bid)
     r_no = int(round_no)
 
     if r_no >= 5:
-        out = int(
-            max(
-                (bid_i + o_poss) / 2.0 + random.randint(1000, 1500),
-                float(o_poss) + random.randint(1000, 1500),
-            )
-        )
-        return out, "opp_final", None
+        return bid_i + random.randint(1000, 1500), "opp_final", None
     if bid_i > adj:
         return int(round((bid_i + adj) / 2)), "opp_low", None
 
