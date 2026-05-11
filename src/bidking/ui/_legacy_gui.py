@@ -6,9 +6,10 @@ import threading
 import traceback
 from pathlib import Path
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 
+from .. import __version__
 from ..interaction import _legacy_bot as bot
 from ..config.paths import config_overlay_path, pricing_map_overlay_path, runtime_path
 from ..config.pricing import deep_merge
@@ -19,7 +20,7 @@ CONFIG_OVERLAY_PATH = config_overlay_path()
 
 MAP_KEYS = ("1", "2", "3", "4", "5", "6", "7")
 
-DEFAULT_BID_RATIO_BY_ROUND = {"1": 0.9, "2": 1.0, "3": 1.1, "4": 1.15, "5": 1.2}
+DEFAULT_BID_RATIO_BY_ROUND = {"1": 0.6, "2": 0.65, "3": 0.75, "4": 0.95, "5": 1.0}
 
 BOT_RUNNER_LABEL_TO_KEY = {
     "ahmad跑刀": "fresh_bidking_bot",
@@ -44,7 +45,7 @@ def resolve_bot_runner(cfg: dict) -> str:
 
 
 def tip_text_for_bot_runner_label(label: str) -> str:
-    return "游戏分辨率 1920*1080 禁止倒卖 Q群 956946772 B站 https://space.bilibili.com/1934731"
+    return "游戏分辨率 1920*1080 免费分享 禁止倒卖 Q群 956946772 B站 https://space.bilibili.com/1934731"
 
 
 class GuiLogger:
@@ -60,7 +61,7 @@ class GuiLogger:
 class BidKingApp:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("竞拍之王助手")
+        self.root.title(f"竞拍之王助手 v{__version__}")
         self.root.geometry("780x900")
         self.root.minsize(300, 780)
 
@@ -88,7 +89,6 @@ class BidKingApp:
         self.map_overlay_auto_apply_var = tk.BooleanVar(value=True)
         self._map_overlay_apply_after_id: str | None = None
         self._map_overlay_syncing = False
-        self.board_snapshot_path_var = tk.StringVar(value="")
         self.self_user_uid_var = tk.StringVar(value="")
         self.self_name_substring_var = tk.StringVar(value="")
 
@@ -187,18 +187,15 @@ class BidKingApp:
         snap_box.pack(fill="x", pady=(10, 0))
         ttk.Label(
             snap_box,
-            text="写入 configs/config.json 的 board_snapshot：快照 JSON 路径；「己方 UID」与「名称关键字」至少填其一。",
+            text="写入 configs/config.json 的 board_snapshot：快照 JSON 路径固定为用户文档目录下的 bidking/board_snapshot.json；"
+            "「己方 UID」与「名称关键字」至少填其一。",
             wraplength=720,
         ).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 6))
 
-        ttk.Label(snap_box, text="快照文件 path").grid(row=1, column=0, sticky="nw", pady=2)
-        path_row = ttk.Frame(snap_box)
-        path_row.grid(row=1, column=1, columnspan=3, sticky="ew", pady=2)
+        fixed_snapshot_path = str(self.default_board_snapshot_path()).replace("\\", "/")
+        ttk.Label(snap_box, text="快照文件 path（固定）").grid(row=1, column=0, sticky="w", pady=2)
+        ttk.Label(snap_box, text=fixed_snapshot_path).grid(row=1, column=1, columnspan=3, sticky="w", pady=2)
         snap_box.columnconfigure(1, weight=1)
-        ttk.Entry(path_row, textvariable=self.board_snapshot_path_var).pack(side="left", fill="x", expand=True)
-        ttk.Button(path_row, text="选择目录…", command=self.browse_board_snapshot_directory, width=12).pack(
-            side="left", padx=(6, 0)
-        )
 
         ttk.Label(snap_box, text="己方 UID").grid(row=2, column=0, sticky="w", pady=2)
         ttk.Entry(snap_box, textvariable=self.self_user_uid_var, width=28).grid(row=2, column=1, sticky="w", pady=2)
@@ -485,7 +482,6 @@ class BidKingApp:
         self.bot_runner_var.set(BOT_RUNNER_KEY_TO_LABEL.get(runner_key, BOT_RUNNER_COMBO_VALUES[0]))
         self.tip_label.config(text=tip_text_for_bot_runner_label(self.bot_runner_var.get()))
         bs = self.config.get("board_snapshot") if isinstance(self.config.get("board_snapshot"), dict) else {}
-        self.board_snapshot_path_var.set(str(bs.get("path", "")))
         self.self_user_uid_var.set(str(bs.get("self_user_uid", "")))
         self.self_name_substring_var.set(str(bs.get("self_name_substring", "")))
         self.refresh_map_overlay_editor_from_disk()
@@ -493,12 +489,11 @@ class BidKingApp:
     def _on_bot_runner_combo_change(self, event: tk.Event | None = None) -> None:  # noqa: ARG002
         self.tip_label.config(text=tip_text_for_bot_runner_label(self.bot_runner_var.get()))
 
-    def browse_board_snapshot_directory(self) -> None:
-        picked = filedialog.askdirectory(title="选择目录（将使用其中的 board_snapshot.json）")
-        if not picked:
-            return
-        path = (Path(picked) / "board_snapshot.json").resolve()
-        self.board_snapshot_path_var.set(str(path).replace("\\", "/"))
+    def default_board_snapshot_path(self) -> Path:
+        docs = Path.home() / "Documents"
+        if not docs.exists():
+            docs = Path.home()
+        return (docs / "bidking" / "board_snapshot.json").resolve()
 
     def append_log(self, message: str) -> None:
         line = f"[{bot.log_timestamp()}] {message}"
@@ -548,9 +543,7 @@ class BidKingApp:
         self.overlay["automation"]["tool_rounds"] = self.config["automation"]["tool_rounds"]
         self.overlay.setdefault("advisor", {})["role"] = self.config["advisor"]["role"]
 
-        path_snap = str(self.board_snapshot_path_var.get()).strip()
-        if not path_snap:
-            raise ValueError("请填写「快照文件 path」，或点击「选择目录…」生成 board_snapshot.json 路径")
+        path_snap = str(self.default_board_snapshot_path()).replace("\\", "/")
         uid = str(self.self_user_uid_var.get()).strip()
         name_sub = str(self.self_name_substring_var.get()).strip()
         if not uid and not name_sub:
