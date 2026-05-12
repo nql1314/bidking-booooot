@@ -56,30 +56,68 @@ python -m unittest discover -s tests -t .             # 测试
 
 ## Windows 打包（GUI）
 
-生成两个 GUI 启动程序：
+### 打包方式
 
-- `bot_runner.exe`（总控 GUI）
-- `grid_view.exe`（看板/回放）
+在 **Windows x64** 上，用 PowerShell 在仓库根目录执行打包脚本，会生成两个 **单文件、无控制台窗口** 的 GUI 程序：
+
+| 产物 | 说明 |
+|------|------|
+| `dist/bot_runner.exe` | 总控 GUI（`bidking.ui.app`） |
+| `dist/grid_view.exe` | 画板看板 / 日志 tail·回放（`bidking.runner.viewer_main`） |
+
+**前置条件**
+
+- 本机已安装与上文一致的 **Python**（建议单独 `venv`，避免污染全局环境）。
+- 当前 shell 能调用到该 Python（脚本内部会执行 `pip install` / `PyInstaller`）。
+
+**命令**
 
 ```powershell
 cd D:/workzone/bidking-booooot
+# 可选：.\.venv\Scripts\Activate.ps1
 .\scripts\build_windows.ps1
 ```
 
-可选参数：
+**可选脚本参数**
 
-- `-NoObfuscation`：禁用 PyArmor 混淆，只做普通 PyInstaller 打包
+- `-NoObfuscation`：跳过 PyArmor，仅用 PyInstaller 打包（调试或 PyArmor 不可用时常用）。
+- `-VersionTag <字符串>`：仅在构建结束时的日志里打印版本标记，**不会**改写 exe 文件名。
 
-说明：
+**脚本会做什么（摘要）**
 
-- 默认会尝试安装并使用 PyArmor 先混淆 `src/bidking`，再交给 PyInstaller 打包；
-- 脚本会先执行 `pip install -e ".[build]"`，确保 `pyautogui` 等运行依赖一并打入 exe；
-- 若 PyArmor 不可用，会自动降级为普通打包（仍不直接携带 `.py` 源文件）。
+- `pip install -e ".[build]"`，再安装/升级 `pyinstaller`（及可选 `pyarmor`）。
+- 默认尝试用 PyArmor 混淆 `src/bidking` 后再打包；失败则自动回退为普通 PyInstaller 构建。
+- PyInstaller 使用 `--onefile --windowed`，并把 `pyautogui`、`rapidocr` 等 GUI/OCR 相关依赖一并收集进 exe。
 
-兼容性提示：
+**兼容性**
 
-- 产物是 **Windows x64 单文件 exe**，目标机器通常不需要额外安装 Python；
-- 仅保证同平台（Windows）运行，跨平台（Linux/macOS）需分别打包。
+- 目标机器一般 **无需安装 Python**；仅保证在 **Windows x64** 上运行。Linux/macOS 需各自环境单独打包。
+
+### exe 使用方式
+
+打包脚本**不会**把仓库里的 `configs/`、`data/` 打进 exe。运行期仍按 `bidking.config.paths` 解析：**配置与 CSV 等资源需与 exe 放在可用的「项目根」下**。
+
+**推荐目录布局**（将 `dist` 里生成的 exe 拷到仓库根目录，与下面两个目录并列即可）：
+
+```text
+<项目根>/
+├── bot_runner.exe      # 或 grid_view.exe
+├── grid_view.exe
+├── configs/            # runtime.json、pricing.json、config.json 等
+└── data/               # item_prices.csv 等数据文件
+```
+
+**启动方式**
+
+- **双击 / 命令行**：在资源管理器中双击，或在 PowerShell 里先 `cd` 到上述 **项目根** 再运行 `.\bot_runner.exe`，保证**当前工作目录**就是含 `configs` 与 `data` 的根目录。
+- **环境变量 `BIDKING_HOME`**：若 exe 放在别的路径、或快捷方式导致工作目录不对，可设置 `BIDKING_HOME` 为 **项目根的绝对路径**（该目录下必须同时存在 `configs` 与 `data` 子目录）。
+
+**程序分工**
+
+- `bot_runner.exe`：自动化总控与相关 GUI。
+- `grid_view.exe`：看板；默认会尝试游戏默认的 `Player.log` 路径，也会尝试 **当前工作目录** 下的 `Player.log` / `Player - 副本.log`。若日志不在默认路径，可在界面中自选日志文件（与源码运行行为一致）。
+
+**分发给别人时**：除两个 exe 外，请一并提供（或说明从仓库拷贝）完整的 **`configs/`** 与 **`data/`**，并按上文设置工作目录或 `BIDKING_HOME`。
 
 ## 不在范围
 
