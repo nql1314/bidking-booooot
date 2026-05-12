@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import traceback
 from pathlib import Path
@@ -14,6 +15,7 @@ from ..interaction import _legacy_bot as bot
 from ..config.map_runtime_overlay import automation_maps_sorted_keys, resolve_automation_map_config_key
 from ..config.paths import config_overlay_path, pricing_map_overlay_path, runtime_path
 from ..config.pricing import deep_merge
+from ..config.runtime import apply_board_snapshot_env_overrides
 
 
 ROOT = Path(__file__).resolve().parent
@@ -102,11 +104,15 @@ class BidKingApp:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    def _rebuild_merged_config(self) -> None:
+        self.config = deep_merge(self.runtime_base, self.overlay)
+        apply_board_snapshot_env_overrides(self.config)
+
     def reload_config_sources(self, *, initial: bool = False) -> None:
         rp = runtime_path()
         self.runtime_base = self.load_json(rp) if rp.is_file() else {}
         self.overlay = self.load_json(CONFIG_OVERLAY_PATH) if CONFIG_OVERLAY_PATH.is_file() else {}
-        self.config = deep_merge(self.runtime_base, self.overlay)
+        self._rebuild_merged_config()
         if not initial and hasattr(self, "config_json_text"):
             self.refresh_config_json_editor_from_model()
 
@@ -392,7 +398,7 @@ class BidKingApp:
         if not isinstance(parsed, dict):
             raise ValueError("根节点必须是 JSON 对象")
         self.overlay = parsed
-        self.config = deep_merge(self.runtime_base, self.overlay)
+        self._rebuild_merged_config()
         if write_file:
             self.save_json(CONFIG_OVERLAY_PATH, self.overlay)
 
@@ -429,7 +435,7 @@ class BidKingApp:
         if not isinstance(parsed, dict):
             raise ValueError("「主配置」根节点必须是 JSON 对象")
         self.overlay = parsed
-        self.config = deep_merge(self.runtime_base, self.overlay)
+        self._rebuild_merged_config()
 
     def refresh_map_combo_from_config(self) -> None:
         if not hasattr(self, "map_combo"):
@@ -548,6 +554,10 @@ class BidKingApp:
         path_snap = str(self.default_board_snapshot_path()).replace("\\", "/")
         uid = str(self.self_user_uid_var.get()).strip()
         name_sub = str(self.self_name_substring_var.get()).strip()
+        if "BIDKING_SELF_USER_UID" in os.environ:
+            uid = os.environ["BIDKING_SELF_USER_UID"].strip()
+        if "BIDKING_SELF_NAME_SUBSTRING" in os.environ:
+            name_sub = os.environ["BIDKING_SELF_NAME_SUBSTRING"].strip()
         if not uid and not name_sub:
             raise ValueError("「己方 UID」与「名称关键字」须至少填写一项")
 
@@ -556,8 +566,14 @@ class BidKingApp:
         bs_overlay.setdefault("write_mode", "both")
         bs_overlay.setdefault("schema_version_min", 1)
         bs_overlay["path"] = path_snap.replace("\\", "/")
-        bs_overlay["self_user_uid"] = uid
-        bs_overlay["self_name_substring"] = name_sub
+        if "BIDKING_SELF_USER_UID" not in os.environ:
+            bs_overlay["self_user_uid"] = str(self.self_user_uid_var.get()).strip()
+        else:
+            bs_overlay.pop("self_user_uid", None)
+        if "BIDKING_SELF_NAME_SUBSTRING" not in os.environ:
+            bs_overlay["self_name_substring"] = str(self.self_name_substring_var.get()).strip()
+        else:
+            bs_overlay.pop("self_name_substring", None)
 
         try:
             fb = int(str(self.fallback_bid_var.get()).strip() or "22223")
@@ -600,6 +616,7 @@ class BidKingApp:
 
         self.config = deep_merge(self.runtime_base, self.overlay)
         self.config = deep_merge(self.config, map_doc)
+        apply_board_snapshot_env_overrides(self.config)
         self.save_json(CONFIG_OVERLAY_PATH, self.overlay)
         self.refresh_config_json_editor_from_model()
         self.refresh_map_overlay_editor_from_disk()
