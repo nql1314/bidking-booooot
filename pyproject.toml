@@ -3,15 +3,14 @@ name = "bidking"
 version = "1.0"
 description = "BidKing: 分层架构的自动化竞拍机器人 + 画板看板"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.13"
 dependencies = [
     "Pillow>=10.0.0",
     "numpy>=1.26.0",
     "opencv-python>=4.9.0",
     "pyautogui>=0.9.54",
-    # RapidOCR：Python <3.13 用旧的 onnxruntime 发行；Python >=3.13 用新名 ``rapidocr``。
-    "rapidocr-onnxruntime>=1.3.24; python_version < '3.13'",
-    "rapidocr>=2.0.0; python_version >= '3.13'",
+    # 2.0.6 起 wheel 的 requires_python 含 3.13；默认 ONNX 引擎依赖 onnxruntime（上游未写入 Requires）。
+    "rapidocr>=2.0.6",
     "onnxruntime>=1.18.0",
     "psutil>=5.9.8",
 ]
