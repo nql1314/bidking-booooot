@@ -69,6 +69,8 @@ from ...analysis._board_pricing import (
 from ...analysis import grid_overlay as _grid_overlay
 from ...analysis.raw_pricing import build_raw_pricing_dict
 from ...analysis.snapshot import game_state_to_json, item_knowledge_to_json
+from ...config.runtime import load_runtime
+from ...pricing.compute import compute_price
 from ._grid_overlay_payload import (
     build_grid_overlay_export_dict,
     max_anchor_box_id_from_overlay_ui,
@@ -382,6 +384,8 @@ class GridWindow:
         snapshot_export_overlay : 是否在快照中包含幽灵物品与手动轮廓（grid_overlay）。
         snapshots : 回放模式下的 ``[(标签, GameState, skill_logs), ...]``；``skill_logs`` 与实时监听累积形状一致，
             供定价/raw_pricing。兼容仅 ``(标签, state)`` 的旧列表（无技能日志时 Ahmad 等会为 0）。
+        home_shell : 若传入 grid_view 启动主页 ``tk.Tk``，画板关闭或点「返回主页」时会 ``deiconify`` 该窗口；
+            ``None`` 时（命令行直接进画板）行为与原先一致。
     """
 
     def __init__(
@@ -395,6 +399,7 @@ class GridWindow:
         board_mode: str = BOARD_MODE_ELSA,
         snapshot_path: Optional[str] = None,
         snapshot_export_overlay: bool = True,
+        home_shell: Optional[tk.Tk] = None,
     ) -> None:
         self.state = state
         self.csv_index = csv_index
@@ -426,8 +431,16 @@ class GridWindow:
         self._last_raw_pricing: Optional[Dict[str, Any]] = None
         # 与顶栏「全红/全橙/金红/最低」悬浮提示同步的最近一次 pricing 字典
         self._last_pricing_for_tooltips: Optional[Dict[str, Any]] = None
+        # 顶栏「推荐出价」：与 ``pricing.compute_price`` 最近一次结果同步
+        self._last_compute_price: Optional[int] = None
+        self._last_compute_payload: Optional[Dict[str, Any]] = None
+        self._header_compute_sig: Optional[Tuple[Any, ...]] = None
         # 地图类别权重入口：category tag -> multiplier，默认由 item_db 使用 1.0。
         self._map_category_weights = map_category_weights
+        self._home_shell: Optional[tk.Tk] = home_shell
+
+        # 实时 tail：关闭画板或返回主页时置位，供后台线程退出
+        self._monitor_stop = threading.Event()
 
         # 快照回放模式（静态逐回合浏览）；每项第三段为截至该点的 skill_logs（与实时 tail 同源）
         self._snapshots: Optional[List[Tuple[str, GameState, List[dict]]]] = None
@@ -1646,6 +1659,8 @@ class GridWindow:
         with open(self._log_path, "r", encoding="utf-8", errors="replace") as f:
             f.seek(0, 2)  # 直接跳到文件末尾，只处理新增内容
             while True:
+                if self._monitor_stop.is_set():
+                    return
                 line = f.readline()
                 if not line:
                     time.sleep(0.3)
@@ -1707,6 +1722,8 @@ class GridWindow:
         主线程定时任务（每 300ms）：消费队列中的信号并按需刷新 UI。
         多个信号合并为一次绘制，避免短时间内多次重绘。
         """
+        if self._monitor_stop.is_set():
+            return
         needs_redraw = False
         is_new_game = False
         try:
@@ -1730,7 +1747,11 @@ class GridWindow:
                     self._refresh()
 
         # 继续调度下一次轮询
-        self.root.after(300, self._poll_updates)
+        if not self._monitor_stop.is_set():
+            try:
+                self.root.after(300, self._poll_updates)
+            except tk.TclError:
+                pass
 
     def _reset_for_new_game(self) -> None:
         """新对局开始：清空幽灵、更新标题、重建 Canvas。"""
@@ -1808,7 +1829,7 @@ class GridWindow:
         return "\n".join(lines)
 
     def _tooltip_text_position_estimate(self, key: str) -> str:
-        """顶栏仓位总价：est_* / 主价区间，与 ``build_snapshot_pricing_dict`` 一致。"""
+        """顶栏仓位总价：est_* / 仓位估价区间，与 ``build_snapshot_pricing_dict`` 一致。"""
         p = self._last_pricing_for_tooltips
         if not isinstance(p, dict) or not p:
             return "（估价尚未计算，请稍候刷新）"
@@ -1863,14 +1884,14 @@ class GridWindow:
             result = p.get("est_red")
             num = f"{t_val:,.0f} + {v_eff} × {u_r:,.0f} = {float(result or 0):,.0f}"
         elif key == "floor":
-            title = "主价区间 points_floor / points_ceiling"
+            title = "仓位估价区间 points_floor / points_ceiling"
             pf = p.get("points_floor")
             pc = p.get("points_ceiling")
             ahmad_active = bool(p.get("ahmad_pricing_active"))
             base_lines = [
                 title,
                 f"第 4 回合起：下限 ≈ T + V×U_全橙 = {pf!s}；上限 ≈ T + V×U_全红 = {pc!s}。",
-                f"第 1–3 回合：floor/ceiling 与主价 points 相同（扫描推断单价）。",
+                f"第 1–3 回合：floor/ceiling 与仓位估价 points 相同（扫描推断单价）。",
                 f"当前 points = {p.get('points')!s}。",
             ]
             if ahmad_active:
@@ -1879,7 +1900,7 @@ class GridWindow:
                 )
                 base_lines.insert(
                     1,
-                    "己方英雄为 Ahmad（204）：points/floor/ceiling 均为 event_stats 多候选 Ahmad 主价；"
+                    "己方英雄为 Ahmad（204）：points/floor/ceiling 均为 event_stats 多候选 Ahmad 仓位估价；"
                     f"通用画板对照 generic_floor/ceiling = {gpf!s} / {gpc!s}。",
                 )
             return "\n".join(base_lines)
@@ -1938,12 +1959,12 @@ class GridWindow:
         )
         if p.get("ahmad_pricing_active"):
             lines.append(
-                "己方 Ahmad：顶栏主价 points 来自 pricing.ahmad_points（非本式 T+V×U）；"
+                "己方 Ahmad：顶栏仓位估价 points 来自 pricing.ahmad_points（非本式 T+V×U）；"
                 f"对照 generic_points = {p.get('generic_points')!s}。"
             )
         else:
             lines.append(
-                f"主价 points ≈ T + V×U = {t_val:,.0f} + {v_eff} × {u_int:,.0f}（与 pricing.points 一致）。",
+                f"仓位估价 points ≈ T + V×U = {t_val:,.0f} + {v_eff} × {u_int:,.0f}（与 pricing.points 一致）。",
             )
         if pts is not None:
             lines.append(f"当前 pricing.points = {pts!s}")
@@ -1958,9 +1979,9 @@ class GridWindow:
         pf, pc = p.get("points_floor"), p.get("points_ceiling")
         ahmad_active = bool(p.get("ahmad_pricing_active"))
         head = (
-            "主价（Ahmad：points = ahmad_points）"
+            "仓位估价（Ahmad：points = ahmad_points）"
             if ahmad_active
-            else "主价（快照 pricing.points）"
+            else "仓位估价（快照 pricing.points）"
         )
         lines: List[str] = [head]
         if pts is not None:
@@ -1982,7 +2003,7 @@ class GridWindow:
                 pass
         if ahmad_active:
             lines.append(
-                f"通用画板主价（对照）：generic_points = {p.get('generic_points')!s}，"
+                f"通用画板仓位估价（对照）：generic_points = {p.get('generic_points')!s}，"
                 f"floor/ceiling = {p.get('generic_points_floor')!s} / {p.get('generic_points_ceiling')!s}"
             )
             lines.append("ahmad_points_detail（各候选）:")
@@ -1992,6 +2013,26 @@ class GridWindow:
         lines.append(
             f"空置 V = {p.get('vacant')!s}；单价 CSV 命中 = {p.get('map_quality_avg_hit')!s}。"
         )
+        return "\n".join(lines)
+
+    def _tooltip_text_recommend_bid(self) -> str:
+        """顶栏「推荐出价」：展示 ``compute_price`` 与 payload.pricing_reason。"""
+        det = self._last_compute_payload
+        if not isinstance(det, dict):
+            return "推荐出价\n（尚未算出：配置加载或定价链路异常）"
+        lines: List[str] = [
+            "推荐出价",
+            "由 ``bidking.pricing.compute_price`` 基于当前画板快照（含 pricing）与合并后的 runtime/config 计算。",
+        ]
+        pr = det.get("pricing_reason")
+        if pr is not None and str(pr).strip():
+            lines.extend(["", "pricing_reason:", str(pr)])
+        else:
+            rsn = det.get("reason")
+            if rsn:
+                lines.extend(["", f"说明：{rsn}"])
+        if det.get("fallback"):
+            lines.extend(["", "（当前走兜底分支；顶栏数字为兜底价）"])
         return "\n".join(lines)
 
     def _tooltip_text_event_stats(self) -> str:
@@ -2032,10 +2073,14 @@ class GridWindow:
             self._total_label.config(text=f"估算总价  ¥{total:,.0f}")
 
     def _update_vacant_estimate_bar(self) -> None:
-        """更新顶栏两行：①主价 points；②三档 est_* 与主价区间。"""
+        """更新顶栏两行：①仓位估价 points + 推荐出价；②三档 est_* 与仓位估价区间。"""
         if not hasattr(self, "_est_label_red"):
             return
-        p = self._build_pricing_snapshot_dict()
+        base = self._make_board_snapshot()
+        p = build_snapshot_pricing_dict(
+            base,
+            snapshot_path_hint=self._snapshot_path,
+        )
         self._last_pricing_for_tooltips = p
         pts = p.get("points")
         mult = _instant_win_multiplier_for_round(self.state.current_round)
@@ -2044,12 +2089,48 @@ class GridWindow:
                 pts_i = int(round(float(pts)))
                 anti = int(round(pts_i / mult)) if mult > 0 else pts_i
                 self._est_label_aisha.config(
-                    text=f"主价  {pts_i:,}  （÷{mult:g}→{anti:,}）",
+                    text=f"仓位估价  {pts_i:,}  （÷{mult:g}→{anti:,}）",
                 )
             except (TypeError, ValueError):
-                self._est_label_aisha.config(text=f"主价  {pts!r}")
+                self._est_label_aisha.config(text=f"仓位估价  {pts!r}")
         else:
-            self._est_label_aisha.config(text="主价  —")
+            self._est_label_aisha.config(text="仓位估价  —")
+
+        board_for_compute = {**base, "pricing": p}
+        rnd = int(self.state.current_round or 1)
+        sig = (
+            rnd,
+            p.get("points"),
+            p.get("total"),
+            p.get("vacant"),
+            p.get("points_floor"),
+            p.get("points_ceiling"),
+        )
+        if self._header_compute_sig != sig:
+            try:
+                rt = load_runtime()
+                cfg_path = rt.source_path or Path.cwd()
+                if not isinstance(cfg_path, Path):
+                    cfg_path = Path(cfg_path)
+                c_price, c_det = compute_price(
+                    rt.raw,
+                    config_path=cfg_path,
+                    round_no=rnd,
+                    board_snapshot=board_for_compute,
+                )
+                self._last_compute_price = int(c_price)
+                self._last_compute_payload = c_det
+                self._header_compute_sig = sig
+            except Exception:
+                self._last_compute_price = None
+                self._last_compute_payload = None
+
+        if hasattr(self, "_est_label_recommend"):
+            if self._last_compute_price is not None:
+                cpv = int(self._last_compute_price)
+                self._est_label_recommend.config(text=f"推荐出价  {cpv:,}")
+            else:
+                self._est_label_recommend.config(text="推荐出价  —")
 
         eu = p.get("early_vacant_unit_from_scan")
         if eu is not None:
@@ -2086,7 +2167,7 @@ class GridWindow:
         if rnd >= 4:
             pf = int(p.get("points_floor") or 0)
             pc = int(p.get("points_ceiling") or 0)
-            self._est_label_floor.config(text=f"主价区间  ¥{pf:,.0f} – ¥{pc:,.0f}")
+            self._est_label_floor.config(text=f"仓位估价区间  ¥{pf:,.0f} – ¥{pc:,.0f}")
         else:
             self._est_label_floor.config(text="")
 
@@ -2101,6 +2182,7 @@ class GridWindow:
             f"{self._board_mode_title_suffix()}"
         )
         self.root.configure(bg="#1a1a2e")
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close_request)
 
         self._build_vacant_estimate_bar()
         self._build_info_bar()
@@ -2113,6 +2195,26 @@ class GridWindow:
         )
         self.root.bind("<Control-Shift-Z>", lambda _e: self._on_restore_manual_shapes())
         self._draw()
+
+    def _on_close_request(self) -> None:
+        """用户点窗口关闭或「返回主页」：停 tail、关画板，必要时唤起启动主页。"""
+        self._finish_grid_shutdown()
+
+    def _finish_grid_shutdown(self) -> None:
+        self._monitor_stop.set()
+        home = self._home_shell
+        self._home_shell = None
+        try:
+            self.root.destroy()
+        except tk.TclError:
+            pass
+        if home is not None:
+            try:
+                home.deiconify()
+                home.lift()
+                home.focus_force()
+            except tk.TclError:
+                pass
 
     def _build_info_bar(self) -> None:
         bar = tk.Frame(self.root, bg="#1a1a2e", pady=4)
@@ -2130,19 +2232,35 @@ class GridWindow:
             justify="left",
         ).pack(side="left")
 
+        right = tk.Frame(bar, bg="#1a1a2e")
+        right.pack(side="right", padx=4)
+        if self._home_shell is not None:
+            tk.Button(
+                right,
+                text="返回主页",
+                command=self._finish_grid_shutdown,
+                bg="#3a4a6a",
+                fg="#dde8ff",
+                font=("微软雅黑", 9),
+                relief="flat",
+                padx=8,
+                pady=2,
+                cursor="hand2",
+            ).pack(side="left", padx=(0, 8))
+
         if self._log_path:
             tk.Label(
-                bar,
+                right,
                 text=" ● LIVE ",
                 bg="#c03030",
                 fg="#ffffff",
                 font=("微软雅黑", 9, "bold"),
                 relief="flat",
                 padx=4,
-            ).pack(side="right", padx=8)
+            ).pack(side="left")
 
     def _build_vacant_estimate_bar(self) -> None:
-        """窗口最上方：第一行主价 points + 扫描单价与定价空置格数 V；第二行三档 est 与主价区间。"""
+        """窗口最上方：第一行仓位估价 points、推荐出价、扫描单价与当局数据；第二行三档 est 与仓位估价区间。"""
         bar = tk.Frame(self.root, bg="#152030", pady=4)
         bar.pack(fill="x", padx=8, pady=(6, 0))
         row1 = tk.Frame(bar, bg="#152030")
@@ -2158,6 +2276,17 @@ class GridWindow:
         )
         self._est_label_aisha.pack(side="left")
         self._est_aisha_wrap.pack(side="left", padx=(0, 16))
+        self._est_recommend_wrap = tk.Frame(row1, bg="#152030")
+        self._est_label_recommend = tk.Label(
+            self._est_recommend_wrap,
+            text="",
+            bg="#152030",
+            fg="#ffd080",
+            font=("微软雅黑", 10, "bold"),
+            cursor="hand2",
+        )
+        self._est_label_recommend.pack(side="left")
+        self._est_recommend_wrap.pack(side="left", padx=(0, 16))
         self._est_early_wrap = tk.Frame(row1, bg="#152030")
         self._est_label_early = tk.Label(
             self._est_early_wrap,
@@ -2193,6 +2322,7 @@ class GridWindow:
         self._est_label_gold_red.pack(side="left", padx=(0, 16))
         self._est_label_floor.pack(side="left", padx=(0, 0))
         _PricingHoverTip(self._est_label_aisha, self._tooltip_text_main_points)
+        _PricingHoverTip(self._est_label_recommend, self._tooltip_text_recommend_bid)
         _PricingHoverTip(self._est_label_early, self._tooltip_text_early_exclusions)
         _PricingHoverTip(self._event_stats_label, self._tooltip_text_event_stats)
         _PricingHoverTip(

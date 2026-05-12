@@ -58,12 +58,11 @@ python -m bidking.runner.aisha_main      # 艾莎路径
 
 ### 打包方式
 
-在 **Windows x64** 上，用 PowerShell 在仓库根目录执行打包脚本，会生成两个 **单文件、无控制台窗口** 的 GUI 程序：
+在 **Windows x64** 上，用 PowerShell 在仓库根目录执行打包脚本，会生成一个 **单文件、无控制台窗口** 的 GUI 程序：
 
 | 产物 | 说明 |
 |------|------|
-| `dist/bot_runner.exe` | 总控 GUI（`bidking.ui.app`） |
-| `dist/grid_view.exe` | 画板看板 / 日志 tail·回放（`bidking.runner.viewer_main`） |
+| `dist/grid_view.exe` | 画板看板 / 日志 tail·回放（`bidking.runner.viewer_main`）；启动页含两个标签：「启动看板」与「策略配置」（出价参数 + 棋盘快照 + 主配置 JSON / 地图自定义 JSON 编辑），「启动看板」里还有「启动 Bot 总控（谨慎使用）」按钮，在独立窗口打开 `bidking.ui.app` 总控 |
 
 **前置条件**
 
@@ -101,7 +100,6 @@ cd D:/workzone/bidking-booooot
 
 ```text
 <项目根>/
-├── bot_runner.exe      # 或 grid_view.exe
 ├── grid_view.exe
 ├── configs/            # runtime.json、pricing.json、config.json 等
 └── data/               # item_prices.csv 等数据文件
@@ -109,15 +107,16 @@ cd D:/workzone/bidking-booooot
 
 **启动方式**
 
-- **双击 / 命令行**：在资源管理器中双击，或在 PowerShell 里先 `cd` 到上述 **项目根** 再运行 `.\bot_runner.exe`，保证**当前工作目录**就是含 `configs` 与 `data` 的根目录。
+- **双击 / 命令行**：在资源管理器中双击，或在 PowerShell 里先 `cd` 到上述 **项目根** 再运行 `.\grid_view.exe`，保证**当前工作目录**就是含 `configs` 与 `data` 的根目录。
 - **环境变量 `BIDKING_HOME`**：若 exe 放在别的路径、或快捷方式导致工作目录不对，可设置 `BIDKING_HOME` 为 **项目根的绝对路径**（该目录下必须同时存在 `configs` 与 `data` 子目录）。
 
 **程序分工**
 
-- `bot_runner.exe`：自动化总控与相关 GUI。
 - `grid_view.exe`：看板；默认会尝试游戏默认的 `Player.log` 路径，也会尝试 **当前工作目录** 下的 `Player.log` / `Player - 副本.log`。若日志不在默认路径，可在界面中自选日志文件（与源码运行行为一致）。
+- **策略配置**：在 `grid_view.exe` 启动页的「策略配置」标签里编辑「出价参数」、「棋盘快照（己方 UID / 名称关键字）」、「主配置 overlay JSON」与「地图自定义 JSON」；点对应「保存」按钮（或勾选「编辑合法后自动保存」）即可写入 `configs/`。**Bot 总控窗口不再自带这些表单**，启动 bot 前须先在此配置完毕。
+- **Bot 总控（自动化）**：原 `bot_runner.exe` 的 `bidking.ui.app` 入口已合并到 `grid_view.exe` 启动页 —— 点「启动 Bot 总控（谨慎使用）」即可切换到总控 GUI；**会接管鼠标/键盘做自动竞拍，启动前请核对 `configs/` 与游戏分辨率**。总控只保留「选图 / 重复次数 / 自动化脚本 / 道具回合 / 启动停止 / 日志」，其余字段一律从磁盘读取。
 
-**分发给别人时**：除两个 exe 外，请一并提供（或说明从仓库拷贝）完整的 **`configs/`** 与 **`data/`**，并按上文设置工作目录或 `BIDKING_HOME`。
+**分发给别人时**：除 exe 外，请一并提供（或说明从仓库拷贝）完整的 **`configs/`** 与 **`data/`**，并按上文设置工作目录或 `BIDKING_HOME`。
 
 ## 不在范围
 
