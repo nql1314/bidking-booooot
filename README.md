@@ -17,10 +17,9 @@ src/bidking/
 
 ## Python 与 OCR 依赖
 
-- **Python 3.13**：PyPI 上 `rapidocr-onnxruntime` 无适用 wheel（要求 `python_version < 3.13`）。本项目 `pyproject.toml` 在 3.13 下会改为依赖 **`rapidocr`**；运行时 OCR 统一走 `bidking.interaction.ocr.get_engine()`（含 `_legacy_bot` / 对手价 OCR），两种包名任选其一装好即可。
+- **Python 3.13+**（`requires-python >=3.13`）。OCR 仅依赖 PyPI 上的 **`rapidocr`**（默认 ONNX 推理引擎另需 **`onnxruntime`**，已在 `pyproject.toml` 中显式列出）。运行时统一走 `bidking.interaction.ocr.get_engine()`（含 `_legacy_bot` 等）。
 
-
-**本仓库自建 venv（任意兼容版本）：**
+**本仓库自建 venv（请使用 Python 3.13 及以上）：**
 
 ```powershell
 cd D:/workzone/bidking-booooot
