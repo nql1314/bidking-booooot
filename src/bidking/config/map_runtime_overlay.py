@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
-from .paths import pricing_map_overlay_path
+from .paths import configs_dir, pricing_map_overlay_path
 from .pricing import deep_merge
 
 
@@ -27,6 +27,92 @@ def automation_maps_sorted_keys(maps: Mapping[str, Any]) -> list[str]:
 
     out = [str(k) for k in maps.keys() if isinstance(maps.get(k), dict)]
     return sorted(out, key=sort_key)
+
+
+def _map_keys_from_pricing_maps_dir(pricing_maps_dir: Path) -> list[str]:
+    from ..parsing.item_db import map_bundle_key_for_automation
+
+    if not pricing_maps_dir.is_dir():
+        return []
+    out: list[str] = []
+    for p in pricing_maps_dir.glob("*.json"):
+        stem = p.stem.strip()
+        if not stem or stem.upper() == "README":
+            continue
+        if stem.isdigit():
+            out.append(map_bundle_key_for_automation(int(stem)))
+        else:
+            out.append(stem)
+    return out
+
+
+def _map_keys_from_item_db_tiers() -> list[str]:
+    """从物品权重表 ``MAP_TO_TIER_NEST`` 推导档键（210、220…260，与 automation 对齐）。"""
+    from ..parsing.item_db import MAP_TO_TIER_NEST, map_bundle_key_for_automation
+
+    seen: set[str] = set()
+    for mid in MAP_TO_TIER_NEST:
+        seen.add(map_bundle_key_for_automation(int(mid)))
+    return sorted(seen, key=lambda k: (0, int(k)) if k.isdigit() else (1, k))
+
+
+def all_strategy_map_editor_keys(
+    config: Mapping[str, Any],
+    *,
+    configs_root: Path | None = None,
+) -> list[str]:
+    """
+    「策略配置」编辑地图下拉的**全集候选**：automation.maps 顶层键、
+    ``map_entry_ticket_by_map_id`` 键、``configs/pricing.maps/*.json`` 文件名、
+    以及 ``item_db.MAP_TO_TIER_NEST`` 推导的档 id；去重后按数字序排序。
+    """
+    root = configs_root if configs_root is not None else configs_dir()
+    keys: set[str] = set()
+    auto = config.get("automation") if isinstance(config.get("automation"), dict) else {}
+    maps = auto.get("maps") if isinstance(auto.get("maps"), dict) else {}
+    keys.update(automation_maps_sorted_keys(maps))
+    tix = auto.get("map_entry_ticket_by_map_id")
+    if isinstance(tix, dict):
+        from ..parsing.item_db import map_bundle_key_for_automation
+
+        for k in tix:
+            ks = str(k).strip()
+            if not ks:
+                continue
+            keys.add(map_bundle_key_for_automation(int(ks)) if ks.isdigit() else ks)
+    keys.update(_map_keys_from_pricing_maps_dir(root / "pricing.maps"))
+    keys.update(_map_keys_from_item_db_tiers())
+
+    def sort_key(k: str) -> tuple:
+        try:
+            return (0, int(k))
+        except ValueError:
+            return (1, k)
+
+    return sorted(keys, key=sort_key)
+
+
+def strategy_map_combo_entries(
+    config: Mapping[str, Any],
+    *,
+    configs_root: Path | None = None,
+) -> list[str]:
+    """``\"<id>. <名称或提示>\"`` 列表，供 BotConfigPanel / 下拉里展示。"""
+    keys = all_strategy_map_editor_keys(config, configs_root=configs_root)
+    auto = config.get("automation") if isinstance(config.get("automation"), dict) else {}
+    maps = auto.get("maps") if isinstance(auto.get("maps"), dict) else {}
+
+    def label_for(map_key: str) -> str:
+        ent = maps.get(map_key)
+        if isinstance(ent, dict):
+            name = ent.get("name")
+            if isinstance(name, str) and name.strip():
+                return name.strip()
+        if map_key in maps:
+            return map_key
+        return f"{map_key}（未在 automation.maps 配置入口，可写 pricing.maps）"
+
+    return [f"{k}. {label_for(k)}" for k in keys]
 
 
 def resolve_automation_map_config_key(auto_d: Mapping[str, Any]) -> str:

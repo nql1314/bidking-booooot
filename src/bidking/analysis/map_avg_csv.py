@@ -81,20 +81,20 @@ def load_map_quality_cells_by_map_id(snapshot_path_hint: Optional[str] = None) -
 
 
 def map_id_prefix3(map_id: int) -> str:
-    """``map_id`` 的前三位十进制数字（子图族键）；如 ``2306`` → ``\"230\"``。"""
-    s = str(int(map_id))
-    if len(s) >= 3:
-        return s[:3]
-    return s.zfill(3)
+    """与 :func:`bidking.parsing.item_db.map_bundle_key_for_automation` 一致（历史名保留）。"""
+    from ..parsing.item_db import map_bundle_key_for_automation
+
+    return map_bundle_key_for_automation(map_id)
 
 
 def load_prefix3_to_min_map_id(
     snapshot_path_hint: Optional[str] = None,
 ) -> Dict[str, int]:
     """
-    从 ``map_quality_avg_out.csv`` 的 ``map_id`` 列汇总：同一前三位前缀下取**最小**
-    ``map_id`` 作为该族代表（子图共享同一张入场价表时，与 ``runtime.json`` 的
-    ``maps`` / ``map_entry_ticket_by_map_id`` 对齐用）。
+    从 ``map_quality_avg_out.csv`` 的 ``map_id`` 列汇总：同一**档键**
+    （:func:`map_id_prefix3`，即前两位末位 0）下取**最小** ``map_id`` 作为该族代表
+    （子图共享同一张入场价表时，与 ``runtime.json`` 的 ``maps`` /
+    ``map_entry_ticket_by_map_id`` 对齐用）。
     """
     global _map_prefix3_to_min_map_id_cache
     if _map_quality_csv_override is None and _map_prefix3_to_min_map_id_cache is not None:
@@ -125,7 +125,8 @@ def representative_map_id_for_ticket(
     map_id: int, snapshot_path_hint: Optional[str] = None
 ) -> Tuple[int, str]:
     """
-    返回 ``(代表 map_id, 前三位前缀)``；若 CSV 中无此前缀则代表为自身 ``map_id``。
+    返回 ``(代表 map_id, 档键)``；档键与 ``map_bundle_key_for_automation`` 一致。
+    若 CSV 中无该档键则代表为自身 ``map_id``。
     """
     mid = int(map_id)
     pfx = map_id_prefix3(mid)

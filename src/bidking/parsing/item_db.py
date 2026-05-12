@@ -66,6 +66,19 @@ def normalize_map_id(map_id: Optional[int]) -> Optional[int]:
     return map_id
 
 
+def map_bundle_key_for_automation(map_id: int) -> str:
+    """
+    游戏 ``MapId`` 对应到 ``automation.maps`` / ``pricing.maps`` / 门票表的**档键**（三位：XY0）。
+
+    同档多子图（如 2301~2310）共享一档：取十进制字符串**前两位**再补 ``0``，
+    例如 ``2306`` / ``2310`` → ``\"230\"``；若截取前三位会把 ``2310`` 误成 ``231``。
+    """
+    s = str(int(map_id))
+    if len(s) >= 3:
+        return s[:2] + "0"
+    return s
+
+
 def load_csv(path: str) -> Tuple[Dict[int, CsvItem], List[CsvItem]]:
     """
     解析 item_prices.csv，返回两种索引结构：

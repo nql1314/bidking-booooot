@@ -27,10 +27,10 @@ from tkinter.scrolledtext import ScrolledText
 from typing import Optional
 
 from ..config.map_runtime_overlay import (
-    automation_maps_sorted_keys,
     resolve_automation_map_config_key,
+    strategy_map_combo_entries,
 )
-from ..config.paths import config_overlay_path, pricing_map_overlay_path, runtime_path
+from ..config.paths import config_overlay_path, configs_dir, pricing_map_overlay_path, runtime_path
 from ..config.pricing import deep_merge
 from ..config.runtime import apply_board_snapshot_env_overrides
 
@@ -113,8 +113,9 @@ class BotConfigPanel:
             outer,
             text=(
                 "本面板写入磁盘后立即生效；bot_runner GUI 启动时会再次读盘。\n"
-                "下方「编辑地图」下拉只决定当前要编辑哪张地图的 pricing/automation，"
-                "与 bot_runner GUI 自动化页的选图相互独立。"
+                "「编辑地图」下列出**全地图候选**（runtime 的 automation.maps、门票表、"
+                "已有 pricing.maps 文件及物品表支持的档 id）；"
+                "未在 automation.maps 配置点击点的地图仍可编辑该档的 pricing 覆盖。"
             ),
             foreground="#555577",
             justify="left",
@@ -125,7 +126,7 @@ class BotConfigPanel:
         map_row.pack(fill="x", pady=(0, 8))
         ttk.Label(map_row, text="编辑地图").pack(side="left")
         self.map_combo = ttk.Combobox(
-            map_row, textvariable=self.map_var, state="readonly", width=28,
+            map_row, textvariable=self.map_var, state="readonly", width=44,
         )
         self.map_combo.pack(side="left", padx=(6, 0))
         self.map_combo.bind("<<ComboboxSelected>>", self._on_map_combo_selected)
@@ -295,14 +296,11 @@ class BotConfigPanel:
         return (docs / "bidking" / "board_snapshot.json").resolve()
 
     def _refresh_map_combo_from_config(self) -> None:
-        auto = self.config.get("automation") or {}
-        maps = auto.get("maps") or {}
         try:
-            keys = automation_maps_sorted_keys(maps)
-            self.map_combo["values"] = [
-                f"{k}. {maps[k].get('name', k)}" for k in keys
-            ]
-        except (KeyError, TypeError):
+            self.map_combo["values"] = strategy_map_combo_entries(
+                self.config, configs_root=configs_dir()
+            )
+        except (KeyError, TypeError, OSError):
             self.map_combo["values"] = []
 
     def _selected_map_key(self) -> str:
@@ -310,9 +308,9 @@ class BotConfigPanel:
         return text.split(".", 1)[0].strip() if "." in text else text
 
     def _effective_map_key(self) -> str:
+        """当前要读写 pricing.maps 的地图 id：以上拉所选为准（可为全集候选中未配 automation 入口的档）。"""
         mk = self._selected_map_key()
-        maps = (self.config.get("automation") or {}).get("maps") or {}
-        if mk and isinstance(maps, dict) and mk in maps:
+        if mk:
             return mk
         return resolve_automation_map_config_key(self.config.get("automation") or {})
 
