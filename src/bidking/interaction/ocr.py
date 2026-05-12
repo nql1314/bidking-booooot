@@ -1,7 +1,7 @@
 """RapidOCR 单例（共用 onnx 引擎，避免重复初始化）。
 
-历史上 ``fresh_bidking_bot.rapidocr_once`` 等平台各处各自维护 RapidOCR 实例。
-本模块统一为单一单例；OCR 入口由 ``_legacy_bot.rapidocr_once`` 等使用。
+本模块为单一单例；OCR 入口由 ``_legacy_bot.rapidocr_once`` 等使用。
+仅支持 PyPI 包 ``rapidocr``（Python 3.13+）。
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ _ENGINE: Any = None
 
 
 def _coerce_image_for_rapidocr(image: Any) -> Any:
-    """``rapidocr`` >=2.x 仅接受 str / ndarray / bytes / Path；旧路径仍传 PIL，在此转为 RGB ndarray。"""
+    """``rapidocr`` 接受 str / ndarray / bytes / Path；调用方传 PIL 时转为 RGB ndarray。"""
     try:
         from PIL import Image as PILImage
     except ImportError:
@@ -29,25 +29,11 @@ def _coerce_image_for_rapidocr(image: Any) -> Any:
 
 
 def _normalize_rapid_output(raw: Any) -> List[Any]:
-    """统一 onnxruntime 旧接口与新 ``rapidocr`` 的 ``RapidOCROutput``。
-
-    目标格式（与 ``rapidocr_onnxruntime`` 一致）：``[(box, text, score), ...]``，
-    ``box`` 为可多边形点坐标序列（可被现有排序逻辑用 ``point[0]`` / ``point[1]`` 读取）。
-    """
+    """将 ``RapidOCROutput`` 规范为 ``[(box, text, score), ...]``（box 为多边形点序列）。"""
     if raw is None:
         return []
-    # rapidocr-onnxruntime: ``(result, elapsed)``
-    if isinstance(raw, tuple) and len(raw) >= 1:
-        first = raw[0]
-        if first is None:
-            return []
-        if isinstance(first, list):
-            return first
-        raw = first
-    # 已是列表（兜底）
     if isinstance(raw, list):
         return raw
-    # rapidocr >=2.x: RapidOCROutput(txts=..., boxes=..., scores=...)
     txts = getattr(raw, "txts", None)
     boxes = getattr(raw, "boxes", None)
     scores = getattr(raw, "scores", None)
@@ -81,11 +67,8 @@ def _normalize_rapid_output(raw: Any) -> List[Any]:
 
 
 def _build_engine() -> Any:
-    """优先 ``rapidocr_onnxruntime``（Python <3.13），否则回退到新包 ``rapidocr``。"""
-    try:
-        from rapidocr_onnxruntime import RapidOCR  # type: ignore
-    except ImportError:
-        from rapidocr import RapidOCR  # type: ignore
+    from rapidocr import RapidOCR  # type: ignore
+
     return RapidOCR()
 
 
