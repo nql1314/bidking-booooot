@@ -28,10 +28,10 @@ def apply_opponent_bid_adjustment_core(
         except (TypeError, ValueError):
             ceiling_pts = None
 
-    if int(round_no) <= 2 or o_prev is None:
+    if int(round_no) <= 1 or o_prev is None:
         return int(bid), None, None
 
-    if ceiling_pts is not None and int(o_prev) > ceiling_pts:
+    if ceiling_pts is not None and int(o_prev) > ceiling_pts and int(round_no) >= 3:
         return int(bid), "opp_high", None
 
     o_poss = evaluate_opponent_bid_possibilities(

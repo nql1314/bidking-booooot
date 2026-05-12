@@ -11,14 +11,13 @@ from tkinter.scrolledtext import ScrolledText
 
 from .. import __version__
 from ..interaction import _legacy_bot as bot
+from ..config.map_runtime_overlay import automation_maps_sorted_keys, resolve_automation_map_config_key
 from ..config.paths import config_overlay_path, pricing_map_overlay_path, runtime_path
 from ..config.pricing import deep_merge
 
 
 ROOT = Path(__file__).resolve().parent
 CONFIG_OVERLAY_PATH = config_overlay_path()
-
-MAP_KEYS = ("1", "2", "3", "4", "5", "6", "7")
 
 DEFAULT_BID_RATIO_BY_ROUND = {"1": 0.6, "2": 0.65, "3": 0.75, "4": 0.95, "5": 1.0}
 
@@ -163,7 +162,7 @@ class BidKingApp:
         price_box.pack(fill="x", pady=(10, 0))
         ttk.Label(
             price_box,
-            text="以下写入 configs/pricing.maps/<地图编号>.json（与当前下拉所选地图对应）；"
+            text="以下写入 configs/pricing.maps/<地图 id，与游戏选图一致为三位>.json（与当前下拉所选对应）；"
             "亦可在本页「本地覆盖」里编辑该文件的完整 JSON。",
             wraplength=720,
         ).grid(row=0, column=0, columnspan=6, sticky="w", pady=(0, 6))
@@ -438,7 +437,8 @@ class BidKingApp:
         auto = self.config.get("automation") or {}
         maps = auto.get("maps") or {}
         try:
-            self.map_combo["values"] = [f"{k}. {maps[k]['name']}" for k in MAP_KEYS if k in maps]
+            keys = automation_maps_sorted_keys(maps)
+            self.map_combo["values"] = [f"{k}. {maps[k].get('name', k)}" for k in keys]
         except (KeyError, TypeError):
             self.map_combo["values"] = []
 
@@ -468,9 +468,9 @@ class BidKingApp:
 
     def load_into_form(self) -> None:
         auto = self.config.get("automation") or {}
-        map_key = str(auto.get("selected_map") or auto.get("default_map", "4"))
+        map_key = resolve_automation_map_config_key(auto)
         maps = auto.get("maps") or {}
-        item = maps.get(map_key, {})
+        item = maps.get(map_key, {}) if isinstance(maps, dict) else {}
         name = item.get("name", map_key)
         self.map_var.set(f"{map_key}. {name}")
         self.runs_var.set(str(auto.get("selected_runs") or auto.get("default_runs", 1)))
@@ -510,15 +510,17 @@ class BidKingApp:
 
     def effective_map_key(self) -> str:
         mk = self.selected_map_key()
-        if mk:
+        maps = (self.config.get("automation") or {}).get("maps") or {}
+        if mk and isinstance(maps, dict) and mk in maps:
             return mk
-        auto = self.config.get("automation") or {}
-        return str(auto.get("selected_map") or auto.get("default_map", "4"))
+        return resolve_automation_map_config_key(self.config.get("automation") or {})
 
     def apply_form_to_config(self) -> None:
         self.sync_config_json_editor_to_model_for_run()
         runs_value = int(self.runs_var.get()) if self.runs_var.get().isdigit() and int(self.runs_var.get()) > 0 else 1
-        selected_map = self.selected_map_key() or self.effective_map_key() or "4"
+        selected_map = self.selected_map_key() or self.effective_map_key()
+        if not selected_map:
+            selected_map = resolve_automation_map_config_key(self.config.get("automation") or {})
         selected_tool_rounds = [round_no for round_no, var in self.tool_round_vars.items() if var.get()]
 
         self.config.setdefault("automation", {})
