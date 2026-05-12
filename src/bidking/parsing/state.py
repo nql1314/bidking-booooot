@@ -116,6 +116,10 @@ class GameState:
 
         self.current_round: int = 1
 
+        # 本局开始/结束（本地时间，用于对局报表 CSV）；由 S2C_33 / S2C_45 写入
+        self.match_started_at: str = ""
+        self.match_ended_at: str = ""
+
         # 已输出的 ItemSkillLog 事件 Uid，防止 S2C_39 与 S2C_37 重复显示
         self.displayed_event_uids: Set[str] = set()
 

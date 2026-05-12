@@ -10,6 +10,7 @@ S2C 事件处理器
 函数命名规则: handle_s2c<编号>，与协议消息类型对应。
 """
 
+import datetime
 from typing import Dict, List
 
 from .constants import ITEM_TOOLS, SEP, SKILL_TO_CATEGORY, THIN
@@ -24,6 +25,7 @@ from ._renderer import (
     print_bids,
     print_events,
 )
+from .game_report_csv import append_game_over_report_csv
 
 
 def handle_s2c33(
@@ -45,6 +47,8 @@ def handle_s2c33(
     state.map_id = gd.get('MapId', 0)
     state.current_round = 1
     state.update_players(gd.get('UserLog', []))
+    state.match_started_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    state.match_ended_at = ""
 
     print(f"\n{SEP}", file=out)
     print(f"  第 1 回合  [游戏开始]", file=out)
@@ -182,6 +186,8 @@ def handle_s2c45(
     csv_index: Dict[int, CsvItem],
     csv_items: List[CsvItem],
     out,
+    *,
+    write_game_report_csv: bool = False,
 ) -> None:
     """
     S2C_45_game_over_notify — 游戏结束。
@@ -189,6 +195,9 @@ def handle_s2c45(
     结束包里 StockContainer.StockBoxes 会揭晓最终答案，但 UI 需要保留结束前
     最后一轮的推断结果，方便和游戏内最终揭晓进行人工比对。因此这里不再把
     StockBoxes 写回 state.items。
+
+    ``write_game_report_csv``：仅在为**实时 tail 新开对局**写对局报表时应为
+    ``True``；日志全量回放、``_legacy_runner`` 等默认为 ``False``，避免把历史对局写入 CSV。
     """
     winner_uid = data.get('WinUserUid', '')
     gd = data.get('GameData', {})
@@ -221,3 +230,10 @@ def handle_s2c45(
 
     print(f"\n{SEP}", file=out)
     out.flush()
+
+    state.match_ended_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if write_game_report_csv:
+        try:
+            append_game_over_report_csv(data, state, csv_index)
+        except OSError:
+            pass

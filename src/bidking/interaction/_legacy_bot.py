@@ -31,6 +31,10 @@ from .board_snapshot_util import (  # noqa: E402
     load_board_snapshot_for_loop,
 )
 from .window import capture_window_frame, find_window, scale_point  # noqa: E402
+from ..config.map_runtime_overlay import (  # noqa: E402
+    automation_maps_sorted_keys,
+    resolve_automation_map_config_key,
+)
 from ..config.paths import config_overlay_path  # noqa: E402
 from ..config.pricing import deep_merge  # noqa: E402
 from ..logsys.app_log import append_app_log, log_timestamp, set_app_log_file  # noqa: E402
@@ -298,7 +302,7 @@ def refresh_poll_loop_locals(config: dict[str, Any]) -> dict[str, Any]:
         "post_confirm_escape_block_seconds": float(auto.get("post_confirm_escape_block_seconds", 30.0)),
         "stuck_handled_enabled": bool(stuck.get("enabled", True)),
         "stuck_handled_threshold": max(1, int(stuck.get("consecutive_poll_threshold", 60))),
-        "selected_map": str(auto.get("selected_map") or auto.get("default_map", "4")),
+        "selected_map": resolve_automation_map_config_key(auto),
         "max_runs": int(auto.get("selected_runs") or auto.get("default_runs", 1)),
         "game_start_timeout_seconds": float(auto.get("game_start_timeout_seconds", 60.0)),
     }
@@ -770,9 +774,13 @@ def click_point(config: dict[str, Any], name: str, repeat: int = 1, pause: float
     pause_value = float(timing.get("click_pause_seconds", 0.12) if pause is None else pause)
     dry_run = bool(config.get("safety", {}).get("dry_run", False))
     x, y = client_to_screen(config, point)
+    point_json = json.dumps(point, ensure_ascii=False, sort_keys=True)
     for index in range(repeat):
         ensure_not_stopped()
-        log(f"click {name} #{index + 1}: screen={x},{y}", gui_verbose_only=True)
+        log(
+            f"click {name} #{index + 1}: point={point_json} screen={x},{y}",
+            gui_verbose_only=True,
+        )
         if not dry_run:
             pyautogui.click(x, y)
         sleep_interruptible(pause_value)
@@ -966,6 +974,7 @@ def input_bid(
             return "verify_timeout"
 
         log(f"bid_confirm: no 已出价 yet, retry after {retry_pause}s", gui_verbose_only=True)
+        click_loot_overlay_dismiss_if_enabled(config)
         sleep_interruptible(retry_pause)
 
 
@@ -1083,26 +1092,61 @@ def _default_warehouse_auto_sort_settings() -> dict[str, Any]:
         "enabled": True,
         "wait_after_warehouse_click_seconds": 5.0,
         "wait_after_auto_sort_click_seconds": 5.0,
-        "warehouse_button_region": {"left": 71, "top": 992, "width": 111, "height": 53},
-        "auto_sort_region": {"left": 1524, "top": 1031, "width": 155, "height": 34},
+        # 客户区逻辑坐标（同 ``clicks``），非区域中心；旧档可用 ``warehouse_button_region`` 矩形兜底
+        "warehouse_button_click": {"origin": "left_top", "x": 127, "y": 1019},
+        # 自动排序按钮：客户区坐标；旧档可用 ``auto_sort_region`` 矩形兜底
+        "auto_sort_click": {"origin": "left_top", "x": 1601, "y": 1048},
     }
 
 
 def merge_warehouse_auto_sort_settings(config: dict[str, Any]) -> dict[str, Any]:
-    """合并 ``automation.warehouse_auto_sort``（保留配置键名以兼容旧档）。"""
+    """合并 ``automation.warehouse_auto_sort``。
+
+    仓库入口优先 ``warehouse_button_click``（客户区坐标）；仍支持旧键 ``warehouse_button_region`` 矩形取中心点击。
+    自动排序优先 ``auto_sort_click``；仍支持旧键 ``auto_sort_region`` 矩形取中心点击。
+    """
     defaults = _default_warehouse_auto_sort_settings()
     raw = (config.get("automation") or {}).get("warehouse_auto_sort")
     if not isinstance(raw, dict):
         return defaults
     out = dict(defaults)
     for key, val in raw.items():
-        if key in ("warehouse_button_region", "auto_sort_region") and isinstance(val, dict):
+        if key in (
+            "warehouse_button_click",
+            "warehouse_button_region",
+            "auto_sort_click",
+            "auto_sort_region",
+        ) and isinstance(val, dict):
             base = dict(defaults[key]) if isinstance(defaults.get(key), dict) else {}
             base.update(val)
             out[key] = base
         else:
             out[key] = val
     return out
+
+
+def _click_client_point(
+    config: dict[str, Any],
+    point: dict[str, Any],
+    label: str,
+) -> None:
+    ensure_not_stopped()
+    bring_window_to_front(config)
+    sx, sy = client_to_screen(config, point)
+    dry_run = bool(config.get("safety", {}).get("dry_run", False))
+    pause = float(config.get("timing", {}).get("click_pause_seconds", 0.12))
+    raw = dict(point)
+    cx = int(raw.get("x", 0))
+    cy = int(raw.get("y", 0))
+    log(
+        f"warehouse auto_sort: click {label} ref_client=({cx},{cy}) -> screen=({sx},{sy})",
+        gui_verbose_only=True,
+    )
+    if not dry_run:
+        pyautogui.click(sx, sy)
+    sleep_interruptible(pause)
+    if bool(config.get("safety", {}).get("park_mouse_after_clicks", True)):
+        park_mouse_if_configured(config)
 
 
 def _click_client_region_center(
@@ -1135,18 +1179,39 @@ def run_warehouse_auto_sort(config: dict[str, Any]) -> None:
     wc = merge_warehouse_auto_sort_settings(config)
     if not bool(wc.get("enabled", True)):
         return
+    wh_click = wc.get("warehouse_button_click")
     wh_region = wc.get("warehouse_button_region")
+    sort_click = wc.get("auto_sort_click")
     sort_region = wc.get("auto_sort_region")
-    if not isinstance(wh_region, dict) or not isinstance(sort_region, dict):
-        log("warehouse auto_sort: 区域配置无效，跳过")
+    use_point = isinstance(wh_click, dict) and "x" in wh_click and "y" in wh_click
+    use_legacy_region = (
+        isinstance(wh_region, dict)
+        and all(k in wh_region for k in ("left", "top", "width", "height"))
+    )
+    use_sort_point = isinstance(sort_click, dict) and "x" in sort_click and "y" in sort_click
+    use_sort_legacy = (
+        isinstance(sort_region, dict)
+        and all(k in sort_region for k in ("left", "top", "width", "height"))
+    )
+    if not use_point and not use_legacy_region:
+        log("warehouse auto_sort: 仓库按钮坐标（warehouse_button_click）或旧版区域无效，跳过")
+        return
+    if not use_sort_point and not use_sort_legacy:
+        log("warehouse auto_sort: 自动排序坐标（auto_sort_click）或旧版区域无效，跳过")
         return
     w1 = max(0.0, float(wc.get("wait_after_warehouse_click_seconds", 5.0) or 0.0))
     w2 = max(0.0, float(wc.get("wait_after_auto_sort_click_seconds", 5.0) or 0.0))
     log("warehouse auto_sort: 进入仓库并自动排序", gui_verbose_only=True)
-    _click_client_region_center(config, wh_region, "warehouse_entry")
+    if use_point:
+        _click_client_point(config, wh_click, "warehouse_entry")
+    else:
+        _click_client_region_center(config, wh_region, "warehouse_entry")
     if w1 > 0:
         sleep_interruptible(w1)
-    _click_client_region_center(config, sort_region, "auto_sort")
+    if use_sort_point:
+        _click_client_point(config, sort_click, "auto_sort")
+    else:
+        _click_client_region_center(config, sort_region, "auto_sort")
     if w2 > 0:
         sleep_interruptible(w2)
     press_escape(config)
@@ -1181,22 +1246,19 @@ def handle_round(
     click_loot_overlay_dismiss_if_enabled(config)
     tool_rounds = {int(item) for item in config.get("automation", {}).get("tool_rounds", [1, 2])}
     ran_tool_this_round = int(round_no) in tool_rounds
-    seconds = float(config.get("timing", {}).get("tool_after_wait_seconds", 5.0))
-    if ran_tool_this_round:
-        sleep_interruptible(5)
-        run_tool_sequence(config)
-        log(f"after tool: wait {seconds:g}s", gui_verbose_only=True)
-        if seconds > 0:
-            sleep_interruptible(seconds)
-    else:
-        log(f"round {round_no}: tool skipped by config", gui_verbose_only=True)
-
     observation = observe_state_round(
         config,
         config_path,
-        f"round{round_no}_after_tool",
+        f"round{round_no}_start",
         auction_round_no=int(round_no),
     )
+    if ran_tool_this_round:
+        run_tool_sequence(config)
+        log(f"after tool", gui_verbose_only=True)
+        sleep_interruptible(5)
+    else:
+        log(f"round {round_no}: tool skipped by config", gui_verbose_only=True)
+
     knowledge_patch = apply_observation_memory(observation, knowledge_patch)
     price, details = compute_price(
         config,
@@ -1649,11 +1711,12 @@ def main() -> int:
         return 0
     else:
         config = load_merged_bot_config(config_path)
-        maps = config.get("automation", {}).get("maps", {})
-        default_map = str(config.get("automation", {}).get("default_map", "4"))
+        auto = config.get("automation") or {}
+        maps = auto.get("maps") if isinstance(auto.get("maps"), dict) else {}
+        default_map = resolve_automation_map_config_key(auto)
         default_runs = int(config.get("automation", {}).get("default_runs", 1))
         print("请选择地图：")
-        for key in ("1", "2", "3", "4", "5", "6", "7"):
+        for key in automation_maps_sorted_keys(maps):
             item = maps.get(key, {})
             print(f"{key}. {item.get('name', key)}")
         map_input = input(f"地图编号 [默认 {default_map}]: ").strip() or default_map
@@ -1675,11 +1738,12 @@ def main_aisha() -> int:
     args = parser.parse_args()
     config_path = Path(args.config).resolve()
     config = load_merged_bot_config(config_path)
-    maps = config.get("automation", {}).get("maps", {})
-    default_map = str(config.get("automation", {}).get("default_map", "4"))
+    auto = config.get("automation") or {}
+    maps = auto.get("maps") if isinstance(auto.get("maps"), dict) else {}
+    default_map = resolve_automation_map_config_key(auto)
     default_runs = int(config.get("automation", {}).get("default_runs", 1))
     print("fresh_aisha_bot — 请选择地图：")
-    for key in ("1", "2", "3", "4", "5", "6", "7"):
+    for key in automation_maps_sorted_keys(maps):
         item = maps.get(key, {})
         print(f"{key}. {item.get('name', key)}")
     map_input = input(f"地图编号 [默认 {default_map}]: ").strip() or default_map
