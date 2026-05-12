@@ -44,6 +44,7 @@ class MapAvgCsvTests(unittest.TestCase):
 
     def test_prefix3_representative(self) -> None:
         self.assertEqual(map_id_prefix3(2306), "230")
+        self.assertEqual(map_id_prefix3(2310), "230")
         tab = load_prefix3_to_min_map_id()
         self.assertEqual(tab.get("210"), 2101)
         rep, pfx = representative_map_id_for_ticket(2109)

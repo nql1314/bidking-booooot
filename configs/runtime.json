@@ -178,22 +178,30 @@
           "origin": "left_top",
           "x": 1740,
           "y": 873
-        },
-        "250": {
-          "name": "深海沉船",
-          "point": {
-            "origin": "left_top",
-            "x": 1617,
-            "y": 477
-          }
-        },
-        "450": {
-          "name": "沉船密封舱",
-          "point": {
-            "origin": "left_top",
-            "x": 1839,
-            "y": 682
-          }
+        }
+      },
+      "250": {
+        "name": "深海沉船",
+        "point": {
+          "origin": "left_top",
+          "x": 1617,
+          "y": 477
+        }
+      },
+      "450": {
+        "name": "沉船密封舱",
+        "point": {
+          "origin": "left_top",
+          "x": 1839,
+          "y": 682
+        }
+      },
+      "260": {
+        "name": "隐秘拍卖行",
+        "point": {
+          "origin": "left_top",
+          "x": 0,
+          "y": 0
         }
       }
     },

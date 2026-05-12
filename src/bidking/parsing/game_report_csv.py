@@ -321,22 +321,22 @@ def _map_entry_ticket(
 ) -> int:
     """
     仅从 ``automation.map_entry_ticket_by_map_id`` 读取门票：键为地图 ``MapId`` 的
-    **十进制字符串的前三位**（如 ``2301`` / ``2306`` → 键 ``\"230\"``）。
+    **档键**（与 :func:`bidking.parsing.item_db.map_bundle_key_for_automation` 一致，
+    如 ``2301`` / ``2310`` / ``2306`` → 键 ``\"230\"``）。
 
     第三参保留为兼容旧调用，已忽略。
     """
     if map_id <= 0:
         return 0
-    s = str(int(map_id))
-    if len(s) < 3:
-        s = s.zfill(3)
-    key3 = s[:3]
+    from .item_db import map_bundle_key_for_automation
+
+    key = map_bundle_key_for_automation(map_id)
     by_id = automation.get("map_entry_ticket_by_map_id")
     if not isinstance(by_id, dict):
         return 0
-    raw = by_id.get(key3)
-    if raw is None and key3.isdigit():
-        raw = by_id.get(int(key3))
+    raw = by_id.get(key)
+    if raw is None and key.isdigit():
+        raw = by_id.get(int(key))
     v = _safe_int(raw)
     if v is not None and v > 0:
         return int(v)
