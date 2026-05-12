@@ -41,11 +41,11 @@ pip install -e .
 未 `pip install -e .` 时请先 `cd` 到仓库根目录并设置 `PYTHONPATH=src`。
 
 ```powershell
-python -m bidking.runner.bot_main      # 艾哈迈德路径
-python -m bidking.runner.aisha_main      # 艾莎路径
 python -m bidking.runner.viewer_main     # 纯看板（tail / replay）
 python -c "from bidking.ui.app import main; main()"   # tkinter 总控 GUI
 python -m unittest discover -s tests -t .             # 测试
+python -m bidking.runner.bot_main      # 艾哈迈德路径
+python -m bidking.runner.aisha_main      # 艾莎路径
 ```
 
 ## 数据
