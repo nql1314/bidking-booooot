@@ -3,12 +3,19 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from bidking.config import deep_merge, load_pricing, load_runtime, resolve_for
+from bidking.config import (
+    apply_board_snapshot_env_overrides,
+    deep_merge,
+    load_pricing,
+    load_runtime,
+    resolve_for,
+)
 
 
 class ConfigTests(unittest.TestCase):
@@ -53,6 +60,18 @@ class ConfigTests(unittest.TestCase):
             deep_merge(a, b),
             {"x": 1, "y": {"a": 1, "b": 20, "c": 3}, "z": [9]},
         )
+
+    def test_board_snapshot_env_overrides(self) -> None:
+        cfg: dict = {"board_snapshot": {"self_user_uid": "old", "self_name_substring": "nm"}}
+        with patch.dict(
+            os.environ,
+            {"BIDKING_SELF_USER_UID": "from_env", "BIDKING_SELF_NAME_SUBSTRING": ""},
+            clear=False,
+        ):
+            apply_board_snapshot_env_overrides(cfg)
+        bs = cfg["board_snapshot"]
+        self.assertEqual(bs["self_user_uid"], "from_env")
+        self.assertEqual(bs["self_name_substring"], "")
 
 
 if __name__ == "__main__":
