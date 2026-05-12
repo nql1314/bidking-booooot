@@ -114,6 +114,8 @@ function Invoke-BuildExe {
         --collect-all mouseinfo `
         --collect-all pyrect `
         --collect-all pymsgbox `
+        --collect-all rapidocr `
+        --collect-all rapidocr_onnxruntime `
         --exclude-module pytest `
         --exclude-module tests `
         "$EntryFile" | Out-Host

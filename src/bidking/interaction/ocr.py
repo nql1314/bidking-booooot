@@ -9,8 +9,23 @@ from __future__ import annotations
 import threading
 from typing import Any, List, Tuple
 
+import numpy as np
+
 _LOCK = threading.Lock()
 _ENGINE: Any = None
+
+
+def _coerce_image_for_rapidocr(image: Any) -> Any:
+    """``rapidocr`` >=2.x 仅接受 str / ndarray / bytes / Path；旧路径仍传 PIL，在此转为 RGB ndarray。"""
+    try:
+        from PIL import Image as PILImage
+    except ImportError:
+        return image
+    if not isinstance(image, PILImage.Image):
+        return image
+    if image.mode != "RGB":
+        image = image.convert("RGB")
+    return np.ascontiguousarray(np.asarray(image, dtype=np.uint8))
 
 
 def _normalize_rapid_output(raw: Any) -> List[Any]:
@@ -85,7 +100,7 @@ def get_engine() -> Any:
 
 def infer_lines(image: Any) -> List[Any]:
     """对图像跑一次 OCR，返回统一行列表 ``[(box, text, score), ...]``。"""
-    raw = get_engine()(image)
+    raw = get_engine()(_coerce_image_for_rapidocr(image))
     return _normalize_rapid_output(raw)
 
 

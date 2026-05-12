@@ -19,6 +19,21 @@ from ..parsing._legacy_runner import parse_last_game, parse_last_game_rounds
 from ..ui.grid import GridWindow
 
 
+def _effective_snapshot_path_for_viewer(cli_or_none: str | None) -> str | None:
+    """命令行等显式传入的非空路径优先；否则使用合并配置里的 ``board_snapshot.path``（与 bot 读同一文件）。"""
+    explicit = (cli_or_none or "").strip()
+    if explicit:
+        return explicit
+    try:
+        from ..config.runtime import load_runtime
+
+        bs = load_runtime().board_snapshot
+        configured = str(bs.get("path") or "").strip()
+        return configured or None
+    except Exception:
+        return None
+
+
 def _default_log_path() -> str:
     candidates = [
         DEFAULT_GAME_LOG,
@@ -40,6 +55,7 @@ def _open_grid(
     snapshot_path: str | None = None,
     snapshot_export_overlay: bool = True,
 ) -> None:
+    sp = _effective_snapshot_path_for_viewer(snapshot_path)
     if tail:
         state, csv_index, csv_items = parse_last_game(log_path, csv_path)
         if state is None:
@@ -52,7 +68,7 @@ def _open_grid(
             csv_items,
             log_path=log_path,
             board_mode=board_mode,
-            snapshot_path=snapshot_path,
+            snapshot_path=sp,
             snapshot_export_overlay=snapshot_export_overlay,
         ).run()
         return
@@ -67,7 +83,7 @@ def _open_grid(
         csv_items,
         snapshots=snapshots,
         board_mode=board_mode,
-        snapshot_path=snapshot_path,
+        snapshot_path=sp,
         snapshot_export_overlay=snapshot_export_overlay,
     ).run()
 
@@ -124,7 +140,37 @@ def _show_start_page(default_log: str, csv_path: str) -> None:
     root.mainloop()
 
 
+def _run_history_backfill(
+    log_path: str | None,
+    csv_path: str,
+    *,
+    overwrite: bool,
+) -> None:
+    """启动时把日志里所有"已结束"的对局补录到独立的历史 CSV；失败静默忽略。"""
+    if not log_path or not os.path.exists(log_path) or not os.path.exists(csv_path):
+        return
+    try:
+        from ..parsing.game_report_csv import backfill_history_game_reports_csv
+
+        result = backfill_history_game_reports_csv(
+            log_path, csv_path, overwrite=overwrite,
+        )
+        if result is None:
+            return
+        out, wrote = result
+        if wrote > 0:
+            print(f"[history-report] 已写出 {wrote} 局到 {out}", file=sys.stderr)
+        else:
+            print(f"[history-report] 已存在，跳过：{out}", file=sys.stderr)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[history-report] 跳过：{exc}", file=sys.stderr)
+
+
 def main(argv: list[str] | None = None) -> None:
+    from ..parsing.game_report_csv import init_game_report_csv_session
+
+    init_game_report_csv_session()
+
     parser = argparse.ArgumentParser(description=f"BidKing 物品格局可视化 v{__version__}")
     parser.add_argument("--log", default=None, help="日志文件路径")
     parser.add_argument(
@@ -134,13 +180,32 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("--tail", action="store_true", help="实时监听模式")
     # parser.add_argument("--raven", action="store_true", help="拉文看板")
-    parser.add_argument("--snapshot-path", default=None, help="覆盖快照写出路径")
+    parser.add_argument(
+        "--snapshot-path",
+        default=None,
+        help="覆盖快照写出路径；省略时优先用 configs 合并结果中的 board_snapshot.path",
+    )
     parser.add_argument("--snapshot-no-overlay", action="store_true", help="快照不含 grid_overlay")
+    parser.add_argument(
+        "--no-history-report",
+        action="store_true",
+        help="禁用启动时把历史对局补录到 game_match_reports_history_<启动时间>.csv",
+    )
+    parser.add_argument(
+        "--history-report-overwrite",
+        action="store_true",
+        help="若本次启动的历史 CSV 已存在，强制覆盖重写",
+    )
     args = parser.parse_args(argv)
 
     board_mode = "elsa"
 
     if argv is None and len(sys.argv) == 1:
+        if not args.no_history_report:
+            _run_history_backfill(
+                _default_log_path(), args.csv,
+                overwrite=args.history_report_overwrite,
+            )
         _show_start_page(_default_log_path(), args.csv)
         return
 
@@ -158,6 +223,12 @@ def main(argv: list[str] | None = None) -> None:
     if not os.path.exists(csv_path):
         print(f"错误: 找不到 CSV 文件: {csv_path}", file=sys.stderr)
         sys.exit(1)
+
+    if not args.no_history_report:
+        _run_history_backfill(
+            log_path, csv_path,
+            overwrite=args.history_report_overwrite,
+        )
 
     snap = (args.snapshot_path or "").strip() or None
     _open_grid(

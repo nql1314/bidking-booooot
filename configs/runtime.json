@@ -5,7 +5,7 @@
     "bring_window_to_front": true,
     "move_pause_seconds": 0.08,
     "confirm_after_type": true,
-    "verify_bid_confirm_ocr": true,
+    "verify_bid_confirm_ocr": false,
     "stuck_after_handled_round": {
       "enabled": true,
       "consecutive_poll_threshold": 60,
@@ -71,7 +71,7 @@
       "y": 960
     },
     "tool_confirm": {
-      "x": 1190,
+      "x": 1133,
       "y": 655
     },
     "bid_button": {
@@ -128,11 +128,19 @@
     "warehouse_auto_sort": {
       "wait_after_warehouse_click_seconds": 5.0,
       "wait_after_auto_sort_click_seconds": 5.0,
-      "warehouse_button_region": {"left": 71, "top": 992, "width": 111, "height": 53},
-      "auto_sort_region": {"left": 1436, "top": 1010, "width": 155, "height": 34}
+      "warehouse_button_click": {
+        "origin": "left_top",
+        "x": 127,
+        "y": 1019
+      },
+      "auto_sort_click": {
+        "origin": "left_top",
+        "x": 1528,
+        "y": 1024
+      }
     },
     "maps": {
-      "1": {
+      "210": {
         "name": "快递盲盒堆",
         "point": {
           "origin": "left_top",
@@ -140,7 +148,7 @@
           "y": 400
         }
       },
-      "2": {
+      "220": {
         "name": "废弃仓库",
         "point": {
           "origin": "left_top",
@@ -148,23 +156,7 @@
           "y": 315
         }
       },
-      "3": {
-        "name": "深海沉船",
-        "point": {
-          "origin": "left_top",
-          "x": 1617,
-          "y": 477
-        }
-      },
-      "4": {
-        "name": "沉船密封舱",
-        "point": {
-          "origin": "left_top",
-          "x": 1839,
-          "y": 682
-        }
-      },
-      "5": {
+      "230": {
         "name": "航运集装箱",
         "point": {
           "origin": "left_top",
@@ -172,7 +164,7 @@
           "y": 755
         }
       },
-      "6": {
+      "240": {
         "name": "空置别墅",
         "point": {
           "origin": "left_top",
@@ -180,14 +172,40 @@
           "y": 734
         }
       },
-      "7": {
+      "440": {
         "name": "幽静别墅",
         "point": {
           "origin": "left_top",
           "x": 1740,
           "y": 873
+        },
+        "250": {
+          "name": "深海沉船",
+          "point": {
+            "origin": "left_top",
+            "x": 1617,
+            "y": 477
+          }
+        },
+        "450": {
+          "name": "沉船密封舱",
+          "point": {
+            "origin": "left_top",
+            "x": 1839,
+            "y": 682
+          }
         }
       }
+    },
+    "map_entry_ticket_by_map_id": {
+      "210": 100,
+      "220": 2000,
+      "230": 5000,
+      "240": 10000,
+      "250": 25000,
+      "260": 100000,
+      "440": 10000,
+      "450": 25000
     }
   }
 }

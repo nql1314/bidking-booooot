@@ -36,6 +36,7 @@ import io
 import json
 import os
 import queue
+import sys
 import shutil
 import statistics
 import threading
@@ -410,6 +411,16 @@ class GridWindow:
         else:
             sp = None
         self._snapshot_path = sp
+        if self._snapshot_path:
+            snap_parent = Path(self._snapshot_path).expanduser().parent
+            try:
+                snap_parent.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                print(
+                    f"[bidking] 无法创建棋盘快照所在目录（请检查路径与权限）: {snap_parent}\n"
+                    f"  原因: {exc}",
+                    file=sys.stderr,
+                )
         self._snapshot_export_overlay = bool(snapshot_export_overlay)
         self._skill_logs: List[dict] = []
         self._last_raw_pricing: Optional[Dict[str, Any]] = None
@@ -1608,6 +1619,7 @@ class GridWindow:
         text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         tmp_path = path + ".tmp"
         try:
+            Path(path).expanduser().parent.mkdir(parents=True, exist_ok=True)
             with open(tmp_path, "w", encoding="utf-8") as wf:
                 wf.write(text)
             os.replace(tmp_path, path)
@@ -1679,7 +1691,12 @@ class GridWindow:
                         and self._live_game_active
                     ):
                         handle_s2c45(
-                            data, self.state, self.csv_index, self.csv_items, silent
+                            data,
+                            self.state,
+                            self.csv_index,
+                            self.csv_items,
+                            silent,
+                            write_game_report_csv=True,
                         )
                         self._append_skill_log_entry(event_type, data)
                         self._live_game_active = False
