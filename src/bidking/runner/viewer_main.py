@@ -182,6 +182,51 @@ def _show_start_page(default_log: str, csv_path: str) -> None:
     tk.Radiobutton(frame, text="艾莎", variable=board_var, value="elsa").pack(anchor="w")
     # tk.Radiobutton(frame, text="拉文", variable=board_var, value="raven").pack(anchor="w")
 
+    def export_history_report() -> None:
+        log_path = log_var.get().strip()
+        if not os.path.exists(log_path):
+            messagebox.showerror("错误", f"找不到日志文件:\n{log_path}")
+            return
+        if not os.path.exists(csv_path):
+            messagebox.showerror("错误", f"找不到物品数据:\n{csv_path}")
+            return
+        try:
+            from ..parsing.game_report_csv import backfill_history_game_reports_csv
+
+            # 手动导出：全量扫描当前日志；覆盖同次启动已生成的历史 CSV，避免误触后仍是旧内容
+            result = backfill_history_game_reports_csv(
+                log_path, csv_path, overwrite=True,
+            )
+        except Exception as exc:  # noqa: BLE001
+            messagebox.showerror("导出失败", str(exc))
+            return
+        if result is None:
+            messagebox.showinfo(
+                "历史报告",
+                "未生成文件：可能没有已结束对局，或已设置环境变量 "
+                "BIDKING_DISABLE_GAME_REPORT。",
+            )
+            return
+        out, wrote = result
+        if wrote > 0:
+            messagebox.showinfo("历史报告", f"已写出 {wrote} 局到\n{out}")
+        else:
+            messagebox.showinfo("历史报告", f"未写入新行（可能日志中无已结束对局）。\n{out}")
+
+    history_row = tk.Frame(frame)
+    history_row.pack(anchor="w", pady=(10, 4))
+    tk.Button(
+        history_row,
+        text="导出历史报告",
+        command=export_history_report,
+    ).pack(side="left")
+    tk.Label(
+        history_row,
+        text="（扫描当前 Log 中全部已结束对局；启动看板不会自动导出）",
+        fg="#5a6a7a",
+        font=("微软雅黑", 8),
+    ).pack(side="left", padx=(8, 0))
+
     def start() -> None:
         log_path = log_var.get().strip()
         if not os.path.exists(log_path):
@@ -295,25 +340,20 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("--snapshot-no-overlay", action="store_true", help="快照不含 grid_overlay")
     parser.add_argument(
-        "--no-history-report",
+        "--history-report",
         action="store_true",
-        help="禁用启动时把历史对局补录到 game_match_reports_history_<启动时间>.csv",
+        help="启动前把历史对局补录到 game_match_reports_history_<启动时间>.csv（默认不执行）",
     )
     parser.add_argument(
         "--history-report-overwrite",
         action="store_true",
-        help="若本次启动的历史 CSV 已存在，强制覆盖重写",
+        help="与 --history-report 同用时，若历史 CSV 已存在则强制覆盖重写",
     )
     args = parser.parse_args(argv)
 
     board_mode = "elsa"
 
     if argv is None and len(sys.argv) == 1:
-        if not args.no_history_report:
-            _run_history_backfill(
-                _default_log_path(), args.csv,
-                overwrite=args.history_report_overwrite,
-            )
         _show_start_page(_default_log_path(), args.csv)
         return
 
@@ -332,7 +372,7 @@ def main(argv: list[str] | None = None) -> None:
         print(f"错误: 找不到 CSV 文件: {csv_path}", file=sys.stderr)
         sys.exit(1)
 
-    if not args.no_history_report:
+    if args.history_report:
         _run_history_backfill(
             log_path, csv_path,
             overwrite=args.history_report_overwrite,

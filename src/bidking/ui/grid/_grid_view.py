@@ -493,6 +493,8 @@ class GridWindow:
         #   start_row/col, cur_row/col, button(1|3), default_quality(None=金默认Q5, 6=红)
         #   phantom_infer: 左键空格=普通(推断)；Ctrl+左键空格=金；Ctrl+右键空格=红（button 3）
         self._phantom_draw_state: Optional[dict] = None
+        self._topmost_pinned: bool = False
+        self._topmost_pin_photo: Optional[Any] = None
 
         # 线程安全：后台线程写 state，主线程读 state；用 RLock 以便在持锁的 poll 路径内可再入 _refresh→写快照
         self._lock: threading.RLock = threading.RLock()
@@ -665,14 +667,20 @@ class GridWindow:
         )
 
     def _phantom_effective_quality(self, uid: str) -> Optional[int]:
-        """幽灵用于筛选的品质：原推断为 None；显式 int；缺省为金 Q5。"""
+        """幽灵用于筛选的品质：原推断为 None；显式 int；缺省为金 Q5（若扫描已排除 Q5 则不再强套金）。"""
         if uid not in self._phantom_items:
             return None
+        k = self._phantom_items[uid]
+        ex = k.excluded_qualities or set()
         p = self._phantom_quality_pref.get(uid)
         if p == PHANTOM_Q_INFER:
             return None
         if isinstance(p, int) and 1 <= p <= 6:
+            if p in ex:
+                return None
             return p
+        if 5 in ex:
+            return None
         return 5
 
     def _phantom_pen_theme(self, uid: str) -> str:
@@ -686,15 +694,66 @@ class GridWindow:
             return "neutral"
         if isinstance(p, int) and 1 <= p <= 4:
             return "neutral"
+        pk = self._phantom_items[uid]
+        if 5 in (pk.excluded_qualities or set()) and p is None:
+            return "neutral"
         return "gold"
 
+    def _csv_locked_item_cid(self, k: ItemKnowledge) -> Optional[int]:
+        """
+        仅当日志已给出精确价（如鉴价/揭晓）时，才把 ItemCid 视为锁定 CSV 唯一行。
+
+        若 HitBox 里常带占位 ItemCid 却无 ItemPrice，仍按「未精确揭示」处理，
+        以免封杀多候选与弹窗内手选品质/双击确认。
+        """
+        cid = k.item_cid
+        if cid is None or cid not in self.csv_index:
+            return None
+        if k.price is None:
+            return None
+        return cid
+
     def _unknown_quality_pref_eligible(self, uid: str, k: ItemKnowledge) -> bool:
-        """日志物品品质未知时可在候选弹窗手选品质（已知 CID 锁定单物品时不适用）。"""
+        """日志物品品质未知时可在候选弹窗手选品质（已精确价锁定 CID 时不适用）。"""
         return (
             k.quality is None
             and uid not in self._phantom_items
-            and not (k.item_cid and k.item_cid in self.csv_index)
+            and self._csv_locked_item_cid(k) is None
         )
+
+    @staticmethod
+    def _hand_pickable_qualities(k: ItemKnowledge) -> Tuple[int, ...]:
+        """弹窗「候选品质」可选 Q1–Q6：须与日志扫描给出的 excluded_qualities 一致。"""
+        ex = k.excluded_qualities or set()
+        return tuple(q for q in range(1, 7) if q not in ex)
+
+    def _sanitize_unknown_quality_prefs(self) -> None:
+        """
+        全量品质扫描等会追加 excluded_qualities；若仍保留与排除矛盾的手选品质，
+        则候选恒为空。刷新时清掉无效项，避免「选完品质后回放/切回合仍空白」。
+        """
+        for uid, q in list(self._unknown_cell_quality_pref.items()):
+            k = self.state.items.get(uid)
+            if not k or not self._unknown_quality_pref_eligible(uid, k):
+                self._unknown_cell_quality_pref.pop(uid, None)
+                continue
+            if not isinstance(q, int) or not (1 <= q <= 6):
+                self._unknown_cell_quality_pref.pop(uid, None)
+                continue
+            if q in (k.excluded_qualities or set()):
+                self._unknown_cell_quality_pref.pop(uid, None)
+
+    def _sanitize_phantom_quality_prefs(self) -> None:
+        """全量扫描写入 phantoms 的 excluded_qualities 后，清掉与之矛盾的手选品质。"""
+        for uid, p in list(self._phantom_quality_pref.items()):
+            if p == PHANTOM_Q_INFER:
+                continue
+            if not isinstance(p, int) or not (1 <= p <= 6):
+                self._phantom_quality_pref.pop(uid, None)
+                continue
+            k = self._phantom_items.get(uid)
+            if not k or p in (k.excluded_qualities or set()):
+                self._phantom_quality_pref.pop(uid, None)
 
     def _effective_quality_for_query(self, uid: str, k: ItemKnowledge) -> Optional[int]:
         """候选筛选 / query_item 用品质：日志已知品质优先，其次幽灵金默认/手选。"""
@@ -705,6 +764,8 @@ class GridWindow:
         if self._unknown_quality_pref_eligible(uid, k):
             q = self._unknown_cell_quality_pref.get(uid)
             if isinstance(q, int) and 1 <= q <= 6:
+                if q in (k.excluded_qualities or set()):
+                    return None
                 return q
         return None
 
@@ -758,7 +819,7 @@ class GridWindow:
             effective_shape,
             self._effective_quality_for_query(uid, k),
             k.categories,
-            k.item_cid,
+            self._csv_locked_item_cid(k),
             self.csv_index,
             self.csv_items,
             k.excluded_categories,
@@ -790,8 +851,9 @@ class GridWindow:
 
     def _candidate_items_for_grid(self, uid: str, k: ItemKnowledge) -> List[CsvItem]:
         """返回与当前网格约束一致的候选物品列表。"""
-        if k.item_cid and k.item_cid in self.csv_index:
-            return [self.csv_index[k.item_cid]]
+        locked = self._csv_locked_item_cid(k)
+        if locked is not None:
+            return [self.csv_index[locked]]
 
         candidates = list(self.csv_items)
         if k.shape is not None:
@@ -845,8 +907,9 @@ class GridWindow:
         但不按当前手动矩形过滤 shape；仅用日志形状或 BoxId 推断的最大外形包络。
         用于拉文扩展时按「候选中形状的边际概率」比较不同矩形。
         """
-        if k.item_cid and k.item_cid in self.csv_index:
-            return [self.csv_index[k.item_cid]]
+        locked = self._csv_locked_item_cid(k)
+        if locked is not None:
+            return [self.csv_index[locked]]
 
         candidates = list(self.csv_items)
         if k.shape is not None:
@@ -1788,6 +1851,8 @@ class GridWindow:
             self._phantom_items,
             self._phantom_quality_pref,
         )
+        self._sanitize_unknown_quality_prefs()
+        self._sanitize_phantom_quality_prefs()
         self._validate_manual_confirmations()
 
         self._info_text.set(self._info_summary_text())
@@ -2173,6 +2238,57 @@ class GridWindow:
 
     # ── 界面构建 ──────────────────────────────────────────────────────────
 
+    def _create_topmost_pin_photo(self) -> Optional[Any]:
+        """红色图钉小图标（Pillow）；失败时返回 None，改用文字「置顶」。"""
+        try:
+            from PIL import Image, ImageDraw, ImageTk
+        except ImportError:
+            return None
+        w, h = 20, 24
+        img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        dr = ImageDraw.Draw(img)
+        cx = w // 2
+        head_cy = 7
+        r = 6
+        dr.ellipse((cx - r, head_cy - r, cx + r, head_cy + r), fill=(215, 38, 38, 255))
+        dr.ellipse((cx - r + 2, head_cy - r + 1, cx - 1, head_cy - 1), fill=(255, 130, 130, 220))
+        dr.polygon(
+            [
+                (cx - 3, head_cy + r - 1),
+                (cx + 3, head_cy + r - 1),
+                (cx + 2, h - 2),
+                (cx - 2, h - 2),
+            ],
+            fill=(200, 205, 215, 255),
+        )
+        dr.line([(cx, head_cy + r - 2), (cx, h - 4)], fill=(160, 42, 42, 255), width=2)
+        return ImageTk.PhotoImage(img)
+
+    def _toggle_topmost_pin(self) -> None:
+        """切换窗口总在最前（桌面最上层）。"""
+        self._topmost_pinned = not self._topmost_pinned
+        try:
+            self.root.attributes("-topmost", self._topmost_pinned)
+            if self._topmost_pinned:
+                self.root.lift()
+        except tk.TclError:
+            self._topmost_pinned = False
+        try:
+            if self._topmost_pinned:
+                self._btn_topmost.config(
+                    relief="solid",
+                    highlightthickness=1,
+                    highlightbackground="#ff5555",
+                )
+            else:
+                self._btn_topmost.config(
+                    relief="flat",
+                    highlightthickness=0,
+                    highlightbackground="#1a1a2e",
+                )
+        except tk.TclError:
+            pass
+
     def _build_window(self) -> None:
         live_tag = "  ● LIVE" if self._log_path else ""
         self.root = tk.Tk()
@@ -2183,6 +2299,10 @@ class GridWindow:
         )
         self.root.configure(bg="#1a1a2e")
         self.root.protocol("WM_DELETE_WINDOW", self._on_close_request)
+        try:
+            self.root.attributes("-topmost", False)
+        except tk.TclError:
+            pass
 
         self._build_vacant_estimate_bar()
         self._build_info_bar()
@@ -2204,6 +2324,10 @@ class GridWindow:
         self._monitor_stop.set()
         home = self._home_shell
         self._home_shell = None
+        try:
+            self.root.attributes("-topmost", False)
+        except tk.TclError:
+            pass
         try:
             self.root.destroy()
         except tk.TclError:
@@ -2234,6 +2358,29 @@ class GridWindow:
 
         right = tk.Frame(bar, bg="#1a1a2e")
         right.pack(side="right", padx=4)
+        self._topmost_pin_photo = self._create_topmost_pin_photo()
+        pin_kw: Dict[str, Any] = {
+            "master": right,
+            "command": self._toggle_topmost_pin,
+            "bg": "#1a1a2e",
+            "activebackground": "#2a3550",
+            "relief": "flat",
+            "borderwidth": 0,
+            "highlightthickness": 0,
+            "padx": 2,
+            "pady": 0,
+            "cursor": "hand2",
+            "takefocus": 0,
+        }
+        if self._topmost_pin_photo is not None:
+            pin_kw["image"] = self._topmost_pin_photo
+        else:
+            pin_kw["text"] = "置顶"
+            pin_kw["fg"] = "#e04040"
+            pin_kw["font"] = ("微软雅黑", 9)
+        self._btn_topmost = tk.Button(**pin_kw)
+        self._btn_topmost.pack(side="left", padx=(0, 6))
+
         if self._home_shell is not None:
             tk.Button(
                 right,
@@ -3398,6 +3545,12 @@ class GridWindow:
 
     # ── 候选弹窗 ──────────────────────────────────────────────────────────
 
+    def _reopen_item_candidate_popup(self, uid: str, sx: int, sy: int) -> None:
+        """品质/幽灵偏好变更后重开弹窗（避免幽灵已被 reconcile 删掉时 KeyError）。"""
+        k = self._phantom_items.get(uid) or self.state.items.get(uid)
+        if k:
+            self._show_popup(uid, k, sx, sy)
+
     def _show_popup(
         self,
         uid: str,
@@ -3492,59 +3645,61 @@ class GridWindow:
         # 幽灵物品：默认金（Q5）；取消勾选或选「原推断」恢复含金/红等原推断；下拉可指定其它 Q
         if uid in self._phantom_items:
             pq0 = self._phantom_quality_pref.get(uid)
-            combo_vals = (
-                "金默认（Q5）",
-                "原推断（含金/红）",
-                "Q1",
-                "Q2",
-                "Q3",
-                "Q4",
-                "Q5",
-                "Q6",
-            )
+            ph_ex = k.excluded_qualities or set()
+            pick_ph = self._hand_pickable_qualities(k)
+            show_gold_default = 5 not in ph_ex
+            combo_vals_list: List[str] = []
+            if show_gold_default:
+                combo_vals_list.append("金默认（Q5）")
+            combo_vals_list.append("原推断（含金/红）")
+            combo_vals_list.extend(f"Q{q}" for q in pick_ph)
+            combo_vals = tuple(combo_vals_list)
+
             if pq0 == PHANTOM_Q_INFER:
                 combo_init = "原推断（含金/红）"
-            elif isinstance(pq0, int):
+            elif isinstance(pq0, int) and pq0 in pick_ph:
                 combo_init = f"Q{pq0}"
-            else:
+            elif isinstance(pq0, int) and show_gold_default and pq0 == 5:
                 combo_init = "金默认（Q5）"
+            else:
+                combo_init = "原推断（含金/红）"
 
             def _phantom_q_apply_and_reopen() -> None:
                 self._validate_manual_confirmations()
                 self._refresh()
                 sx, sy = mouse_x, mouse_y
+                try:
+                    popup.grab_release()
+                except tk.TclError:
+                    pass
                 popup.destroy()
                 self.root.after(
                     20,
-                    lambda u=uid: self._show_popup(
-                        u,
-                        self._phantom_items[u],
-                        sx,
-                        sy,
-                    ),
+                    lambda u=uid, x=sx, y=sy: self._reopen_item_candidate_popup(u, x, y),
                 )
 
             q_block = tk.Frame(popup, bg="#e8f4ff")
             q_block.pack(fill="x", padx=8, pady=(4, 2))
-            chk_var = tk.IntVar(value=0 if pq0 == PHANTOM_Q_INFER else 1)
+            if show_gold_default:
+                chk_var = tk.IntVar(value=0 if pq0 == PHANTOM_Q_INFER else 1)
 
-            def _on_phantom_gold_chk() -> None:
-                if chk_var.get() == 0:
-                    self._phantom_quality_pref[uid] = PHANTOM_Q_INFER
-                else:
-                    self._phantom_quality_pref.pop(uid, None)
-                _phantom_q_apply_and_reopen()
+                def _on_phantom_gold_chk() -> None:
+                    if chk_var.get() == 0:
+                        self._phantom_quality_pref[uid] = PHANTOM_Q_INFER
+                    else:
+                        self._phantom_quality_pref.pop(uid, None)
+                    _phantom_q_apply_and_reopen()
 
-            tk.Checkbutton(
-                q_block,
-                text="金品质（Q5）默认",
-                variable=chk_var,
-                command=_on_phantom_gold_chk,
-                bg="#e8f4ff",
-                fg="#223344",
-                activebackground="#e8f4ff",
-                font=("微软雅黑", 9),
-            ).pack(side="left", padx=(0, 8))
+                tk.Checkbutton(
+                    q_block,
+                    text="金品质（Q5）默认",
+                    variable=chk_var,
+                    command=_on_phantom_gold_chk,
+                    bg="#e8f4ff",
+                    fg="#223344",
+                    activebackground="#e8f4ff",
+                    font=("微软雅黑", 9),
+                ).pack(side="left", padx=(0, 8))
 
             q_var = tk.StringVar(value=combo_init)
             cb = ttk.Combobox(
@@ -3557,41 +3712,69 @@ class GridWindow:
             )
 
             def _on_phantom_q_selected(_evt: tk.Event) -> None:
-                val = q_var.get()
+                try:
+                    self.root.update_idletasks()
+                except tk.TclError:
+                    pass
+                try:
+                    val = _evt.widget.get()
+                except tk.TclError:
+                    return
                 if val == "金默认（Q5）":
                     self._phantom_quality_pref.pop(uid, None)
                 elif val == "原推断（含金/红）":
                     self._phantom_quality_pref[uid] = PHANTOM_Q_INFER
-                else:
+                elif val and val[0] == "Q" and len(val) >= 2:
                     self._phantom_quality_pref[uid] = int(val[1:])
+                else:
+                    return
+                pk = self._phantom_items.get(uid)
+                if pk and not self._candidate_items_for_grid(uid, pk):
+                    self._phantom_quality_pref[uid] = PHANTOM_Q_INFER
+                    messagebox.showwarning(
+                        "幽灵品质",
+                        "当前形状/类别/扫描排除等约束下没有匹配该品质的物品，已改为「原推断」式筛选。",
+                    )
                 _phantom_q_apply_and_reopen()
 
             cb.bind("<<ComboboxSelected>>", _on_phantom_q_selected)
             cb.pack(side="left", padx=4)
-            tk.Label(
-                q_block,
-                text="取消勾选=原推断",
-                bg="#e8f4ff",
-                fg="#556677",
-                font=("微软雅黑", 8),
-            ).pack(side="left", padx=6)
+            if show_gold_default:
+                tk.Label(
+                    q_block,
+                    text="取消勾选=原推断",
+                    bg="#e8f4ff",
+                    fg="#556677",
+                    font=("微软雅黑", 8),
+                ).pack(side="left", padx=6)
+            elif ph_ex:
+                tk.Label(
+                    q_block,
+                    text="已排除品质以下拉为准（与全图扫描一致）",
+                    bg="#e8f4ff",
+                    fg="#556677",
+                    font=("微软雅黑", 8),
+                ).pack(side="left", padx=6)
 
         # 日志物品品质未知：下拉筛选候选品质（不限 = 与原先多品质候选一致）
         elif self._unknown_quality_pref_eligible(uid, k):
+            self._sanitize_unknown_quality_prefs()
             uq0 = self._unknown_cell_quality_pref.get(uid)
+            pickable = self._hand_pickable_qualities(k)
 
             def _unknown_q_apply_and_reopen() -> None:
                 self._validate_manual_confirmations()
                 self._refresh()
                 sx, sy = mouse_x, mouse_y
+                try:
+                    popup.grab_release()
+                except tk.TclError:
+                    pass
                 popup.destroy()
-
-                def _reopen_unknown_popup() -> None:
-                    kk = self.state.items.get(uid)
-                    if kk:
-                        self._show_popup(uid, kk, sx, sy)
-
-                self.root.after(20, _reopen_unknown_popup)
+                self.root.after(
+                    20,
+                    lambda u=uid, x=sx, y=sy: self._reopen_item_candidate_popup(u, x, y),
+                )
 
             u_block = tk.Frame(popup, bg="#fff4e8")
             u_block.pack(fill="x", padx=8, pady=(4, 2))
@@ -3602,8 +3785,8 @@ class GridWindow:
                 fg="#223344",
                 font=("微软雅黑", 9),
             ).pack(side="left", padx=(0, 6))
-            combo_vals_u = ("不限品质", "Q1", "Q2", "Q3", "Q4", "Q5", "Q6")
-            if isinstance(uq0, int) and 1 <= uq0 <= 6:
+            combo_vals_u = ("不限品质",) + tuple(f"Q{q}" for q in pickable)
+            if isinstance(uq0, int) and 1 <= uq0 <= 6 and uq0 in pickable:
                 combo_init_u = f"Q{uq0}"
             else:
                 combo_init_u = "不限品质"
@@ -3618,11 +3801,27 @@ class GridWindow:
             )
 
             def _on_unknown_q_selected(_evt: tk.Event) -> None:
-                val = uq_var.get()
+                try:
+                    self.root.update_idletasks()
+                except tk.TclError:
+                    pass
+                try:
+                    val = _evt.widget.get()
+                except tk.TclError:
+                    return
                 if val == "不限品质":
                     self._unknown_cell_quality_pref.pop(uid, None)
-                else:
+                elif val and val[0] == "Q" and len(val) >= 2:
                     self._unknown_cell_quality_pref[uid] = int(val[1:])
+                else:
+                    return
+                kk = self.state.items.get(uid)
+                if kk and not self._candidate_items_for_grid(uid, kk):
+                    self._unknown_cell_quality_pref.pop(uid, None)
+                    messagebox.showwarning(
+                        "候选品质",
+                        "当前形状/类别/扫描排除等约束下没有匹配该品质的物品，已恢复为「不限品质」。",
+                    )
                 _unknown_q_apply_and_reopen()
 
             cb_u.bind("<<ComboboxSelected>>", _on_unknown_q_selected)

@@ -1,7 +1,7 @@
 [project]
 name = "bidking"
-version = "1.0"
-description = "BidKing: 分层架构的自动化竞拍机器人 + 画板看板"
+version = "1.21"
+description = "BidKing: 分层架构的画板看板+自动化竞拍机器人"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [

@@ -208,6 +208,7 @@ def test_map_entry_ticket_lookup() -> None:
     }
     assert grc._map_entry_ticket(auto, 2301) == 100
     assert grc._map_entry_ticket(auto, 2306) == 100
+    assert grc._map_entry_ticket(auto, 2310) == 100
     assert grc._map_entry_ticket(auto, 2401) == 777
     auto_int_key = {"map_entry_ticket_by_map_id": {230: 333}}
     assert grc._map_entry_ticket(auto_int_key, 2308) == 333
