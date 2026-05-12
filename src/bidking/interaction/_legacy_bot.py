@@ -265,6 +265,7 @@ def load_json(path: Path) -> dict[str, Any]:
 def load_merged_bot_config(overlay_path: Path) -> dict[str, Any]:
     """``runtime.json`` 为基底，``overlay_path``（通常为 ``config.json``）覆盖。"""
     from ..config.paths import runtime_path
+    from ..config.runtime import apply_board_snapshot_env_overrides
 
     rp = runtime_path()
     base: dict[str, Any] = {}
@@ -273,7 +274,9 @@ def load_merged_bot_config(overlay_path: Path) -> dict[str, Any]:
     overlay: dict[str, Any] = {}
     if overlay_path.is_file():
         overlay = load_json(overlay_path)
-    return deep_merge(base, overlay)
+    merged = deep_merge(base, overlay)
+    apply_board_snapshot_env_overrides(merged)
+    return merged
 
 
 def persist_overlay_patch(overlay_path: Path, patch: dict[str, Any]) -> None:
