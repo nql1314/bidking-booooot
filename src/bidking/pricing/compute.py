@@ -51,6 +51,7 @@ def compute_price(
     payload: dict[str, Any] = {
         "fallback": False,
         "reason": "",
+        "pricing_reason": None,
         "role": role,
         "effective_round": effective_round,
         "pricing_strategy": "snapshot_v2",
@@ -61,6 +62,7 @@ def compute_price(
     def _fallback_only(msg: str) -> tuple[int, dict[str, Any]]:
         payload["fallback"] = True
         payload["reason"] = msg
+        payload["pricing_reason"] = None
         fin_fb = int(fallback)
         payload["source_value"] = float(fin_fb)
         payload["final_round_used"] = effective_round
@@ -80,10 +82,16 @@ def compute_price(
         board_snapshot=bs,
         effective_round=effective_round,
     )
-    payload["board_snapshot_bid"] = meta
+    payload["board_snapshot_bid"] = meta if isinstance(meta, dict) else {}
+    payload["pricing_reason"] = (
+        meta.get("pricing_reason") if isinstance(meta, dict) else None
+    )
 
     if pts is None:
-        return _fallback_only(str(meta.get("reason") or "pricing: 无法解析基础出价"))
+        msg = "pricing: 无法解析基础出价"
+        if isinstance(meta, dict):
+            msg = str(meta.get("reason") or msg)
+        return _fallback_only(msg)
 
     fin = int(pts)
     payload["source_value"] = float(fin)

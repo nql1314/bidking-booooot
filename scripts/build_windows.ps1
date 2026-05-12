@@ -63,16 +63,7 @@ if (Test-Path $LauncherDir) {
 }
 New-Item -ItemType Directory -Force -Path $LauncherDir | Out-Null
 
-$BotLauncher = Join-Path $LauncherDir "bot_runner_main.py"
 $GridLauncher = Join-Path $LauncherDir "grid_view_main.py"
-
-@"
-import sys
-sys.path.insert(0, r"$SourceRoot")
-from bidking.ui.app import main
-if __name__ == "__main__":
-    main()
-"@ | Set-Content -Path $BotLauncher -Encoding UTF8
 
 @"
 import sys
@@ -124,11 +115,9 @@ function Invoke-BuildExe {
     }
 }
 
-Invoke-BuildExe -Name "bot_runner" -EntryFile $BotLauncher
 Invoke-BuildExe -Name "grid_view" -EntryFile $GridLauncher
 
 Write-Host ""
 Write-Host "Build completed:"
-Write-Host " - $(Join-Path $DistDir 'bot_runner.exe')"
 Write-Host " - $(Join-Path $DistDir 'grid_view.exe')"
 Write-Host "Version tag: $VersionTag"

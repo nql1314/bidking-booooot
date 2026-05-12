@@ -6,7 +6,7 @@ import argparse
 import os
 import sys
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, ttk
 
 from .. import __version__
 from ..parsing.constants import (
@@ -17,6 +17,13 @@ from ..parsing.constants import (
 )
 from ..parsing._legacy_runner import parse_last_game, parse_last_game_rounds
 from ..ui.grid import GridWindow
+
+
+# 启动看板页顶栏说明（与历史 bot GUI 说明一致）
+_LAUNCH_TAB_BANNER = (
+    "免费分享 禁止倒卖 Q群 956946772 B站 "
+    "https://space.bilibili.com/1934731"
+)
 
 
 def _effective_snapshot_path_for_viewer(cli_or_none: str | None) -> str | None:
@@ -54,6 +61,7 @@ def _open_grid(
     board_mode: str = "elsa",
     snapshot_path: str | None = None,
     snapshot_export_overlay: bool = True,
+    home_shell: tk.Tk | None = None,
 ) -> None:
     sp = _effective_snapshot_path_for_viewer(snapshot_path)
     if tail:
@@ -70,6 +78,7 @@ def _open_grid(
             board_mode=board_mode,
             snapshot_path=sp,
             snapshot_export_overlay=snapshot_export_overlay,
+            home_shell=home_shell,
         ).run()
         return
 
@@ -85,19 +94,72 @@ def _open_grid(
         board_mode=board_mode,
         snapshot_path=sp,
         snapshot_export_overlay=snapshot_export_overlay,
+        home_shell=home_shell,
     ).run()
+
+
+def _launch_bot_runner(start_root: tk.Tk) -> None:
+    """在独立 ``Toplevel`` 中打开 Bot 总控，不关闭、不阻塞启动主页。"""
+    attr = "_bidking_bot_shell"
+    existing = getattr(start_root, attr, None)
+    if existing is not None:
+        try:
+            if existing.winfo_exists():
+                existing.lift()
+                existing.focus_force()
+                return
+        except tk.TclError:
+            setattr(start_root, attr, None)
+
+    try:
+        from ..ui._legacy_gui import BidKingApp
+    except Exception as exc:  # noqa: BLE001
+        messagebox.showerror("Bot 总控不可用", f"导入失败：{exc}")
+        return
+
+    top = tk.Toplevel(start_root)
+    setattr(start_root, attr, top)
+
+    def _on_bot_shell_destroy(event: tk.Event) -> None:
+        if event.widget is top:
+            try:
+                delattr(start_root, attr)
+            except AttributeError:
+                pass
+
+    top.bind("<Destroy>", _on_bot_shell_destroy)
+    BidKingApp(top)
 
 
 def _show_start_page(default_log: str, csv_path: str) -> None:
     root = tk.Tk()
     root.title(f"BidKing 鉴影可视化 v{__version__} - 启动")
+    root.geometry("780x720")
 
+    notebook = ttk.Notebook(root)
+    notebook.pack(fill="both", expand=True)
+
+    launch_tab = ttk.Frame(notebook)
+    config_tab = ttk.Frame(notebook)
+    notebook.add(launch_tab, text="启动看板")
+    notebook.add(config_tab, text="策略配置")
+
+    # ── 启动看板 tab ───────────────────────────────────────────────────────
     log_var = tk.StringVar(value=default_log)
     mode_var = tk.StringVar(value="replay")
     board_var = tk.StringVar(value="elsa")
 
-    frame = tk.Frame(root, padx=14, pady=12)
+    frame = tk.Frame(launch_tab, padx=14, pady=12)
     frame.pack(fill="both", expand=True)
+
+    tk.Label(
+        frame,
+        text=_LAUNCH_TAB_BANNER,
+        fg="#3a4a5a",
+        font=("微软雅黑", 9),
+        wraplength=720,
+        justify="left",
+    ).pack(anchor="w", pady=(0, 10))
 
     tk.Label(frame, text="Log 文件路径").pack(anchor="w")
     path_row = tk.Frame(frame)
@@ -130,13 +192,59 @@ def _show_start_page(default_log: str, csv_path: str) -> None:
             return
         tail = mode_var.get() == "tail"
         board_mode = board_var.get()
-        root.destroy()
+        root.withdraw()
         try:
-            _open_grid(log_path, csv_path, tail, board_mode=board_mode, snapshot_path=None)
+            _open_grid(
+                log_path,
+                csv_path,
+                tail,
+                board_mode=board_mode,
+                snapshot_path=None,
+                home_shell=root,
+            )
         except Exception as exc:  # noqa: BLE001
             messagebox.showerror("启动失败", str(exc))
+        finally:
+            try:
+                root.deiconify()
+                root.lift()
+            except tk.TclError:
+                pass
 
-    tk.Button(frame, text="启动", command=start).pack(anchor="e", pady=(10, 0))
+    bottom = tk.Frame(frame)
+    bottom.pack(fill="x", pady=(10, 0))
+
+    # ⚠ 谨慎使用：在独立窗口打开 Bot 总控；总控里点「开启」后会接管鼠标 / 键盘。
+    # 请先在「策略配置」里核对出价参数、棋盘快照与主配置 JSON；仅在确实需要自动出价时再点。
+    tk.Button(
+        bottom,
+        text="启动 Bot 总控（谨慎使用）",
+        command=lambda: _launch_bot_runner(root),
+        bg="#664422",
+        fg="#ffe8c8",
+        activebackground="#7a5530",
+        activeforeground="#ffffff",
+        relief="flat",
+        padx=10,
+        pady=4,
+        cursor="hand2",
+    ).pack(side="left")
+
+    tk.Button(bottom, text="启动", command=start).pack(side="right")
+
+    # ── 策略配置 tab ─────────────────────────────────────────────────────
+    try:
+        from ..ui._bot_config_panel import BotConfigPanel
+
+        BotConfigPanel(config_tab)
+    except Exception as exc:  # noqa: BLE001
+        ttk.Label(
+            config_tab,
+            text=f"策略配置面板加载失败：{exc}",
+            foreground="#aa3333",
+            padding=20,
+        ).pack(fill="both", expand=True)
+
     root.mainloop()
 
 
