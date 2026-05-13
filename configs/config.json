@@ -3,7 +3,9 @@
     "enabled": true,
     "path": "data/board_snapshot.json",
     "write_mode": "both",
-    "schema_version_min": 1
+    "schema_version_min": 1,
+    "self_user_uid": "",
+    "self_name_substring": "AIR1314"
   },
   "automation": {
     "bot_runner": "fresh_aisha_bot",
