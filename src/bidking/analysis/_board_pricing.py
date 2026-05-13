@@ -9,9 +9,12 @@
 ``points_ceiling``。
 
 当本地配置（``configs/runtime.json`` 与 ``configs/config.json`` 深合并）中
-``board_snapshot.self_user_uid`` 对应玩家 ``hero_cid`` 为 204（Ahmad）时，上述三字段与
-``pricing.ahmad_points`` 一致（由 ``raw_pricing.event_stats`` 多候选取 max）；通用画板空置主价仍写入
-``pricing.generic_points*`` 供 UI 对照。``pricing.ahmad_points_detail`` 含各候选分解。
+``board_snapshot.self_user_uid`` **或** 根级/配置里的 ``self_name_substring``（不区分大小写子串匹配 ``players.*.name``）
+能唯一确定己方玩家，且其 ``hero_cid`` 为 204（Ahmad），且对局 ``map_id`` 属
+快递站系列（档键 ``210``，与 ``automation.maps`` 中「快递盲盒堆」一致）时，上述三字段与
+``pricing.ahmad_points`` 一致（由 ``raw_pricing.event_stats`` 多候选取 max）；其余地图仍走通用画板
+空置主价；``pricing.generic_points*`` 仅在启用 Ahmad 主价时写入供 UI 对照。
+``pricing.ahmad_points_detail`` 含各候选分解。
 
 当 ``raw_pricing.event_stats`` 提供 ``q4_grid_min`` / ``q5_grid_min`` / ``q6_grid_min`` 时，
 对 ``max(0, 最少格 - 已确认该档占位格)`` 按 CSV 单档 ``q4``/``q5``/``q6`` 格均价计入总价，
@@ -38,6 +41,17 @@ _item_prices_cache: Optional[Tuple[Dict[int, Any], List[Any]]] = None
 # 仅 ``not q14_grid_known``（低档 **q12+q3+q4** 总格未齐，见 ``event_stats_q12_q3_q4_grids_all_known``）早期回合：当 ``random_avg_price_min`` 超过本算 ``points`` 的 50% 时，
 # 用 ``(points + random_avg_price_min) / 2`` 与事件下界取中，缓和随机均价事件对总估价的拉扯。
 _RANDOM_AVG_MIN_DOMINANCE_RATIO = 0.5
+
+# Ahmad 跑刀仓位估价：与 ``automation.maps`` 档键 ``210``（快递盲盒堆，含 2101~2107 等子图）对齐。
+_EXPRESS_STATION_MAP_BUNDLE_KEY = "210"
+
+
+def map_bundle_is_express_station_series(map_id: int) -> bool:
+    """当前 ``MapId`` 是否属快递站系列（与 :func:`item_db.map_bundle_key_for_automation` 档键 ``210``）。"""
+    mid = int(map_id or 0)
+    if mid <= 0:
+        return False
+    return item_db.map_bundle_key_for_automation(mid) == _EXPRESS_STATION_MAP_BUNDLE_KEY
 
 
 def _load_item_prices_db() -> Tuple[Dict[int, Any], List[Any]]:
@@ -224,7 +238,7 @@ def _pricing_work_board_snapshot(board_snapshot: Dict[str, Any], items: Dict[str
 
 
 def _local_board_snapshot_branch() -> Dict[str, Any]:
-    """``config.json`` 覆盖后的 ``board_snapshot`` 段（含 ``self_user_uid``）。"""
+    """``config.json`` 覆盖后的 ``board_snapshot`` 段（含 ``self_user_uid`` / ``self_name_substring``）。"""
     try:
         from ..config.runtime import load_runtime
 
@@ -240,7 +254,14 @@ def _self_player_hero_cid(
     *,
     board_snapshot_config: Optional[Dict[str, Any]] = None,
 ) -> Optional[int]:
-    """用本地配置 ``board_snapshot.self_user_uid`` 在 ``game_state.players`` 中解析己方 ``hero_cid``。"""
+    """用 ``self_user_uid`` 或 ``self_name_substring`` 在 ``game_state.players`` 中解析己方 ``hero_cid``。
+
+    身份字段来源（后者覆盖前者中为空的一项）：快照根键 ``self_user_*``、再 ``board_snapshot_config``、再运行时
+    ``load_runtime().raw["board_snapshot"]``（与 :func:`bidking.pricing.snapshot_players.board_snapshot_self_identity` 顺序一致）。
+
+    ``self_name_substring``：对 ``name`` 做不区分大小写的子串匹配；**仅当恰好一名玩家**匹配时采纳，否则忽略（避免歧义）。
+    仍仅 ``len(players)==1`` 时回落到唯一玩家。
+    """
     gs = board_snapshot.get("game_state")
     if not isinstance(gs, dict):
         return None
@@ -252,11 +273,28 @@ def _self_player_hero_cid(
         if board_snapshot_config is not None
         else _local_board_snapshot_branch()
     )
-    self_uid = str(branch.get("self_user_uid") or "").strip()
+    self_uid = (
+        str(board_snapshot.get("self_user_uid") or "").strip()
+        or str(branch.get("self_user_uid") or "").strip()
+    )
+    name_hint = (
+        str(board_snapshot.get("self_name_substring") or "").strip()
+        or str(branch.get("self_name_substring") or "").strip()
+    )
     pdata: Any = None
     if self_uid and self_uid in players:
         pdata = players.get(self_uid)
-    elif len(players) == 1:
+    if pdata is None and name_hint:
+        hint_l = name_hint.lower()
+        matches = [
+            row
+            for row in players.values()
+            if isinstance(row, dict)
+            and hint_l in str(row.get("name") or "").lower()
+        ]
+        if len(matches) == 1:
+            pdata = matches[0]
+    if pdata is None and len(players) == 1:
         pdata = next(iter(players.values()))
     if not isinstance(pdata, dict):
         return None
@@ -272,13 +310,15 @@ def _ahmad_pricing_detail_from_raw_pricing(
     *,
     items_total: Optional[float] = None,
     vacant_adj: Optional[int] = None,
+    board_items_total: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Ahmad 估价算法（点数口径）及候选分解，由 ``raw_pricing`` 实现，多候选取最大值。
 
     返回 dict：``ahmad_points``、``candidates``（每项含 ``id``/``label``/``points`` 及算式用中间量）、``winner``。
 
-    ``items_total`` / ``vacant_adj``：可选；二者皆给出时增加候选
-    ``total + vacant_adj × q1234 格均价``（``q1234`` 取自 CSV 格均价键 ``\"q1234\"``）。
+    ``items_total`` / ``vacant_adj`` / ``board_items_total``：可选；候选 E 仅在
+    ``items_total``、``vacant_adj`` 与 ``board_items_total`` 均给出且 ``board_items_total != 0`` 时加入
+    ``items_total + vacant_adj × q123 格均价``（``q123`` 取自 CSV 格均价键 ``\"q1+q2+q3+q4\"``）。
 
     **候选 A — CSV 边际定价**（当 CSV 含 ``"all"`` 质量组时）：
 
@@ -305,12 +345,14 @@ def _ahmad_pricing_detail_from_raw_pricing(
 
     **候选 C — random_avg**：``random_avg_price_min``（n×均价总价下界）直接参与竞争。
 
-    **候选 E — total + 空置调整 × q1234 格均价**（仅当调用方传入 ``items_total`` 与 ``vacant_adj`` 时）：
+    **候选 E — total + 空置调整 × q123 格均价**（仅当调用方传入 ``items_total`` 与 ``vacant_adj``，
+    且 ``board_items_total``（画板物品标价和 ``pricing.total`` 同源）**非 0** 时参与 Ahmad max）：
 
     .. code-block:: text
 
-        pts = total + vacant_adj × q1234_格均价
+        pts = items_total + vacant_adj × q123_格均价
 
+    ``board_items_total`` 省略时不启用该候选（与旧行为兼容）；为 0 时不加入，避免无物品局仍靠空置项抬分。
     缺失或非数字字段按 0，不影响其他项。
     """
     empty: Dict[str, Any] = {
@@ -495,19 +537,25 @@ def _ahmad_pricing_detail_from_raw_pricing(
             }
         )
 
-    # ── 候选 E：total + vacant_adj × q1234 格均价（需快照侧传入 items_total / vacant_adj）──
-    if items_total is not None and vacant_adj is not None:
-        u_early_q1234 = _csv_f(csv_per_cell, "q1+q2+q3+q4")
-        u_early_f = float(u_early_q1234) if u_early_q1234 is not None else 0.0
+    # ── 候选 E：vacant_pts_base + vacant_adj × q123 格均价（须 board_items_total≠0，与 pricing.total 对齐）──
+    _gate_tot = board_items_total
+    if (
+        items_total is not None
+        and vacant_adj is not None
+        and _gate_tot is not None
+        and abs(float(_gate_tot)) > 1e-12
+    ):
+        u_early_q123 = _csv_f(csv_per_cell, "q1+q2+q3")
+        u_early_f = float(u_early_q123) if u_early_q123 is not None else 0.0
         pts_e = float(items_total) + float(vacant_adj) * u_early_f
         candidates_rows.append(
             {
-                "id": "total_plus_vacant_adj_times_q1234_cell_avg",
-                "label": "物品 total + 有效空置调整 × q1234 格均价",
+                "id": "total_plus_vacant_adj_times_q123_cell_avg",
+                "label": "物品 total + 有效空置调整 × q123 格均价",
                 "points": int(round(pts_e)),
                 "items_total": float(items_total),
                 "vacant_adj": int(vacant_adj),
-                "u_early_q1234": u_early_f,
+                "u_early_q123": u_early_f,
             }
         )
 
@@ -791,7 +839,8 @@ def build_snapshot_pricing_dict(
     占位格优先 ``grid_overlay.occupied_cell_bids``。
 
     ``board_snapshot_config``：可选，形状同应用配置里的 ``board_snapshot`` 段；省略时从
-    本地 ``configs``（runtime + config 深合并）读取。用于判定己方 ``hero_cid``（Ahmad 主价等）。
+    本地 ``configs``（runtime + config 深合并）读取。用于判定己方 ``hero_cid``（Ahmad 主价等），
+    支持 ``self_user_uid`` 与 ``self_name_substring``（与策略面板一致）。
     """
     game_state_json = board_snapshot.get("game_state") or {}
     skill_logs = list(board_snapshot.get("skill_logs") or [])
@@ -891,7 +940,10 @@ def build_snapshot_pricing_dict(
         pts_ceiling = vacant_pts_base + float(vacant_adj) * float(u_early)
 
     ahmad_detail = _ahmad_pricing_detail_from_raw_pricing(
-        raw, items_total=float(vacant_pts_base), vacant_adj=int(vacant_adj)
+        raw,
+        items_total=float(vacant_pts_base),
+        vacant_adj=int(vacant_adj),
+        board_items_total=float(total_f),
     )
     ahmad_points = int(ahmad_detail.get("ahmad_points") or 0)
 
@@ -900,7 +952,8 @@ def build_snapshot_pricing_dict(
     generic_ceil = int(round(pts_ceiling))
     self_hc = _self_player_hero_cid(snap_full, board_snapshot_config=board_snapshot_config)
     _AHMAD_HERO_CID = 204
-    ahmad_pricing_active = self_hc == _AHMAD_HERO_CID
+    on_express = map_bundle_is_express_station_series(map_id)
+    ahmad_pricing_active = (self_hc == _AHMAD_HERO_CID) and on_express
 
     if ahmad_pricing_active:
         pts_out = pts_floor_out = pts_ceiling_out = ahmad_points

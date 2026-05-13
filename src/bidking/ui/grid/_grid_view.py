@@ -25,8 +25,10 @@
    （含 ``grid_overlay`` 手画幽灵/轮廓/空置剔除等），手动画框与拖调轮廓也会触发刷新从而落盘
 
 看板角色（board_mode）：
-  - elsa / universal / raven：空置候选区（橘红）与顶部空置估价均由 ``grid_overlay`` 统一计算，无「第几回合起才显示」门槛。
+  - elsa / universal / ahmad / raven：空置候选区（橘红）与顶部空置估价均由 ``grid_overlay`` 统一计算，无「第几回合起才显示」门槛。
   - universal：与 elsa 同套几何与空置逻辑，窗口标题缀「通用看板」便于区分。
+  - ahmad：与 universal 同套几何与空置逻辑，窗口标题缀「艾哈迈德(快递站特化）」；顶栏 Ahmad 主价仍由
+    日志英雄 + 地图自动判定（己方身份来自配置 ``board_snapshot.self_user_uid`` 或 ``self_name_substring``）。
   - raven：状态栏附带铺板顺序提示。
   - 地图技能 200009（所有藏品格数）：在已知区内已占位格数未达到该总数前，空置计数与橘红层**忽略诈骗格过滤**；吃满后且扫描上仅剩金红候选时，才对几何空置应用诈骗格剔除。
   - 诈骗格规则**仅用于**上述自动空置区（计数与初始橘红），**不限制**右键手动剔除/恢复空置标记。
@@ -45,7 +47,6 @@ import time
 from datetime import datetime
 import tkinter as tk
 from pathlib import Path
-from copy import deepcopy
 from tkinter import messagebox, ttk
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 
@@ -62,7 +63,7 @@ from ...parsing.item_db import (
     probability_source_label,
     query_item,
 )
-from ...parsing.log_source import extract_event
+from ...parsing.log_source import extract_event, skill_log_game_data_subset
 from ...parsing.state import CsvItem, GameState, ItemKnowledge
 from ...analysis._board_pricing import (
     build_snapshot_pricing_dict,
@@ -119,6 +120,7 @@ EMPTY_ZONE_STIPPLE = "gray25"  # 约 25% 覆盖度，模拟半透明
 # 看板角色：界面文案（拉文铺板提示）
 BOARD_MODE_ELSA = "elsa"
 BOARD_MODE_UNIVERSAL = "universal"
+BOARD_MODE_AHMAD = "ahmad"
 BOARD_MODE_RAVEN = "raven"
 
 # 未知品质物品的手动缩放把手（边条宽度 + 四角命中半径；四角缩放用 Ctrl+左键）
@@ -173,6 +175,90 @@ def _lines_from_ahmad_points_detail(detail: Any) -> List[str]:
         suffix = "  ← max" if winner and cid == str(winner) else ""
         out.append(f"  • [{cid}] {lbl} → {pts_s}{suffix}")
     return out
+
+
+def _ahmad_detail_winner_candidate(detail: Any) -> Optional[Dict[str, Any]]:
+    """``ahmad_points_detail`` 中与 ``winner`` id 匹配的候选 dict。"""
+    if not isinstance(detail, dict):
+        return None
+    wid = str(detail.get("winner") or "").strip()
+    if not wid:
+        return None
+    for c in detail.get("candidates") or []:
+        if isinstance(c, dict) and str(c.get("id") or "") == wid:
+            return c
+    return None
+
+
+def _format_ahmad_candidate_formula_line(c: Dict[str, Any]) -> str:
+    """采纳候选对应的一行算式说明（与 ``_board_pricing._ahmad_pricing_detail_from_raw_pricing`` 字段一致）。"""
+    cid = str(c.get("id") or "")
+    try:
+        pts = int(round(float(c.get("points") or 0)))
+        pts_s = f"{pts:,}"
+    except (TypeError, ValueError):
+        pts_s = str(c.get("points"))
+
+    def _fi(key: str, default: float = 0.0) -> float:
+        v = c.get(key)
+        try:
+            return float(v) if v is not None else default
+        except (TypeError, ValueError):
+            return default
+
+    def _ii(key: str, default: int = 0) -> int:
+        v = c.get(key)
+        try:
+            return int(v) if v is not None else default
+        except (TypeError, ValueError):
+            return default
+
+    if cid == "csv_q123_marginal":
+        b, m = _fi("base"), _fi("marginal_premium")
+        return f"CSV q123 底 {b:,.0f} + 边际溢价 {m:,.0f} ≈ {pts_s}"
+    if cid == "classic_base_premium":
+        b, m = _ii("base_total_count_pts"), _ii("premium_total")
+        return f"经典 total_count×1000 底 {b:,} + 溢价 {m:,} = {pts_s}"
+    if cid == "split_q12_q3":
+        b12, b3, m = _fi("base_q12"), _fi("base_q3"), _fi("marginal_premium")
+        return f"q12/q3 分拆底 {b12:,.0f}+{b3:,.0f} + 边际 {m:,.0f} ≈ {pts_s}"
+    if cid == "random_avg_price_min":
+        return f"random_avg_price_min 下界 = {pts_s}"
+    if cid == "total_plus_vacant_adj_times_q1234_cell_avg":
+        it, va, uq = _fi("items_total"), _ii("vacant_adj"), _fi("u_early_q1234")
+        return (
+            f"物品小计 {it:,.0f} + 空置调整 {va} × q1234格均 {uq:,.0f} ≈ {pts_s}"
+        )
+    lbl = str(c.get("label") or "").strip()
+    if lbl:
+        return f"{lbl} → {pts_s}"
+    return f"[{cid}] → {pts_s}"
+
+
+def _generic_position_formula_line(p: Dict[str, Any]) -> str:
+    """通用画板：与 ``pricing.points`` 一致的 T+V×U（扫描早期 U 见 early_vacant_unit_from_scan）。"""
+    try:
+        t_val = float(p.get("total") or 0)
+    except (TypeError, ValueError):
+        t_val = 0.0
+    try:
+        v_eff = int(p.get("vacant") or 0)
+    except (TypeError, ValueError):
+        v_eff = 0
+    eu = p.get("early_vacant_unit_from_scan")
+    try:
+        u_scan = int(eu) if eu is not None else None
+    except (TypeError, ValueError):
+        u_scan = None
+    if u_scan is not None:
+        approx = t_val + float(v_eff) * float(u_scan)
+        return f"T+V×U_scan ≈ {t_val:,.0f}+{v_eff}×{u_scan:,} = {approx:,.0f}"
+    try:
+        u_o = float(p.get("vacant_unit_all_orange") or 0)
+    except (TypeError, ValueError):
+        u_o = 0.0
+    approx = t_val + float(v_eff) * u_o
+    return f"T+V×U_全橙 ≈ {t_val:,.0f}+{v_eff}×{u_o:,.0f} = {approx:,.0f}"
 
 
 # 写入 board_snapshot.json 的 schema 版本（与 bot 侧校验一致）
@@ -381,7 +467,7 @@ class GridWindow:
         state       : 解析后的 GameState（含物品知识）
         csv_index   : item_id → CsvItem
         csv_items   : 全量 CsvItem 列表
-        board_mode  : ``elsa``（默认）、``universal``（与 elsa 同逻辑，标题区分）或 ``raven``（铺板提示差异）。
+        board_mode  : ``elsa``（默认）、``universal`` / ``ahmad``（与 elsa 同逻辑，标题区分）或 ``raven``（铺板提示差异）。
         snapshot_path : 若传入非空字符串则用作快照路径；若省略则写入
             ``data/board_snapshot.json``（相对 :func:`bidking.config.paths.project_root` 解析）；
             空字符串表示不写快照。
@@ -412,7 +498,13 @@ class GridWindow:
         bm = (board_mode or BOARD_MODE_ELSA).strip().lower()
         self._board_mode = (
             bm
-            if bm in (BOARD_MODE_ELSA, BOARD_MODE_UNIVERSAL, BOARD_MODE_RAVEN)
+            if bm
+            in (
+                BOARD_MODE_ELSA,
+                BOARD_MODE_UNIVERSAL,
+                BOARD_MODE_AHMAD,
+                BOARD_MODE_RAVEN,
+            )
             else BOARD_MODE_ELSA
         )
         if snapshot_path is None:
@@ -528,6 +620,8 @@ class GridWindow:
             return " [拉文看板]"
         if self._board_mode == BOARD_MODE_UNIVERSAL:
             return " [通用看板]"
+        if self._board_mode == BOARD_MODE_AHMAD:
+            return " [艾哈迈德(快递站特化）]"
         return ""
 
     def _board_mode_info_suffix(self) -> str:
@@ -1569,47 +1663,26 @@ class GridWindow:
 
     # ── Bot 快照 JSON ───────────────────────────────────────────────────────
 
-    def _skill_log_game_data_subset(self, data: dict) -> dict:
-        gd = data.get("GameData")
-        if not isinstance(gd, dict):
-            return {}
-        keys = (
-            "HeroSkillLog",
-            "MapSkillLog",
-            "ItemSkillLog",
-            "UserLog",
-            "Round",
-            "Uid",
-            "MapId",
-        )
-        out: dict = {}
-        for k in keys:
-            if k not in gd:
-                continue
-            v = gd[k]
-            try:
-                out[k] = deepcopy(v)
-            except Exception:
-                out[k] = v
-        return out
-
     def _append_skill_log_entry(self, event_type: str, data: dict) -> None:
         self._skill_logs.append(
             {
                 "event_type": event_type,
-                "game_data": self._skill_log_game_data_subset(data),
+                "game_data": skill_log_game_data_subset(data),
                 "received_at_unix": time.time(),
             }
         )
 
-    def _make_board_snapshot(self) -> dict:
+    def _make_board_snapshot(
+        self, raw_pricing: Optional[Dict[str, Any]] = None
+    ) -> dict:
         """不含 ``pricing`` 的画板快照：供定价、单件估价与写盘复用。"""
         gs = game_state_to_json(self.state)
-        raw_pricing = build_raw_pricing_dict(
-            map_id=int(self.state.map_id or 0),
-            skill_logs=list(self._skill_logs),
-            snapshot_path_hint=self._snapshot_path,
-        )
+        if raw_pricing is None:
+            raw_pricing = build_raw_pricing_dict(
+                map_id=int(self.state.map_id or 0),
+                skill_logs=list(self._skill_logs),
+                snapshot_path_hint=self._snapshot_path,
+            )
         self._last_raw_pricing = raw_pricing
         occ_infer = self._occupied_cells_for_overlay_infer()
         return {
@@ -1676,12 +1749,14 @@ class GridWindow:
         )
         return export
 
-    def _emit_board_snapshot_unlocked(self) -> None:
+    def _emit_board_snapshot_unlocked(
+        self, raw_pricing: Optional[Dict[str, Any]] = None
+    ) -> None:
         """调用方须已持有 ``self._lock``（``RLock``，同线程可重入）。"""
         path = self._snapshot_path
         if not path:
             return
-        base = self._make_board_snapshot()
+        base = self._make_board_snapshot(raw_pricing)
         gs = base["game_state"]
         payload = {
             "schema_version": BOARD_SNAPSHOT_SCHEMA_VERSION,
@@ -1857,12 +1932,18 @@ class GridWindow:
 
     def _refresh(self) -> None:
         """普通刷新：更新信息栏、总价标签、重绘 Canvas。"""
+        rp = build_raw_pricing_dict(
+            map_id=int(self.state.map_id or 0),
+            skill_logs=list(self._skill_logs),
+            snapshot_path_hint=self._snapshot_path,
+        )
+        self._last_raw_pricing = rp
         reconcile_overlay_after_refresh(
             self.state,
             self._manual_shapes,
             self._phantom_items,
             self._phantom_quality_pref,
-            raw_pricing=self._last_raw_pricing,
+            raw_pricing=rp,
         )
         self._sanitize_unknown_quality_prefs()
         self._sanitize_phantom_quality_prefs()
@@ -1872,7 +1953,7 @@ class GridWindow:
         self._draw()
         if self._snapshot_path:
             with self._lock:
-                self._emit_board_snapshot_unlocked()
+                self._emit_board_snapshot_unlocked(rp)
 
     def _validate_manual_confirmations(self) -> None:
         """校验所有物品的手动候选确认，冲突时自动清除。"""
@@ -1966,21 +2047,32 @@ class GridWindow:
             pf = p.get("points_floor")
             pc = p.get("points_ceiling")
             ahmad_active = bool(p.get("ahmad_pricing_active"))
-            base_lines = [
-                title,
-                f"第 4 回合起：下限 ≈ T + V×U_全橙 = {pf!s}；上限 ≈ T + V×U_全红 = {pc!s}。",
-                f"第 1–3 回合：floor/ceiling 与仓位估价 points 相同（扫描推断单价）。",
-                f"当前 points = {p.get('points')!s}。",
-            ]
+            base_lines = [title]
             if ahmad_active:
+                wc = _ahmad_detail_winner_candidate(p.get("ahmad_points_detail"))
+                if wc:
+                    base_lines.append(
+                        "己方 Ahmad + 快递站：points/floor/ceiling 均取 ahmad_points（多候选 max）；采纳算式："
+                    )
+                    base_lines.append(_format_ahmad_candidate_formula_line(wc))
+                else:
+                    base_lines.append(
+                        "己方 Ahmad + 快递站：points/floor/ceiling 均取 ahmad_points（多候选 max）。"
+                    )
                 gpf, gpc = p.get("generic_points_floor"), p.get(
                     "generic_points_ceiling"
                 )
-                base_lines.insert(
-                    1,
-                    "己方英雄为 Ahmad（204）：points/floor/ceiling 均为 event_stats 多候选 Ahmad 仓位估价；"
-                    f"通用画板对照 generic_floor/ceiling = {gpf!s} / {gpc!s}。",
+                base_lines.append(
+                    f"通用画板对照区间 generic_floor/ceiling = {gpf!s} / {gpc!s}。"
                 )
+            else:
+                base_lines.extend(
+                    [
+                        f"第 4 回合起：下限 ≈ T + V×U_全橙 = {pf!s}；上限 ≈ T + V×U_全红 = {pc!s}。",
+                        f"第 1–3 回合：floor/ceiling 与仓位估价 points 相同（扫描推断单价）。",
+                    ]
+                )
+            base_lines.append(f"当前 points = {p.get('points')!s}。")
             return "\n".join(base_lines)
         else:
             return ""
@@ -2037,7 +2129,7 @@ class GridWindow:
         )
         if p.get("ahmad_pricing_active"):
             lines.append(
-                "己方 Ahmad：顶栏仓位估价 points 来自 pricing.ahmad_points（非本式 T+V×U）；"
+                "己方 Ahmad + 快递站地图：顶栏仓位估价 points 来自 pricing.ahmad_points（非本式 T+V×U）；"
                 f"对照 generic_points = {p.get('generic_points')!s}。"
             )
         else:
@@ -2057,11 +2149,18 @@ class GridWindow:
         pf, pc = p.get("points_floor"), p.get("points_ceiling")
         ahmad_active = bool(p.get("ahmad_pricing_active"))
         head = (
-            "仓位估价（Ahmad：points = ahmad_points）"
+            "仓位估价（Ahmad 快递站：points = ahmad_points）"
             if ahmad_active
             else "仓位估价（快照 pricing.points）"
         )
         lines: List[str] = [head]
+        if ahmad_active:
+            det = p.get("ahmad_points_detail")
+            wc = _ahmad_detail_winner_candidate(det)
+            if wc:
+                lines.append("采纳候选算式（与 pricing.ahmad_points_detail.winner 一致）：")
+                lines.append(_format_ahmad_candidate_formula_line(wc))
+                lines.append("")
         if pts is not None:
             try:
                 lines.append(f"points = {int(round(float(pts))):,}")
@@ -2086,6 +2185,8 @@ class GridWindow:
             )
             lines.append("ahmad_points_detail（各候选）:")
             lines.extend(_lines_from_ahmad_points_detail(p.get("ahmad_points_detail")))
+        else:
+            lines.append(_generic_position_formula_line(p))
         if pf is not None or pc is not None:
             lines.append(f"points_floor / points_ceiling = {pf!s} / {pc!s}")
         lines.append(

@@ -54,3 +54,8 @@ Desktop.ini
 
 # Backup / scratch copies
 *.bak
+
+# Local viewer / match artifacts
+data/run/
+data/board_snapshot.json
+data/game_match_reports_*.csv

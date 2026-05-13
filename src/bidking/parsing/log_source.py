@@ -10,7 +10,18 @@
 import json
 import re
 import time
-from typing import Generator, Optional, Tuple
+from copy import deepcopy
+from typing import Any, Dict, Generator, Optional, Tuple
+
+_SKILL_LOG_GAME_DATA_KEYS = (
+    "HeroSkillLog",
+    "MapSkillLog",
+    "ItemSkillLog",
+    "UserLog",
+    "Round",
+    "Uid",
+    "MapId",
+)
 
 
 _NOTIFY_RE = re.compile(
@@ -34,6 +45,35 @@ def extract_event(line: str) -> Optional[Tuple[str, dict]]:
         return event_type, json.loads(m.group(2))
     except json.JSONDecodeError:
         return None
+
+
+def skill_log_game_data_subset(data: dict) -> Dict[str, Any]:
+    """
+    从整条 ``OnHanderNotify`` 的 JSON ``data`` 中抽取写入 ``skill_logs[].game_data`` 的字段。
+
+    多数协议把技能/道具日志放在 ``GameData`` 下；部分推送（尤其 ``S2C_39_game_use_item``）
+    可能把 ``ItemSkillLog`` 放在根级。此处 **``GameData`` 内字段优先**，否则回退读根键，
+    与 :func:`bidking.parsing.handlers.handle_s2c39` 的取数范围一致，避免 ``raw_pricing`` 漏并道具日志。
+    """
+    if not isinstance(data, dict):
+        return {}
+    gd = data.get("GameData")
+    if not isinstance(gd, dict):
+        gd = {}
+    out: Dict[str, Any] = {}
+    for k in _SKILL_LOG_GAME_DATA_KEYS:
+        src: Any = None
+        if k in gd:
+            src = gd[k]
+        elif k in data:
+            src = data[k]
+        if src is None:
+            continue
+        try:
+            out[k] = deepcopy(src)
+        except Exception:
+            out[k] = src
+    return out
 
 
 def iter_log_lines(path: str, tail: bool = False) -> Generator[Optional[str], None, None]:

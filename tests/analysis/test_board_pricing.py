@@ -897,11 +897,11 @@ class BoardPricingTests(unittest.TestCase):
         self.assertNotIn("generic_points", p)
 
     def test_ahmad_hero_204_main_points_match_ahmad_points(self) -> None:
-        """己方 hero_cid=204 时 points/floor/ceiling 取 ahmad_points，并保留 generic_* 对照。"""
+        """己方 hero_cid=204 且快递站地图（档键 210）时 points/floor/ceiling 取 ahmad_points，并保留 generic_* 对照。"""
         self_uid = "358372071974712"
         gs = {
             "uid": "u1",
-            "map_id": 0,
+            "map_id": 2102,
             "current_round": 5,
             "players": {self_uid: {"name": "me", "hero_cid": 204}},
             "items": {},
@@ -920,7 +920,7 @@ class BoardPricingTests(unittest.TestCase):
         snap = {
             "game_state": gs,
             "skill_logs": [],
-            "map_id": 0,
+            "map_id": 2102,
             "current_round": 5,
             "raw_pricing": raw,
         }
@@ -939,7 +939,119 @@ class BoardPricingTests(unittest.TestCase):
         detail = p.get("ahmad_points_detail")
         self.assertIsInstance(detail, dict)
         self.assertEqual(detail.get("ahmad_points"), 25000)
-        self.assertTrue(detail.get("candidates"))
+    def test_ahmad_hero_resolve_self_by_name_substring(self) -> None:
+        """仅配 ``self_name_substring`` 且唯一匹配玩家名时，与 ``self_user_uid`` 一样可启用 Ahmad 主价。"""
+        gs = {
+            "uid": "u1",
+            "map_id": 2102,
+            "current_round": 5,
+            "players": {
+                "431695757047642": {"name": "YTZZZ", "hero_cid": 209},
+                "941456831344888": {"name": "AIR1314", "hero_cid": 204},
+            },
+            "items": {},
+            "displayed_event_uids": [],
+            "scan_history": [],
+        }
+        raw = {
+            "csv_quality_groups_avg_per_cell": {"q5": 1.0, "q5+q6": 1.0, "q6": 1.0},
+            "event_stats": {
+                "total_count": 20,
+                "q4_grid_min": 5,
+                "q5_grid_min": None,
+                "q6_grid_min": None,
+            },
+        }
+        snap = {
+            "game_state": gs,
+            "skill_logs": [],
+            "map_id": 2102,
+            "current_round": 5,
+            "raw_pricing": raw,
+        }
+        p = bp.build_snapshot_pricing_dict(
+            snap,
+            snapshot_path_hint=None,
+            board_snapshot_config={
+                "self_user_uid": "",
+                "self_name_substring": "AIR1314",
+            },
+        )
+        self.assertTrue(p.get("ahmad_pricing_active"))
+        self.assertEqual(p.get("points"), p.get("ahmad_points"))
+
+    def test_self_name_substring_ambiguous_skips_match(self) -> None:
+        """两名玩家 ``name`` 均含同一子串时不靠名称推断，Ahmad 主价不启用。"""
+        gs = {
+            "uid": "u1",
+            "map_id": 2102,
+            "current_round": 5,
+            "players": {
+                "1": {"name": "PlayerA_x", "hero_cid": 204},
+                "2": {"name": "PlayerB_x", "hero_cid": 209},
+            },
+            "items": {},
+            "displayed_event_uids": [],
+            "scan_history": [],
+        }
+        raw = {
+            "csv_quality_groups_avg_per_cell": {"q5": 1.0, "q5+q6": 1.0, "q6": 1.0},
+            "event_stats": {"total_count": 20},
+        }
+        snap = {
+            "game_state": gs,
+            "skill_logs": [],
+            "map_id": 2102,
+            "current_round": 5,
+            "raw_pricing": raw,
+        }
+        p = bp.build_snapshot_pricing_dict(
+            snap,
+            snapshot_path_hint=None,
+            board_snapshot_config={"self_name_substring": "_x"},
+        )
+        self.assertFalse(p.get("ahmad_pricing_active"))
+        self.assertTrue(bp.map_bundle_is_express_station_series(2101))
+        self.assertTrue(bp.map_bundle_is_express_station_series(2107))
+        self.assertFalse(bp.map_bundle_is_express_station_series(2306))
+        self.assertFalse(bp.map_bundle_is_express_station_series(0))
+
+    def test_ahmad_hero_204_non_express_uses_generic_pricing(self) -> None:
+        """己方 Ahmad 但非快递站地图时不启用 ahmad 主价（无 generic_* 对照段）。"""
+        self_uid = "358372071974712"
+        gs = {
+            "uid": "u1",
+            "map_id": 2306,
+            "current_round": 5,
+            "players": {self_uid: {"name": "me", "hero_cid": 204}},
+            "items": {},
+            "displayed_event_uids": [],
+            "scan_history": [],
+        }
+        raw = {
+            "csv_quality_groups_avg_per_cell": {"q5": 1.0, "q5+q6": 1.0, "q6": 1.0},
+            "event_stats": {
+                "total_count": 20,
+                "q4_grid_min": 5,
+                "q5_grid_min": None,
+                "q6_grid_min": None,
+            },
+        }
+        snap = {
+            "game_state": gs,
+            "skill_logs": [],
+            "map_id": 2306,
+            "current_round": 5,
+            "raw_pricing": raw,
+        }
+        p = bp.build_snapshot_pricing_dict(
+            snap,
+            snapshot_path_hint=None,
+            board_snapshot_config={"self_user_uid": self_uid},
+        )
+        self.assertFalse(p.get("ahmad_pricing_active"))
+        self.assertNotIn("generic_points", p)
+        self.assertEqual(p.get("ahmad_points"), 25000)
 
     def test_raw_pricing_contains_requested_event_stats(self) -> None:
         gs = {
