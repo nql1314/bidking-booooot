@@ -178,9 +178,8 @@ BOARD_SNAPSHOT_SCHEMA_VERSION = 2
 # ``run/`` 下历史快照 JSON 上限；超出则按修改时间删最早的归档。
 BOARD_SNAPSHOT_RUN_ARCHIVE_MAX = 100
 
-# 供 fresh_aisha_bot 等读取的 JSON 快照输出路径；空字符串表示不写快照。
-# 构造 ``GridWindow(snapshot_path=...)`` 时若传入非空字符串则覆盖本常量。
-DEFAULT_BOARD_SNAPSHOT_PATH = r"C:\bidking\board_snapshot.json"
+# 供 fresh_aisha_bot 等读取的 JSON 快照输出路径；省略 ``snapshot_path`` 时写入
+# ``<project_root>/data/board_snapshot.json``（见 :func:`bidking.config.paths.resolve_board_snapshot_path`）。
 
 _WIN_FILENAME_FORBIDDEN = set('<>:"/\\|?*')
 
@@ -380,7 +379,9 @@ class GridWindow:
         csv_index   : item_id → CsvItem
         csv_items   : 全量 CsvItem 列表
         board_mode  : ``elsa``（默认）或 ``raven``（仅文案与铺板提示差异）。
-        snapshot_path : 若传入非空字符串则用作快照路径；若省略则用模块常量 ``DEFAULT_BOARD_SNAPSHOT_PATH``（空字符串表示不写）。
+        snapshot_path : 若传入非空字符串则用作快照路径；若省略则写入
+            ``data/board_snapshot.json``（相对 :func:`bidking.config.paths.project_root` 解析）；
+            空字符串表示不写快照。
         snapshot_export_overlay : 是否在快照中包含幽灵物品与手动轮廓（grid_overlay）。
         snapshots : 回放模式下的 ``[(标签, GameState, skill_logs), ...]``；``skill_logs`` 与实时监听累积形状一致，
             供定价/raw_pricing。兼容仅 ``(标签, state)`` 的旧列表（无技能日志时 Ahmad 等会为 0）。
@@ -410,7 +411,9 @@ class GridWindow:
             bm if bm in (BOARD_MODE_ELSA, BOARD_MODE_RAVEN) else BOARD_MODE_ELSA
         )
         if snapshot_path is None:
-            sp = (DEFAULT_BOARD_SNAPSHOT_PATH or "").strip() or None
+            from ...config.paths import resolve_board_snapshot_path
+
+            sp = str(resolve_board_snapshot_path(""))
         elif isinstance(snapshot_path, str):
             sp = snapshot_path.strip() or None
         else:

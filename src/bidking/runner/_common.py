@@ -11,6 +11,7 @@ from ..bridge import (
     write_mode_from_runtime,
 )
 from ..config import RuntimeConfig, load_pricing, load_runtime
+from ..config.paths import resolve_board_snapshot_path
 from ..logsys import (
     set_app_log_file,
     set_mouse_log_enabled,
@@ -36,10 +37,8 @@ def make_snapshot_writer(runtime: RuntimeConfig) -> BoardSnapshotFileWriter | No
     if not bs.get("enabled"):
         return None
     raw_path = str(bs.get("path") or "").strip()
-    if not raw_path:
-        return None
     mode = write_mode_from_runtime(bs)
-    return BoardSnapshotFileWriter(Path(raw_path), mode=mode)
+    return BoardSnapshotFileWriter(resolve_board_snapshot_path(raw_path), mode=mode)
 
 
 def install_snapshot_file_writer(runtime: RuntimeConfig) -> BoardSnapshotFileWriter | None:

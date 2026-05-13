@@ -22,6 +22,19 @@ _item_prices_cache: Optional[Tuple[Dict[int, Any], List[Any]]] = None
 
 
 def _item_prices_csv_path_resolved() -> str:
+    """与 ``parsing.constants.resource_path`` 对齐，避免 exe 旁放 ``data/`` 时仅按 ``__file__`` 相对路径找不到表。
+
+    ``_board_pricing`` / 画板 ``pricing.total`` 走本函数；解析日志的 ``CSV_PATH`` 走 ``resource_path``。
+    此前两套逻辑不一致会导致「界面/日志正常、总价恒为 0」。
+    """
+    try:
+        from ..parsing.constants import resource_path
+
+        rp = resource_path("item_prices.csv")
+        if rp and os.path.isfile(rp):
+            return rp
+    except Exception:
+        pass
     here = os.path.dirname(os.path.abspath(__file__))
     for parts in ITEM_PRICES_CSV_RELPATHS:
         p = os.path.normpath(os.path.join(here, *parts))
