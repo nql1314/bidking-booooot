@@ -705,16 +705,10 @@ def vacant_dict_from_board_snapshot(
 
 
 def _event_stats_q14_grid_counts_all_known(raw: Any) -> bool:
-    """与 ``_board_pricing._event_stats_q14_grid_counts_all_known`` 一致（避免循环 import）。"""
-    if not isinstance(raw, dict):
-        return False
-    st = raw.get("event_stats")
-    if not isinstance(st, dict):
-        return False
-    for k in ("q1_grid_count", "q2_grid_count", "q3_grid_count", "q4_grid_count"):
-        if st.get(k) is None:
-            return False
-    return True
+    """与 :func:`bidking.analysis.raw_pricing.event_stats_q12_q3_q4_grids_all_known` 一致（避免重复实现）。"""
+    from .raw_pricing import event_stats_q12_q3_q4_grids_all_known
+
+    return event_stats_q12_q3_q4_grids_all_known(raw)
 
 
 def _infer_q1234_scan_and_q14_contours_ready(
@@ -1022,7 +1016,7 @@ def compute_grid_overlay_infer_shapes(
       与其它物品的冲突：基底占位中他人的锚格/已确认格 **以及** 本轮中先前物品已推断出的矩形并集；
       仅允许覆盖当前物品自身的基底占位格（通常为锚格），但若该格已被先前推断占用则不可再放。
       首选外形不满足时按掉落概率依次尝试其余候选外形，仍无解则跳过该件推断。
-    - 当 ``raw_pricing.event_stats`` 中 q1–q4 各档 ``q*_grid_count`` 均已给出，且扫描史已覆盖品质
+    - 当 ``raw_pricing.event_stats`` 中低档总格 **q12+q3+q4** 齐备（或 ``q1+q2+q3+q4`` 等价已知），且扫描史已覆盖品质
       1–4、场上 Q1–Q4 物品轮廓与锚格均已锁定时：对 **金 (5)、红 (6)** 用两种贪心延展矩形
       （先上下后左右 / 先左右后上下），在上述阻挡语义与 ``max_box_id`` 约束下取 **面积较大** 者；
       金优先于红；每推断成功一件即将其矩形并入后续件的阻挡集。

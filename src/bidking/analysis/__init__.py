@@ -31,7 +31,7 @@ from ._board_pricing import (
     estimate_snapshot_item_price_for_uid,
     map_id_from_board_snapshot,
 )
-from .raw_pricing import build_raw_pricing_dict
+from .raw_pricing import build_raw_pricing_dict, event_stats_q12_q3_q4_grids_all_known, read_skill_log_direct_prices
 
 __all__ = [
     "snapshot",
@@ -42,6 +42,8 @@ __all__ = [
     "map_avg_csv",
     "raw_pricing",
     "build_raw_pricing_dict",
+    "event_stats_q12_q3_q4_grids_all_known",
+    "read_skill_log_direct_prices",
     "build_board_snapshot",
     "build_snapshot_pricing_dict",
     "estimate_snapshot_item_price",

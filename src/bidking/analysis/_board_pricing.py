@@ -35,7 +35,7 @@ from ._shape_wh import shape_wh_from_snapshot
 
 _item_prices_cache: Optional[Tuple[Dict[int, Any], List[Any]]] = None
 
-# 仅 ``not q14_grid_known`` 早期回合：当 ``random_avg_price_min`` 超过本算 ``points`` 的 50% 时，
+# 仅 ``not q14_grid_known``（低档 **q12+q3+q4** 总格未齐，见 ``event_stats_q12_q3_q4_grids_all_known``）早期回合：当 ``random_avg_price_min`` 超过本算 ``points`` 的 50% 时，
 # 用 ``(points + random_avg_price_min) / 2`` 与事件下界取中，缓和随机均价事件对总估价的拉扯。
 _RANDOM_AVG_MIN_DOMINANCE_RATIO = 0.5
 
@@ -181,18 +181,14 @@ def _tier_min_extra_value_and_cells(
 
 def _event_stats_q14_grid_counts_all_known(raw: Any) -> bool:
     """
-    ``raw_pricing.event_stats`` 中 q1–q4 各档占用总格数均已得到（非 None）时，
+    ``raw_pricing.event_stats`` 中低档占用总格已划定（**q12+q3+q4** 语义）时，
     可认为已由公共信息划定紫档及此前档位，空置金红估价区间与后期回合一致。
+
+    等价于 :func:`bidking.analysis.raw_pricing.event_stats_q12_q3_q4_grids_all_known`。
     """
-    if not isinstance(raw, dict):
-        return False
-    st = raw.get("event_stats")
-    if not isinstance(st, dict):
-        return False
-    for k in ("q1_grid_count", "q2_grid_count", "q3_grid_count", "q4_grid_count"):
-        if st.get(k) is None:
-            return False
-    return True
+    from .raw_pricing import event_stats_q12_q3_q4_grids_all_known
+
+    return event_stats_q12_q3_q4_grids_all_known(raw)
 
 
 def _parse_shape_int(shape: Any) -> Optional[int]:
