@@ -17,8 +17,9 @@ from bidking.analysis.raw_pricing import (
     _min_positive_int_avg_product_near_integer,
     _min_total_from_avg,
     _min_total_price_from_avg_times_hit_count,
+    build_raw_pricing_dict,
 )
-from bidking.parsing.constants import MAP_SKILL_RANDOM3_AVG_PRICE
+from bidking.parsing.constants import MAP_SKILL_RANDOM3_AVG_PRICE, MAP_SKILL_TOTAL_GOLD_COUNT
 
 
 class RawPricingBoundsTests(unittest.TestCase):
@@ -72,6 +73,32 @@ class RawPricingBoundsTests(unittest.TestCase):
         )
         self.assertEqual(d["count_min"], 4)
         self.assertEqual(d["grid_min"], 12)
+
+    def test_build_raw_pricing_census_absent_on_explicit_map_zero_gold(self) -> None:
+        skill_logs = [
+            {
+                "game_data": {
+                    "MapSkillLog": [
+                        {"SkillCid": MAP_SKILL_TOTAL_GOLD_COUNT, "HitItemIndex": 0},
+                    ]
+                }
+            }
+        ]
+        rp = build_raw_pricing_dict(map_id=2101, skill_logs=skill_logs)
+        self.assertEqual(rp.get("census_absent_qualities"), [5])
+
+    def test_build_raw_pricing_census_absent_empty_when_gold_tier_nonzero_after_coherence(self) -> None:
+        skill_logs = [
+            {
+                "game_data": {
+                    "MapSkillLog": [
+                        {"SkillCid": MAP_SKILL_TOTAL_GOLD_COUNT, "HitItemIndex": 2},
+                    ]
+                }
+            }
+        ]
+        rp = build_raw_pricing_dict(map_id=2101, skill_logs=skill_logs)
+        self.assertEqual(rp.get("census_absent_qualities"), [])
 
 
 if __name__ == "__main__":

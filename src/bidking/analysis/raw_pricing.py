@@ -723,7 +723,11 @@ def build_raw_pricing_dict(
     skill_logs: List[dict],
     snapshot_path_hint: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """构建 raw_pricing（仅保存原始全局信息，不做策略估算）。"""
+    """构建 raw_pricing（仅保存原始全局信息，不做策略估算）。
+
+    返回含 ``event_stats``、``census_absent_qualities``（分档零一致性整理后 ``qK_count==0`` 的品质列表，
+    供 :mod:`.scan_inference` 与 UI 负向合并）等。
+    """
 
     skill_entries = _merge_latest_skill_entries(list(skill_logs or []))
     normalized_mid = item_db.normalize_map_id(int(map_id or 0))
@@ -936,6 +940,8 @@ def build_raw_pricing_dict(
             also_zero=also_zero,
         )
 
+    census_absent_qualities = sorted(q for q in range(1, 7) if direct.get(f"q{q}_count") == 0)
+
     _infer_q56_grid_from_total_and_q14(direct)
 
     if direct["q1_count"] is not None and direct["q2_count"] is not None:
@@ -947,4 +953,5 @@ def build_raw_pricing_dict(
         "map_quality_avg_csv": map_quality_csv_path_resolved(snapshot_path_hint),
         "map_quality_avg_hit": bool(csv_groups_full),
         "event_stats": direct,
+        "census_absent_qualities": census_absent_qualities,
     }
