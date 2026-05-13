@@ -25,7 +25,8 @@
    （含 ``grid_overlay`` 手画幽灵/轮廓/空置剔除等），手动画框与拖调轮廓也会触发刷新从而落盘
 
 看板角色（board_mode）：
-  - elsa / raven：空置候选区（橘红）与顶部空置估价均由 ``grid_overlay`` 统一计算，无「第几回合起才显示」门槛。
+  - elsa / universal / raven：空置候选区（橘红）与顶部空置估价均由 ``grid_overlay`` 统一计算，无「第几回合起才显示」门槛。
+  - universal：与 elsa 同套几何与空置逻辑，窗口标题缀「通用看板」便于区分。
   - raven：状态栏附带铺板顺序提示。
   - 地图技能 200009（所有藏品格数）：在已知区内已占位格数未达到该总数前，空置计数与橘红层**忽略诈骗格过滤**；吃满后且扫描上仅剩金红候选时，才对几何空置应用诈骗格剔除。
   - 诈骗格规则**仅用于**上述自动空置区（计数与初始橘红），**不限制**右键手动剔除/恢复空置标记。
@@ -56,6 +57,7 @@ from ...parsing.constants import (
 from ...parsing.handlers import handle_s2c33, handle_s2c37, handle_s2c39, handle_s2c45
 from ...parsing.item_db import (
     candidate_probabilities,
+    map_bundle_key_for_automation,
     map_category_ratios,
     probability_source_label,
     query_item,
@@ -116,6 +118,7 @@ EMPTY_ZONE_STIPPLE = "gray25"  # 约 25% 覆盖度，模拟半透明
 
 # 看板角色：界面文案（拉文铺板提示）
 BOARD_MODE_ELSA = "elsa"
+BOARD_MODE_UNIVERSAL = "universal"
 BOARD_MODE_RAVEN = "raven"
 
 # 未知品质物品的手动缩放把手（边条宽度 + 四角命中半径；四角缩放用 Ctrl+左键）
@@ -378,7 +381,7 @@ class GridWindow:
         state       : 解析后的 GameState（含物品知识）
         csv_index   : item_id → CsvItem
         csv_items   : 全量 CsvItem 列表
-        board_mode  : ``elsa``（默认）或 ``raven``（仅文案与铺板提示差异）。
+        board_mode  : ``elsa``（默认）、``universal``（与 elsa 同逻辑，标题区分）或 ``raven``（铺板提示差异）。
         snapshot_path : 若传入非空字符串则用作快照路径；若省略则写入
             ``data/board_snapshot.json``（相对 :func:`bidking.config.paths.project_root` 解析）；
             空字符串表示不写快照。
@@ -408,7 +411,9 @@ class GridWindow:
         self._log_path = log_path
         bm = (board_mode or BOARD_MODE_ELSA).strip().lower()
         self._board_mode = (
-            bm if bm in (BOARD_MODE_ELSA, BOARD_MODE_RAVEN) else BOARD_MODE_ELSA
+            bm
+            if bm in (BOARD_MODE_ELSA, BOARD_MODE_UNIVERSAL, BOARD_MODE_RAVEN)
+            else BOARD_MODE_ELSA
         )
         if snapshot_path is None:
             from ...config.paths import resolve_board_snapshot_path
@@ -519,7 +524,11 @@ class GridWindow:
         self.vis_rows = GRID_ROWS
 
     def _board_mode_title_suffix(self) -> str:
-        return " [拉文看板]" if self._board_mode == BOARD_MODE_RAVEN else ""
+        if self._board_mode == BOARD_MODE_RAVEN:
+            return " [拉文看板]"
+        if self._board_mode == BOARD_MODE_UNIVERSAL:
+            return " [通用看板]"
+        return ""
 
     def _board_mode_info_suffix(self) -> str:
         """状态栏补充：拉文铺板顺序提示。"""
@@ -2167,8 +2176,11 @@ class GridWindow:
 
         board_for_compute = {**base, "pricing": p}
         rnd = int(self.state.current_round or 1)
+        mid_raw = int(self.state.map_id or 0)
+        map_sig = map_bundle_key_for_automation(mid_raw) if mid_raw > 0 else ""
         sig = (
             rnd,
+            map_sig,
             p.get("points"),
             p.get("total"),
             p.get("vacant"),

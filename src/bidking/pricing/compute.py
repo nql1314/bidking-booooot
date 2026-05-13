@@ -3,7 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from ..analysis._board_pricing import map_id_from_board_snapshot
 from ..config.map_runtime_overlay import merged_runtime_with_map_pricing
+from ..parsing.item_db import map_bundle_key_for_automation, normalize_map_id
 from .snapshot_io import current_round_from_snapshot, load_board_snapshot_if_enabled
 from ._multipliers import resolve_automation_bid_ratio
 from ._numeric import parse_int_config
@@ -30,17 +32,38 @@ def compute_price(
     读快照 ``pricing`` → ``compute_role_base``（艾莎在 ``compute_base_bid_points`` 内含空置红择优）→
     回合倍数 → 对手调整 →
     ``points_ceiling`` 锚 → 人性化尾数 → 前两回合兜底 → bid_cap。
+
+    当传入或从磁盘启用的画板快照中含有效 ``map_id`` 时，``pricing.maps`` 覆盖层按该局地图档键
+    加载（与 grid_view / 日志对局一致）；否则仍按 ``automation.selected_map`` 等解析。
     """
-    effective_config = merged_runtime_with_map_pricing(config)
+    bs = board_snapshot
+    cfg_for_paths: dict[str, Any] | None = None
+    if bs is None:
+        cfg_for_paths = merged_runtime_with_map_pricing(config)
+        bs_cfg = cfg_for_paths.get("board_snapshot") or {}
+        if bool(bs_cfg.get("enabled")):
+            bs = load_board_snapshot_if_enabled(cfg_for_paths)
+
+    map_bundle_key: str | None = None
+    if isinstance(bs, dict):
+        mid_snap = map_id_from_board_snapshot(bs)
+        if mid_snap is not None and int(mid_snap) > 0:
+            mid_i = int(mid_snap)
+            mid_n = normalize_map_id(mid_i)
+            mid_for_key = int(mid_n) if mid_n is not None else mid_i
+            map_bundle_key = map_bundle_key_for_automation(mid_for_key)
+
+    if map_bundle_key is not None:
+        effective_config = merged_runtime_with_map_pricing(
+            config, map_bundle_key=map_bundle_key
+        )
+    elif cfg_for_paths is not None:
+        effective_config = cfg_for_paths
+    else:
+        effective_config = merged_runtime_with_map_pricing(config)
 
     if price_config is None:
         price_config = load_price_config(effective_config, config_path)
-
-    bs = board_snapshot
-    if bs is None:
-        bs_cfg = effective_config.get("board_snapshot") or {}
-        if bool(bs_cfg.get("enabled")):
-            bs = load_board_snapshot_if_enabled(effective_config)
 
     snap_round = current_round_from_snapshot(bs) if isinstance(bs, dict) else None
     effective_round = int(snap_round) if snap_round is not None else int(round_no)

@@ -9,6 +9,8 @@ RoleBaseFn = Callable[..., tuple[int | None, dict[str, Any]]]
 _REGISTRY: dict[str, RoleBaseFn] = {
     "aisha": aisha_base.compute_base_bid_points,
     "ahmad": ahmad_base.compute_base_bid_points,
+    # 通用策略：与 aisha 同实现，便于单独调参/覆盖；适用于任意游戏内角色看板
+    "universal": aisha_base.compute_base_bid_points,
 }
 
 OpponentAdjustCoreFn = Callable[
@@ -19,10 +21,14 @@ OpponentAdjustCoreFn = Callable[
 _OPPONENT_ADJUST_REGISTRY: dict[str, OpponentAdjustCoreFn] = {
     "aisha": aisha_opponent.apply_opponent_bid_adjustment_core,
     "ahmad": ahmad_opponent.apply_opponent_bid_adjustment_core,
+    "universal": aisha_opponent.apply_opponent_bid_adjustment_core,
 }
 
 
 def resolve_strategy_role(config: dict[str, Any], board_snapshot: dict[str, Any] | None) -> str:
+    adv_role = str((config.get("advisor") or {}).get("role", "")).strip().lower()
+    if adv_role == "universal":
+        return "universal"
     mode = str((config.get("automation") or {}).get("selected_mode", "")).strip().lower()
     if mode == "aisha_premium":
         return "aisha"

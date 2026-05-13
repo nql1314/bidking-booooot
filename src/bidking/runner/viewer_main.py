@@ -181,6 +181,12 @@ def _show_start_page(default_log: str, csv_path: str) -> None:
     tk.Radiobutton(frame, text="实时 tail", variable=mode_var, value="tail").pack(anchor="w")
     tk.Label(frame, text="看板角色").pack(anchor="w", pady=(8, 0))
     tk.Radiobutton(frame, text="艾莎", variable=board_var, value="elsa").pack(anchor="w")
+    tk.Radiobutton(
+        frame,
+        text="通用（全角色，布局与艾莎一致）",
+        variable=board_var,
+        value="universal",
+    ).pack(anchor="w")
     # tk.Radiobutton(frame, text="拉文", variable=board_var, value="raven").pack(anchor="w")
 
     def export_history_report() -> None:

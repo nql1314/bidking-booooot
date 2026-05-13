@@ -38,9 +38,20 @@ CONFIG_OVERLAY_PATH = config_overlay_path()
 BOT_RUNNER_LABEL_TO_KEY = {
     "ahmad跑刀": "fresh_bidking_bot",
     "aisha通用": "fresh_aisha_bot",
+    "通用角色（全角色）": "fresh_aisha_bot",
 }
-BOT_RUNNER_KEY_TO_LABEL = {value: key for key, value in BOT_RUNNER_LABEL_TO_KEY.items()}
 BOT_RUNNER_COMBO_VALUES = tuple(BOT_RUNNER_LABEL_TO_KEY.keys())
+
+
+def _bot_runner_label_from_config(cfg: dict) -> str:
+    """与 :func:`resolve_bot_runner` 一致地还原下拉显示文案（aisha 与通用共用同一脚本键）。"""
+    key = resolve_bot_runner(cfg)
+    role = str((cfg.get("advisor") or {}).get("role", "")).strip().lower()
+    if key == "fresh_aisha_bot" and role == "universal":
+        return "通用角色（全角色）"
+    if key == "fresh_aisha_bot":
+        return "aisha通用"
+    return "ahmad跑刀"
 
 
 def resolve_bot_runner(cfg: dict) -> str:
@@ -49,6 +60,8 @@ def resolve_bot_runner(cfg: dict) -> str:
     if br in ("fresh_bidking_bot", "fresh_aisha_bot"):
         return br
     role = str((cfg.get("advisor") or {}).get("role", "")).strip().lower()
+    if role == "universal":
+        return "fresh_aisha_bot"
     if role in ("aisha", "elsa"):
         return "fresh_aisha_bot"
     sm = str(auto.get("selected_mode", "")).strip().lower()
@@ -236,10 +249,7 @@ class BidKingApp:
         tool_rounds = {int(r) for r in auto.get("tool_rounds", [1, 2])}
         for round_no, var in self.tool_round_vars.items():
             var.set(round_no in tool_rounds)
-        runner_key = resolve_bot_runner(self.config)
-        self.bot_runner_var.set(
-            BOT_RUNNER_KEY_TO_LABEL.get(runner_key, BOT_RUNNER_COMBO_VALUES[0]),
-        )
+        self.bot_runner_var.set(_bot_runner_label_from_config(self.config))
 
     def _validate_disk_board_snapshot(self) -> None:
         """检查磁盘上的 ``board_snapshot`` 至少能识别己方。
@@ -296,7 +306,12 @@ class BidKingApp:
         selected_mode = (
             "aisha_premium" if runner_key == "fresh_aisha_bot" else "ahmad_premium"
         )
-        advisor_role = "aisha" if runner_key == "fresh_aisha_bot" else "ahmad"
+        if runner_label == "通用角色（全角色）":
+            advisor_role = "universal"
+        elif runner_key == "fresh_aisha_bot":
+            advisor_role = "aisha"
+        else:
+            advisor_role = "ahmad"
 
         self.config.setdefault("automation", {})
         self.config["automation"]["bot_runner"] = runner_key
