@@ -1,7 +1,8 @@
-"""按当前选中地图合并 ``configs/pricing.maps/<map_id>.json`` 到运行时 config。
+"""合并 ``configs/pricing.maps/<档键>.json`` 到运行时 config。
 
-GUI 将兜底价、封顶、``bid_ratio_by_round`` 等写入地图文件；
-:func:`merged_runtime_with_map_pricing` 在出价计算前叠加以便与 bot 主配置一致。
+Bot 策略面板所选地图（``automation.selected_map``）与对局快照中的 ``map_id``（经
+:func:`bidking.parsing.item_db.map_bundle_key_for_automation` 得到档键）均可作为覆盖层键；
+:func:`merged_runtime_with_map_pricing` 在出价计算前叠加以便与主配置一致。
 """
 
 from __future__ import annotations
@@ -135,12 +136,24 @@ def resolve_automation_map_config_key(auto_d: Mapping[str, Any]) -> str:
     return "210"
 
 
-def merged_runtime_with_map_pricing(config: Mapping[str, Any]) -> dict[str, Any]:
+def merged_runtime_with_map_pricing(
+    config: Mapping[str, Any],
+    *,
+    map_bundle_key: str | None = None,
+) -> dict[str, Any]:
+    """
+    深合并 ``configs/pricing.maps/<id>.json``。
+
+    若传入 ``map_bundle_key``（与 :func:`bidking.parsing.item_db.map_bundle_key_for_automation`
+    一致，如 ``\"230\"``），优先按该键加载覆盖层；否则按 ``automation.selected_map`` /
+    ``default_map`` 解析（与 Bot 策略面板所选地图一致）。
+    """
     if not isinstance(config, dict):
         return dict(config)
     auto = config.get("automation")
     auto_d = auto if isinstance(auto, dict) else {}
-    mid = resolve_automation_map_config_key(auto_d)
+    kb = str(map_bundle_key or "").strip()
+    mid = kb if kb else resolve_automation_map_config_key(auto_d)
     p: Path = pricing_map_overlay_path(mid)
     if not p.is_file():
         return dict(config)
