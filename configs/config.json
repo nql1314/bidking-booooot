@@ -1,7 +1,7 @@
 {
   "board_snapshot": {
     "enabled": true,
-    "path": "C:/Users/49479/Documents/bidking/board_snapshot.json",
+    "path": "data/board_snapshot.json",
     "write_mode": "both",
     "schema_version_min": 1
   },

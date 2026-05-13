@@ -37,6 +37,28 @@ def data_dir() -> Path:
     return project_root() / "data"
 
 
+def board_snapshot_default_path() -> Path:
+    """默认画板快照 JSON：``<project_root>/data/board_snapshot.json``。"""
+    return (data_dir() / "board_snapshot.json").resolve()
+
+
+def resolve_board_snapshot_path(raw: Optional[str]) -> Path:
+    """
+    解析 ``board_snapshot.path``（``configs`` 合并结果）。
+
+    - 空或未设置：:func:`board_snapshot_default_path`。
+    - 绝对路径：``expanduser`` 后 ``resolve``。
+    - 相对路径：相对 :func:`project_root`（例如 ``data/board_snapshot.json`` 与 exe+data 分发一致）。
+    """
+    s = (raw or "").strip()
+    if not s:
+        return board_snapshot_default_path()
+    p = Path(s).expanduser()
+    if p.is_absolute():
+        return p.resolve()
+    return (project_root() / s).resolve()
+
+
 def runtime_path() -> Path:
     return configs_dir() / "runtime.json"
 
