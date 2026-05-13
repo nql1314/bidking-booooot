@@ -1064,15 +1064,16 @@ def run_map_selection_transition(config: dict[str, Any], selected_map: str) -> f
 
 
 def board_snapshot_file_missing(config: dict[str, Any]) -> bool:
-    """``board_snapshot`` 已启用且配置了 path，但磁盘上尚无该文件。"""
+    """``board_snapshot`` 已启用但快照文件尚不存在（含使用默认 ``data/board_snapshot.json`` 时）。"""
     bs = config.get("board_snapshot") or {}
     if not bs.get("enabled"):
         return False
     raw_path = str(bs.get("path") or "").strip()
-    if not raw_path:
-        return True
+    from ..config.paths import resolve_board_snapshot_path
+
+    path = resolve_board_snapshot_path(raw_path)
     try:
-        return not Path(raw_path).is_file()
+        return not path.is_file()
     except OSError:
         return True
 

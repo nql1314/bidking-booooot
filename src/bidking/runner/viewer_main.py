@@ -32,11 +32,12 @@ def _effective_snapshot_path_for_viewer(cli_or_none: str | None) -> str | None:
     if explicit:
         return explicit
     try:
+        from ..config.paths import resolve_board_snapshot_path
         from ..config.runtime import load_runtime
 
         bs = load_runtime().board_snapshot
         configured = str(bs.get("path") or "").strip()
-        return configured or None
+        return str(resolve_board_snapshot_path(configured))
     except Exception:
         return None
 
@@ -263,7 +264,7 @@ def _show_start_page(default_log: str, csv_path: str) -> None:
     # 请先在「策略配置」里核对出价参数、棋盘快照与主配置 JSON；仅在确实需要自动出价时再点。
     tk.Button(
         bottom,
-        text="启动 Bot 总控（谨慎使用）",
+        text="启动 Bot 总控（暂时不要使用 等我修复 现在会封号）",
         command=lambda: _launch_bot_runner(root),
         bg="#664422",
         fg="#ffe8c8",
