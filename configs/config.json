@@ -1,4 +1,7 @@
 {
+  "pricing": {
+    "enable_opponent_bid_adjustment": true
+  },
   "board_snapshot": {
     "enabled": true,
     "path": "data/board_snapshot.json",

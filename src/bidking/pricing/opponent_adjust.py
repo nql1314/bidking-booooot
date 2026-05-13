@@ -2,12 +2,174 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..analysis._board_pricing import map_id_from_board_snapshot
+from ..parsing.item_db import map_bundle_key_for_automation
 from .snapshot_players import (
     board_snapshot_self_identity,
     max_other_player_bid_from_snapshot_players,
     player_round_price_bid,
     self_round_bid_from_snapshot,
 )
+
+# ``automation.maps`` 档键：幽静别墅 / 沉船密封舱；快照 ``players.*.prices`` 为排名而非金币。
+SECRET_AUCTION_MAP_BUNDLE_KEYS: frozenset[str] = frozenset({"440", "450"})
+
+
+def _parse_enable_opponent_bid_adjustment_flag(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() not in ("0", "false", "no", "off", "")
+    return bool(value)
+
+
+def opponent_bid_adjustment_enabled(
+    config: dict[str, Any], price_config: dict[str, Any]
+) -> bool:
+    """
+    是否执行对手价调整。读取顺序：``price_config`` → ``config[\"pricing\"]``；
+    均未配置时默认 ``True``（保持历史行为）。
+
+    配置键：``enable_opponent_bid_adjustment``（``false`` / ``0`` / ``\"off\"`` 等关闭）。
+    """
+    if isinstance(price_config, dict) and "enable_opponent_bid_adjustment" in price_config:
+        return _parse_enable_opponent_bid_adjustment_flag(
+            price_config.get("enable_opponent_bid_adjustment")
+        )
+    pr = config.get("pricing") if isinstance(config, dict) else None
+    if isinstance(pr, dict) and "enable_opponent_bid_adjustment" in pr:
+        return _parse_enable_opponent_bid_adjustment_flag(
+            pr.get("enable_opponent_bid_adjustment")
+        )
+    return True
+
+
+def board_map_bundle_key(board_snapshot: dict[str, Any] | None) -> str | None:
+    """
+    快照内**原始** ``MapId`` 的档键（如 ``4402`` → ``\"440\"``）。
+
+    注意：不得先做 ``normalize_map_id``；否则 ``4402`` 会归一成 ``2402``，
+    档键误为 ``\"240\"``，无法识别幽静别墅/沉船密封舱（隐秘拍卖）族。
+    """
+    if not isinstance(board_snapshot, dict):
+        return None
+    mid = map_id_from_board_snapshot(board_snapshot)
+    if mid is None or int(mid) <= 0:
+        return None
+    return map_bundle_key_for_automation(int(mid))
+
+
+def board_snapshot_is_secret_auction(board_snapshot: dict[str, Any] | None) -> bool:
+    k = board_map_bundle_key(board_snapshot)
+    return bool(k) and k in SECRET_AUCTION_MAP_BUNDLE_KEYS
+
+
+def _secret_auction_prev_round_rank_detail(
+    config: dict[str, Any],
+    board_snapshot: dict[str, Any],
+    round_no: int,
+) -> dict[str, Any]:
+    """上一拍卖列（与 ``opponent_last_bid_default_from_snapshot`` 的 ``grid_round`` 一致）的排名信号。"""
+    players = (board_snapshot.get("game_state") or {}).get("players") or {}
+    if not isinstance(players, dict) or not players:
+        return {"skip": "no_players"}
+    ref_r = max(1, int(round_no) - 1)
+    self_uid, name_hint = board_snapshot_self_identity(config, board_snapshot)
+    my_rank: int | None = None
+    opp_ranks: list[int] = []
+    for p_uid, pdata in players.items():
+        if not isinstance(pdata, dict):
+            continue
+        rk = player_round_price_bid(pdata, ref_r)
+        if rk is None:
+            continue
+        is_self = bool(self_uid and str(p_uid) == self_uid)
+        if not is_self and name_hint:
+            pname = str(pdata.get("name") or "")
+            if name_hint in pname:
+                is_self = True
+        if is_self:
+            my_rank = int(rk)
+        else:
+            opp_ranks.append(int(rk))
+    opp_best: int | None = min(opp_ranks) if opp_ranks else None
+    behind: int | None = None
+    if my_rank is not None and opp_best is not None:
+        behind = int(my_rank) - int(opp_best)
+    return {
+        "mode": "secret_rank",
+        "ref_round_no": ref_r,
+        "my_rank_prev": my_rank,
+        "opponent_ranks_prev": opp_ranks,
+        "opponent_best_rank_prev": opp_best,
+        "behind_by": behind,
+    }
+
+
+def apply_secret_auction_rank_opponent_adjustment(
+    config: dict[str, Any],
+    bid: int,
+    round_no: int,
+    *,
+    board_snapshot: dict[str, Any],
+    pricing: dict[str, Any] | None = None,
+) -> tuple[int, str | None, dict[str, Any]]:
+    """
+    隐秘拍卖图：``prices`` 为名次（越小越靠前），缺失表示该轮未出价。
+    在无法还原对手金币价时，按「我方相对最优对手名次差」对当前估价做轻量缩放。
+    """
+    bid_i = int(bid)
+    r_no = int(round_no)
+    pricing_d = pricing if isinstance(pricing, dict) else {}
+    detail = _secret_auction_prev_round_rank_detail(config, board_snapshot, r_no)
+
+    if r_no <= 1:
+        detail["skip"] = "round_lte_1"
+        return bid_i, None, detail
+
+    my_rank = detail.get("my_rank_prev")
+    if my_rank is None:
+        detail["skip"] = "no_self_rank_prev"
+        return bid_i, None, detail
+
+    opp_best = detail.get("opponent_best_rank_prev")
+    behind = detail.get("behind_by")
+    if opp_best is None:
+        fin = int(round(bid_i * 0.988))
+        tag = "secret_rank_no_opp_bid"
+    elif behind is not None:
+        if behind >= 2:
+            fin = int(round(bid_i * 1.08))
+            tag = "secret_rank_behind_far"
+        elif behind == 1:
+            fin = int(round(bid_i * 1.045))
+            tag = "secret_rank_behind_1"
+        elif behind == 0:
+            fin = int(round(bid_i * 1.012))
+            tag = "secret_rank_tied"
+        else:
+            fin = int(round(bid_i * 0.994))
+            tag = "secret_rank_ahead"
+    else:
+        fin = bid_i
+        tag = None
+
+    ceiling_raw = pricing_d.get("points_ceiling")
+    if ceiling_raw is not None:
+        try:
+            ceiling_pts = int(ceiling_raw)
+            if ceiling_pts > 0 and fin > ceiling_pts:
+                fin = ceiling_pts
+                detail["ceiling_clamped"] = ceiling_pts
+        except (TypeError, ValueError):
+            pass
+
+    fin = max(1, int(fin))
+    if fin != bid_i and tag is None:
+        tag = "secret_rank"
+    return fin, tag, detail
 
 
 def opponent_last_bid_default_from_snapshot(
@@ -213,23 +375,42 @@ def apply_opponent_bid_adjustment(
     """快照口径对手价：按 ``role`` 选策略，解析 ``o_prev``、调价，并产出 ``opponent_bid`` 片段。"""
     from .strategies import apply_opponent_bid_adjustment_core_for_role
 
-    o_prev: int | None = None
-    if isinstance(board_snapshot, dict):
-        o_prev = opponent_last_bid_default_from_snapshot(
-            config, board_snapshot, round_no=int(round_no)
-        )
-
     fin_before_opp = int(bid)
-    fin, opp_tag, opp_detail = apply_opponent_bid_adjustment_core_for_role(
-        str(role).strip().lower() or "aisha",
-        config,
-        fin_before_opp,
-        int(round_no),
-        o_prev,
-        price_config,
-        board_snapshot=board_snapshot,
-        pricing=pricing,
-    )
+    pc = price_config if isinstance(price_config, dict) else {}
+    if not opponent_bid_adjustment_enabled(config, pc):
+        return fin_before_opp, {
+            "applied": False,
+            "disabled": True,
+            "o_prev": None,
+            "detail": {"reason": "enable_opponent_bid_adjustment_false"},
+        }, fin_before_opp
+
+    if isinstance(board_snapshot, dict) and board_snapshot_is_secret_auction(board_snapshot):
+        fin, opp_tag, opp_detail = apply_secret_auction_rank_opponent_adjustment(
+            config,
+            fin_before_opp,
+            int(round_no),
+            board_snapshot=board_snapshot,
+            pricing=pricing,
+        )
+        o_prev: int | None = None
+    else:
+        o_prev = None
+        if isinstance(board_snapshot, dict):
+            o_prev = opponent_last_bid_default_from_snapshot(
+                config, board_snapshot, round_no=int(round_no)
+            )
+
+        fin, opp_tag, opp_detail = apply_opponent_bid_adjustment_core_for_role(
+            str(role).strip().lower() or "aisha",
+            config,
+            fin_before_opp,
+            int(round_no),
+            o_prev,
+            price_config,
+            board_snapshot=board_snapshot,
+            pricing=pricing,
+        )
 
     if opp_tag:
         opponent_bid: dict[str, Any] = {
