@@ -1850,6 +1850,7 @@ class GridWindow:
             self._manual_shapes,
             self._phantom_items,
             self._phantom_quality_pref,
+            raw_pricing=self._last_raw_pricing,
         )
         self._sanitize_unknown_quality_prefs()
         self._sanitize_phantom_quality_prefs()
