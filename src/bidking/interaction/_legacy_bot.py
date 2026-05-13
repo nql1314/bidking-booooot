@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
+import random
 import re
 import threading
 import time
@@ -315,6 +317,175 @@ def apply_pyautogui_from_config(config: dict[str, Any]) -> None:
     safety = config.get("safety") or {}
     pyautogui.FAILSAFE = bool(safety.get("failsafe", True))
     pyautogui.PAUSE = float(safety.get("move_pause_seconds", 0.08))
+
+
+def _humanize_merged(config: dict[str, Any]) -> dict[str, Any]:
+    """拟人化参数：``config["humanize"]`` 覆盖默认值；``enabled: false`` 关闭轨迹/抖动/输入随机间隔。"""
+    defaults: dict[str, Any] = {
+        "enabled": True,
+        "click_jitter_pixels": 3,
+        "move_duration_min": 0.07,
+        "move_duration_max": 0.38,
+        "move_steps_min": 3,
+        "move_steps_max": 10,
+        "arc_strength_min": 0.35,
+        "arc_strength_max": 1.25,
+        "pre_click_delay_min": 0.0,
+        "pre_click_delay_max": 0.07,
+        "price_char_interval_min": 0.038,
+        "price_char_interval_max": 0.11,
+        "price_stutter_probability": 0.11,
+        "price_stutter_extra_min": 0.1,
+        "price_stutter_extra_max": 0.42,
+        "pre_select_all_delay_min": 0.02,
+        "pre_select_all_delay_max": 0.12,
+        "post_select_all_delay_scale_min": 0.85,
+        "post_select_all_delay_scale_max": 1.35,
+    }
+    raw = config.get("humanize")
+    if not isinstance(raw, dict):
+        return dict(defaults)
+    out = dict(defaults)
+    for key, val in raw.items():
+        out[key] = val
+    return out
+
+
+def _jitter_screen_point(x: int, y: int, jitter_px: float) -> tuple[int, int]:
+    if jitter_px <= 0:
+        return x, y
+    j = float(jitter_px)
+    return int(round(x + random.uniform(-j, j))), int(round(y + random.uniform(-j, j)))
+
+
+def _quad_bezier(
+    p0: tuple[float, float],
+    p1: tuple[float, float],
+    p2: tuple[float, float],
+    t: float,
+) -> tuple[float, float]:
+    u = 1.0 - t
+    x = u * u * p0[0] + 2.0 * u * t * p1[0] + t * t * p2[0]
+    y = u * u * p0[1] + 2.0 * u * t * p1[1] + t * t * p2[1]
+    return x, y
+
+
+def human_move_to_screen(config: dict[str, Any], x: int, y: int) -> None:
+    """带弧度的分段移动，接近真实鼠标轨迹（非瞬时直线）。"""
+    ensure_not_stopped()
+    h = _humanize_merged(config)
+    tx, ty = float(x), float(y)
+    if not h["enabled"]:
+        pyautogui.moveTo(int(x), int(y), duration=0.05, tween=pyautogui.linear)
+        return
+    cx, cy = map(float, pyautogui.position())
+    dx, dy = tx - cx, ty - cy
+    dist = math.hypot(dx, dy)
+    if dist < 6.0:
+        pyautogui.moveTo(
+            int(x),
+            int(y),
+            duration=random.uniform(0.04, 0.12),
+            tween=pyautogui.easeOutQuad,
+        )
+        return
+    mx, my = (cx + tx) / 2.0, (cy + ty) / 2.0
+    inv = 1.0 / max(dist, 1e-6)
+    nx, ny = -dy * inv, dx * inv
+    arc = random.uniform(float(h["arc_strength_min"]), float(h["arc_strength_max"]))
+    arc *= min(dist * 0.12, 72.0)
+    if random.random() < 0.5:
+        arc = -arc
+    p0 = (cx, cy)
+    p1 = (mx + nx * arc, my + ny * arc)
+    p2 = (tx, ty)
+    steps = int(
+        round(
+            random.uniform(float(h["move_steps_min"]), float(h["move_steps_max"]))
+            + min(4.0, dist / 120.0)
+        )
+    )
+    steps = max(int(h["move_steps_min"]), min(24, steps))
+    dur_total = random.uniform(float(h["move_duration_min"]), float(h["move_duration_max"]))
+    dur_total *= min(1.15, max(0.35, dist / 420.0))
+    dur_total = max(float(h["move_duration_min"]), min(float(h["move_duration_max"]), dur_total))
+    base = dur_total / float(steps)
+    for i in range(1, steps + 1):
+        ensure_not_stopped()
+        t = i / steps
+        bx, by = _quad_bezier(p0, p1, p2, t)
+        ix, iy = (int(x), int(y)) if i == steps else (int(round(bx)), int(round(by)))
+        step_dur = base * random.uniform(0.85, 1.22)
+        step_dur = max(0.011, min(0.26, step_dur))
+        tween = pyautogui.easeOutQuad if i == steps else pyautogui.easeInOutQuad
+        pyautogui.moveTo(ix, iy, duration=step_dur, tween=tween)
+    # 若浮点累计导致未贴边，最后再对齐一次（通常已是最后一步）
+    fx, fy = pyautogui.position()
+    if abs(fx - x) > 1 or abs(fy - y) > 1:
+        pyautogui.moveTo(int(x), int(y), duration=random.uniform(0.02, 0.06), tween=pyautogui.easeOutQuad)
+
+
+def human_click_at_screen(
+    config: dict[str, Any],
+    x: int,
+    y: int,
+    *,
+    log_detail: str = "",
+) -> None:
+    """先拟人移动再点击当前位置，带像素抖动与点击前微停顿。"""
+    ensure_not_stopped()
+    h = _humanize_merged(config)
+    jx, jy = _jitter_screen_point(x, y, float(h["click_jitter_pixels"])) if h["enabled"] else (x, y)
+    if log_detail:
+        log(
+            f"human click {log_detail}: logical=({x},{y}) jitter=({jx},{jy})",
+            gui_verbose_only=True,
+        )
+    human_move_to_screen(config, jx, jy)
+    if h["enabled"]:
+        pre_lo = float(h["pre_click_delay_min"])
+        pre_hi = float(h["pre_click_delay_max"])
+        if pre_hi > pre_lo:
+            sleep_interruptible(random.uniform(pre_lo, pre_hi))
+        elif pre_hi > 0:
+            sleep_interruptible(pre_hi)
+    ensure_not_stopped()
+    pyautogui.click()
+
+
+def human_type_price_digits(config: dict[str, Any], price: int) -> None:
+    """逐字符输入，随机间隔与偶发「卡顿」停顿，模拟真实敲数字。"""
+    h = _humanize_merged(config)
+    s = str(int(price))
+    if not h["enabled"]:
+        pyautogui.write(s, interval=0.02)
+        return
+    p_stutter = float(h["price_stutter_probability"])
+    lo = float(h["price_char_interval_min"])
+    hi = float(h["price_char_interval_max"])
+    ex_lo = float(h["price_stutter_extra_min"])
+    ex_hi = float(h["price_stutter_extra_max"])
+    for ch in s:
+        ensure_not_stopped()
+        pyautogui.write(ch, interval=0)
+        gap = random.uniform(lo, hi)
+        if random.random() < p_stutter:
+            gap += random.uniform(ex_lo, ex_hi)
+        sleep_interruptible(gap)
+
+
+def _select_all_field(config: dict[str, Any]) -> None:
+    """全选输入框：拟人模式下 Ctrl 与 A 之间带短随机间隔。"""
+    h = _humanize_merged(config)
+    if not h["enabled"]:
+        pyautogui.hotkey("ctrl", "a")
+        return
+    pyautogui.keyDown("ctrl")
+    sleep_interruptible(random.uniform(0.018, 0.055))
+    ensure_not_stopped()
+    pyautogui.press("a")
+    sleep_interruptible(random.uniform(0.02, 0.05))
+    pyautogui.keyUp("ctrl")
 
 
 def compute_price(
@@ -785,7 +956,7 @@ def click_point(config: dict[str, Any], name: str, repeat: int = 1, pause: float
             gui_verbose_only=True,
         )
         if not dry_run:
-            pyautogui.click(x, y)
+            human_click_at_screen(config, int(x), int(y), log_detail=f"{name}#{index + 1}")
         sleep_interruptible(pause_value)
     if bool(config.get("safety", {}).get("park_mouse_after_clicks", True)):
         park_mouse_if_configured(config)
@@ -808,7 +979,7 @@ def click_absolute_screen(config: dict[str, Any], x: int, y: int, label: str) ->
     ensure_not_stopped()
     log(f"click screen {label}: {x},{y}", gui_verbose_only=True)
     if not dry_run:
-        pyautogui.click(int(x), int(y))
+        human_click_at_screen(config, int(x), int(y), log_detail=label)
     sleep_interruptible(pause_value)
 
 
@@ -865,7 +1036,7 @@ def park_mouse_if_configured(config: dict[str, Any]) -> None:
     try:
         x, y = client_to_screen(config, point)
         log(f"park mouse: screen={x},{y}", gui_verbose_only=True)
-        pyautogui.moveTo(x, y, duration=0.05)
+        human_move_to_screen(config, int(x), int(y))
     except Exception as exc:
         log(f"warn: park mouse skipped: {exc}")
 
@@ -876,6 +1047,10 @@ def press_escape(config: dict[str, Any]) -> None:
     dry_run = bool(config.get("safety", {}).get("dry_run", False))
     log("press key: esc", gui_verbose_only=True)
     if not dry_run:
+        h = _humanize_merged(config)
+        if h["enabled"]:
+            sleep_interruptible(random.uniform(0.03, 0.11))
+            ensure_not_stopped()
         pyautogui.press("esc")
     sleep_interruptible(float(config.get("timing", {}).get("click_pause_seconds", 0.12)))
 
@@ -889,11 +1064,26 @@ def type_price(config: dict[str, Any], price: int) -> None:
     log(f"type price: {price}", gui_verbose_only=True)
     if dry_run:
         return
-    pyautogui.hotkey("ctrl", "a")
-    sleep_interruptible(pause)
+    h = _humanize_merged(config)
+    if h["enabled"]:
+        sleep_interruptible(
+            random.uniform(float(h["pre_select_all_delay_min"]), float(h["pre_select_all_delay_max"]))
+        )
+        ensure_not_stopped()
+    _select_all_field(config)
+    pause_after_select = pause
+    if h["enabled"]:
+        pause_after_select *= random.uniform(
+            float(h["post_select_all_delay_scale_min"]),
+            float(h["post_select_all_delay_scale_max"]),
+        )
+    sleep_interruptible(pause_after_select)
     ensure_not_stopped()
-    pyautogui.write(str(price), interval=0.02)
-    sleep_interruptible(pause)
+    human_type_price_digits(config, price)
+    if h["enabled"]:
+        sleep_interruptible(pause * random.uniform(0.88, 1.18))
+    else:
+        sleep_interruptible(pause)
 
 
 def run_tool_sequence(config: dict[str, Any]) -> None:
@@ -1053,7 +1243,7 @@ def run_map_selection_transition(config: dict[str, Any], selected_map: str) -> f
     sx, sy = client_to_screen(config, point)
     log(f"click map point: screen={sx},{sy}", gui_verbose_only=True)
     if not bool(config.get("safety", {}).get("dry_run", False)):
-        pyautogui.click(sx, sy)
+        human_click_at_screen(config, sx, sy, log_detail=f"map_select.{selected_map}")
     sleep_interruptible(float(config.get("timing", {}).get("click_pause_seconds", 0.12)))
     sleep_interruptible(2.0)
     park_mouse_if_configured(config)
@@ -1146,7 +1336,7 @@ def _click_client_point(
         gui_verbose_only=True,
     )
     if not dry_run:
-        pyautogui.click(sx, sy)
+        human_click_at_screen(config, sx, sy, log_detail=label)
     sleep_interruptible(pause)
     if bool(config.get("safety", {}).get("park_mouse_after_clicks", True)):
         park_mouse_if_configured(config)
@@ -1171,7 +1361,7 @@ def _click_client_region_center(
         gui_verbose_only=True,
     )
     if not dry_run:
-        pyautogui.click(sx, sy)
+        human_click_at_screen(config, sx, sy, log_detail=label)
     sleep_interruptible(pause)
     if bool(config.get("safety", {}).get("park_mouse_after_clicks", True)):
         park_mouse_if_configured(config)
