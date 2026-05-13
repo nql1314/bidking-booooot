@@ -14,6 +14,34 @@ from .snapshot_players import (
 # ``automation.maps`` 档键：幽静别墅 / 沉船密封舱；快照 ``players.*.prices`` 为排名而非金币。
 SECRET_AUCTION_MAP_BUNDLE_KEYS: frozenset[str] = frozenset({"440", "450"})
 
+# 隐秘拍卖按「名次差 behind」缩放估价；可被 ``configs/pricing.maps/<档键>.json`` 内
+# ``pricing.secret_auction_rank_opponent_multipliers`` 覆盖。
+_DEFAULT_SECRET_AUCTION_RANK_MULTIPLIERS: dict[str, float] = {
+    "behind_ge_2": 1.08,
+    "behind_1": 1.045,
+    "behind_0": 1.012,
+    "behind_lt_0": 0.994,
+    "no_opponent_bid": 1.0,
+}
+
+
+def _secret_auction_rank_multipliers(config: dict[str, Any]) -> dict[str, float]:
+    out = dict(_DEFAULT_SECRET_AUCTION_RANK_MULTIPLIERS)
+    pr = config.get("pricing") if isinstance(config, dict) else None
+    if not isinstance(pr, dict):
+        return out
+    raw = pr.get("secret_auction_rank_opponent_multipliers")
+    if not isinstance(raw, dict):
+        return out
+    for key in out:
+        if key not in raw:
+            continue
+        try:
+            out[key] = float(raw[key])
+        except (TypeError, ValueError):
+            pass
+    return out
+
 
 def _parse_enable_opponent_bid_adjustment_flag(value: Any) -> bool:
     if isinstance(value, bool):
@@ -119,6 +147,9 @@ def apply_secret_auction_rank_opponent_adjustment(
     """
     隐秘拍卖图：``prices`` 为名次（越小越靠前），缺失表示该轮未出价。
     在无法还原对手金币价时，按「我方相对最优对手名次差」对当前估价做轻量缩放。
+
+    缩放系数来自 ``config[\"pricing\"][\"secret_auction_rank_opponent_multipliers\"]``
+    （由 ``configs/pricing.maps/<档键>.json`` 深合并写入）；缺省与历史硬编码一致。
     """
     bid_i = int(bid)
     r_no = int(round_no)
@@ -134,23 +165,26 @@ def apply_secret_auction_rank_opponent_adjustment(
         detail["skip"] = "no_self_rank_prev"
         return bid_i, None, detail
 
+    mults = _secret_auction_rank_multipliers(config)
+    detail["secret_auction_rank_multipliers"] = dict(mults)
+
     opp_best = detail.get("opponent_best_rank_prev")
     behind = detail.get("behind_by")
     if opp_best is None:
-        fin = int(round(bid_i * 0.988))
+        fin = int(round(bid_i * mults["no_opponent_bid"]))
         tag = "secret_rank_no_opp_bid"
     elif behind is not None:
         if behind >= 2:
-            fin = int(round(bid_i * 1.08))
+            fin = int(round(bid_i * mults["behind_ge_2"]))
             tag = "secret_rank_behind_far"
         elif behind == 1:
-            fin = int(round(bid_i * 1.045))
+            fin = int(round(bid_i * mults["behind_1"]))
             tag = "secret_rank_behind_1"
         elif behind == 0:
-            fin = int(round(bid_i * 1.012))
+            fin = int(round(bid_i * mults["behind_0"]))
             tag = "secret_rank_tied"
         else:
-            fin = int(round(bid_i * 0.994))
+            fin = int(round(bid_i * mults["behind_lt_0"]))
             tag = "secret_rank_ahead"
     else:
         fin = bid_i

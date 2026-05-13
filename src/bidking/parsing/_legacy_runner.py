@@ -186,27 +186,13 @@ def skill_log_entry_for_raw_pricing(event_type: str, data: dict) -> dict:
     与 ``GridWindow`` 写入 ``skill_logs`` 的 ``game_data`` 子集一致，
     供 ``build_raw_pricing_dict`` / 回放快照使用。
     """
-    gd = data.get("GameData")
-    if not isinstance(gd, dict):
-        return {"event_type": event_type, "game_data": {}, "received_at_unix": 0.0}
-    keys = (
-        "HeroSkillLog",
-        "MapSkillLog",
-        "ItemSkillLog",
-        "UserLog",
-        "Round",
-        "Uid",
-        "MapId",
-    )
-    out: Dict[str, Any] = {}
-    for k in keys:
-        if k not in gd:
-            continue
-        try:
-            out[k] = copy.deepcopy(gd[k])
-        except Exception:
-            out[k] = gd[k]
-    return {"event_type": event_type, "game_data": out, "received_at_unix": 0.0}
+    from .log_source import skill_log_game_data_subset
+
+    return {
+        "event_type": event_type,
+        "game_data": skill_log_game_data_subset(data),
+        "received_at_unix": 0.0,
+    }
 
 
 def parse_last_game_rounds(

@@ -118,7 +118,10 @@ def handle_s2c39(
     该消息是单条实时推送，不经过 CastRound 过滤，
     直接按 Uid 去重，防止后续 S2C_37 汇总时重复输出。
     """
-    logs = data.get('ItemSkillLog', [])
+    gd = data.get("GameData")
+    if not isinstance(gd, dict):
+        gd = {}
+    logs = data.get("ItemSkillLog") or gd.get("ItemSkillLog") or []
     if not logs:
         return
 

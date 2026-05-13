@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import webbrowser
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
@@ -19,11 +20,9 @@ from ..parsing._legacy_runner import parse_last_game, parse_last_game_rounds
 from ..ui.grid import GridWindow
 
 
-# 启动看板页顶栏说明（与历史 bot GUI 说明一致）
-_LAUNCH_TAB_BANNER = (
-    "免费分享 禁止倒卖 Q群 956946772 B站 "
-    "https://space.bilibili.com/1934731"
-)
+# 启动看板页顶栏说明（与历史 bot GUI 说明一致）；B 站地址单独做可点击超链接
+_LAUNCH_TAB_BANNER_PREFIX = "免费分享 禁止倒卖 Q群 956946772 B站（你的关注是我最大的动力） "
+_BILIBILI_SPACE_URL = "https://space.bilibili.com/1934731"
 
 
 def _effective_snapshot_path_for_viewer(cli_or_none: str | None) -> str | None:
@@ -153,14 +152,29 @@ def _show_start_page(default_log: str, csv_path: str) -> None:
     frame = tk.Frame(launch_tab, padx=14, pady=12)
     frame.pack(fill="both", expand=True)
 
+    banner_row = tk.Frame(frame)
+    banner_row.pack(anchor="w", fill="x", pady=(0, 10))
     tk.Label(
-        frame,
-        text=_LAUNCH_TAB_BANNER,
+        banner_row,
+        text=_LAUNCH_TAB_BANNER_PREFIX,
         fg="#3a4a5a",
         font=("微软雅黑", 9),
-        wraplength=720,
+    ).pack(side="left", anchor="nw")
+    bilibili_lbl = tk.Label(
+        banner_row,
+        text=_BILIBILI_SPACE_URL,
+        fg="#0066cc",
+        font=("微软雅黑", 9, "underline"),
+        cursor="hand2",
+        wraplength=520,
         justify="left",
-    ).pack(anchor="w", pady=(0, 10))
+    )
+    bilibili_lbl.pack(side="left", anchor="nw", fill="x", expand=True)
+
+    def _open_bilibili_space(_event: object) -> None:
+        webbrowser.open(_BILIBILI_SPACE_URL)
+
+    bilibili_lbl.bind("<Button-1>", _open_bilibili_space)
 
     tk.Label(frame, text="Log 文件路径").pack(anchor="w")
     path_row = tk.Frame(frame)
@@ -183,9 +197,15 @@ def _show_start_page(default_log: str, csv_path: str) -> None:
     tk.Radiobutton(frame, text="艾莎", variable=board_var, value="elsa").pack(anchor="w")
     tk.Radiobutton(
         frame,
-        text="通用（全角色，布局与艾莎一致）",
+        text="通用（完美适配：艾莎，老师，索菲，伊森，拉文）",
         variable=board_var,
         value="universal",
+    ).pack(anchor="w")
+    tk.Radiobutton(
+        frame,
+        text="艾哈迈德(快递站特化）",
+        variable=board_var,
+        value="ahmad",
     ).pack(anchor="w")
     # tk.Radiobutton(frame, text="拉文", variable=board_var, value="raven").pack(anchor="w")
 

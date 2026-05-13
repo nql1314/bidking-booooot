@@ -1,6 +1,13 @@
 {
   "pricing": {
-    "fallback_bid_price": 155555
+    "fallback_bid_price": 155555,
+    "secret_auction_rank_opponent_multipliers": {
+      "behind_ge_2": 1.1,
+      "behind_1": 1.05,
+      "behind_0": 1.02,
+      "behind_lt_0": 1.1,
+      "no_opponent_bid": 1.0
+    }
   },
   "automation": {
     "bid_cap_price": 1500000,
