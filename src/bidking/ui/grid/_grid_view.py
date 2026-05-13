@@ -373,7 +373,7 @@ class _PricingHoverTip:
 
 class GridWindow:
     """
-    BidKing 物品格局可视化窗口。
+    BidKing 策略可视化助手窗口。
 
     Args:
         state       : 解析后的 GameState（含物品知识）
@@ -1829,7 +1829,7 @@ class GridWindow:
         self._vacant_manual_suppress.clear()
 
         self.root.title(
-            f"BidKing 可视化鉴影 v{__version__} "
+            f"BidKing 策略可视化助手 v{__version__} "
             f"第 {self.state.current_round} 回合  ● LIVE"
             f"{self._board_mode_title_suffix()}"
         )
@@ -2262,7 +2262,8 @@ class GridWindow:
             fill=(200, 205, 215, 255),
         )
         dr.line([(cx, head_cy + r - 2), (cx, h - 4)], fill=(160, 42, 42, 255), width=2)
-        return ImageTk.PhotoImage(img)
+        # 必须指定 master，否则 Tcl 侧 image 名在重绘时会报 pyimageN not found
+        return ImageTk.PhotoImage(img, master=self.root)
 
     def _toggle_topmost_pin(self) -> None:
         """切换窗口总在最前（桌面最上层）。"""
@@ -2293,7 +2294,7 @@ class GridWindow:
         live_tag = "  ● LIVE" if self._log_path else ""
         self.root = tk.Tk()
         self.root.title(
-            f"BidKing 鉴影可视化 v{__version__} "
+            f"BidKing 策略可视化助手 v{__version__} "
             f"第 {self.state.current_round} 回合{live_tag}"
             f"{self._board_mode_title_suffix()}"
         )
@@ -2380,6 +2381,9 @@ class GridWindow:
             pin_kw["font"] = ("微软雅黑", 9)
         self._btn_topmost = tk.Button(**pin_kw)
         self._btn_topmost.pack(side="left", padx=(0, 6))
+        if self._topmost_pin_photo is not None:
+            # 防止个别环境下 Button 与 PhotoImage 引用链断裂
+            self._btn_topmost.image = self._topmost_pin_photo  # type: ignore[attr-defined]
 
         if self._home_shell is not None:
             tk.Button(
