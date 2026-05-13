@@ -32,8 +32,34 @@ def _minimal_config(self_uid: str) -> dict:
     return {"board_snapshot": {"self_user_uid": self_uid, "self_name_substring": ""}}
 
 
+def test_secret_rank_behind_1_respects_map_pricing_multipliers() -> None:
+    """``pricing.secret_auction_rank_opponent_multipliers`` 覆盖 behind==1 系数。"""
+    cfg = {
+        **_minimal_config("941456831344888"),
+        "pricing": {
+            "secret_auction_rank_opponent_multipliers": {"behind_1": 1.1}
+        },
+    }
+    snap = {
+        "game_state": {
+            "map_id": 4402,
+            "players": {
+                "941456831344888": {"name": "self", "prices": {"0": 2, "1": 2}},
+                "111": {"name": "a", "prices": {"0": 3, "1": 1}},
+            },
+        }
+    }
+    out, tag, detail = apply_secret_auction_rank_opponent_adjustment(
+        cfg, 100_000, 3, board_snapshot=snap, pricing={}
+    )
+    assert detail.get("behind_by") == 1
+    assert detail.get("secret_auction_rank_multipliers", {}).get("behind_1") == 1.1
+    assert tag == "secret_rank_behind_1"
+    assert out == 110_000
+
+
 def test_secret_rank_behind_1_scales_bid() -> None:
-    """上一轮名次：我方 2、最优对手 1 → behind_by=1 → 约 +4.5%。"""
+    """上一轮名次：我方 2、最优对手 1 → behind_by=1 → 约 +4.5%（默认系数）。"""
     cfg = _minimal_config("941456831344888")
     snap = {
         "game_state": {
