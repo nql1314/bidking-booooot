@@ -3,8 +3,9 @@
 
 from __future__ import annotations
 
-from typing import Dict, Set, Tuple, Union
+from typing import Any, Dict, Optional, Set, Tuple, Union
 
+from ...analysis.scan_inference import apply_census_absent_qualities_from_raw_pricing
 from ...parsing.state import GameState, ItemKnowledge
 
 GRID_COLS = 10
@@ -109,6 +110,8 @@ def reconcile_overlay_after_refresh(
     manual_shapes: Dict[str, Tuple[int, int, int, int]],
     phantom_items: Dict[str, ItemKnowledge],
     phantom_quality_pref: Dict[str, Union[int, str]],
+    *,
+    raw_pricing: Optional[Dict[str, Any]] = None,
 ) -> None:
     """日志刷新后：清掉已由协议锁外形的手动矩形、删掉与已确认物品重叠的幽灵、同步扫描负向约束。"""
     strip_manual_shapes_when_log_locked(state.items, manual_shapes)
@@ -116,3 +119,4 @@ def reconcile_overlay_after_refresh(
         state.items, phantom_items, manual_shapes, phantom_quality_pref
     )
     apply_scan_history_to_phantom_items(phantom_items, state)
+    apply_census_absent_qualities_from_raw_pricing(state.items, phantom_items, raw_pricing)
