@@ -880,6 +880,15 @@ def build_raw_pricing_dict(
             if direct["q6_price_avg"] is None and agg["avg_price"] is not None:
                 direct["q6_price_avg"] = float(agg["avg_price"])
 
+    # 全局：件数、总隐藏格、均格 与分档相同，满足 grid_count ≈ count * grid_avg，由其二可保守补第三项。
+    _infer_tier_count_grid_price(
+        direct,
+        count_k="total_count",
+        grid_k="total_grid_count",
+        avg_grid_k="total_grid_avg",
+        avg_price_k=None,
+        total_price_k=None,
+    )
 
     csv_items_combo = _load_item_prices_for_combo()
     for _pfx, _q in (("q4_", 4), ("q5_", 5), ("q6_", 6)):
