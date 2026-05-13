@@ -197,7 +197,7 @@ def _show_start_page(default_log: str, csv_path: str) -> None:
     tk.Radiobutton(frame, text="艾莎", variable=board_var, value="elsa").pack(anchor="w")
     tk.Radiobutton(
         frame,
-        text="通用（完美适配：艾莎，老师，索菲，伊森，拉文）",
+        text="通用（完美适配：艾莎，老师，索菲，伊森，拉文， 其他角色技能未解析，基本可用）",
         variable=board_var,
         value="universal",
     ).pack(anchor="w")
