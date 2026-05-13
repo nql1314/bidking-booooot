@@ -16,20 +16,26 @@ def resource_path(relative_path: str) -> str:
     """返回 ``data/<relative_path>`` 的绝对路径。
 
     优先级：
-      1. PyInstaller ``sys._MEIPASS`` 下 ``data/`` 子目录
-      2. 项目根 ``data/``（由 :func:`bidking.config.paths.data_dir` 解析）
-      3. 兜底当前工作目录
+      1. PyInstaller ``sys._MEIPASS`` 下 ``data/`` 子目录（打进 onefile 包内的资源）
+      2. 冻结程序：与 ``sys.executable`` 同目录的 ``data/``（常见「exe 与 data 同级」分发）
+      3. 项目根 ``data/``（由 :func:`bidking.config.paths.data_dir` 解析）
+      4. 兜底当前工作目录下的 ``data/``
     """
     base = getattr(sys, '_MEIPASS', None)
     if base:
         candidate = os.path.join(base, "data", relative_path)
         if os.path.exists(candidate):
             return candidate
+    if getattr(sys, "frozen", False):
+        exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+        candidate = os.path.join(exe_dir, "data", relative_path)
+        if os.path.isfile(candidate):
+            return candidate
     try:
         from bidking.config.paths import data_dir
         return str(data_dir() / relative_path)
     except Exception:
-        return os.path.join(os.getcwd(), relative_path)
+        return os.path.join(os.getcwd(), "data", relative_path)
 
 
 def default_game_log_path() -> str:
