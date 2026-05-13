@@ -6,15 +6,15 @@ import json
 from pathlib import Path
 from typing import Any
 
+from ..config.paths import resolve_board_snapshot_path
+
 
 def load_board_snapshot_if_enabled(config: dict[str, Any]) -> dict[str, Any] | None:
     bs = config.get("board_snapshot") or {}
     if not bs.get("enabled"):
         return None
     raw_path = str(bs.get("path") or "").strip()
-    if not raw_path:
-        return None
-    path = Path(raw_path)
+    path = resolve_board_snapshot_path(raw_path)
     if not path.is_file():
         return None
     try:

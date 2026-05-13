@@ -30,7 +30,13 @@ from ..config.map_runtime_overlay import (
     resolve_automation_map_config_key,
     strategy_map_combo_entries,
 )
-from ..config.paths import config_overlay_path, configs_dir, pricing_map_overlay_path, runtime_path
+from ..config.paths import (
+    board_snapshot_default_path,
+    config_overlay_path,
+    configs_dir,
+    pricing_map_overlay_path,
+    runtime_path,
+)
 from ..config.pricing import deep_merge
 from ..config.runtime import apply_board_snapshot_env_overrides
 
@@ -187,14 +193,14 @@ class BotConfigPanel:
         ttk.Label(
             snap_box,
             text=(
-                "写入 configs/config.json 的 board_snapshot：快照 JSON 路径固定为用户文档"
-                "目录下的 bidking/board_snapshot.json；「己方 UID」与「名称关键字」至少填其一。"
+                "写入 configs/config.json 的 board_snapshot：快照 JSON 默认路径为项目根下 "
+                "``data/board_snapshot.json``（与 item_prices 等同目录）；「己方 UID」与「名称关键字」至少填其一。"
             ),
             wraplength=720,
         ).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 6))
 
-        fixed_snapshot_path = str(self.default_board_snapshot_path()).replace("\\", "/")
-        ttk.Label(snap_box, text="快照文件 path（固定）").grid(
+        fixed_snapshot_path = str(board_snapshot_default_path()).replace("\\", "/")
+        ttk.Label(snap_box, text="快照文件 path（默认）").grid(
             row=1, column=0, sticky="w", pady=2,
         )
         ttk.Label(snap_box, text=fixed_snapshot_path).grid(
@@ -290,10 +296,7 @@ class BotConfigPanel:
     # ── 表单 ↔ 模型 ────────────────────────────────────────────────────────
 
     def default_board_snapshot_path(self) -> Path:
-        docs = Path.home() / "Documents"
-        if not docs.exists():
-            docs = Path.home()
-        return (docs / "bidking" / "board_snapshot.json").resolve()
+        return board_snapshot_default_path()
 
     def _refresh_map_combo_from_config(self) -> None:
         try:
@@ -403,7 +406,7 @@ class BotConfigPanel:
 
     def _save_snapshot_form(self) -> None:
         try:
-            path_snap = str(self.default_board_snapshot_path()).replace("\\", "/")
+            path_snap = "data/board_snapshot.json"
             uid = str(self.self_user_uid_var.get()).strip()
             name_sub = str(self.self_name_substring_var.get()).strip()
             if "BIDKING_SELF_USER_UID" in os.environ:
