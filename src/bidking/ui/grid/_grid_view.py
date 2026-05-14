@@ -72,7 +72,7 @@ from ...analysis._board_pricing import (
 from ...analysis import grid_overlay as _grid_overlay
 from ...analysis.raw_pricing import build_raw_pricing_dict
 from ...analysis.snapshot import game_state_to_json, item_knowledge_to_json
-from ...config.runtime import infer_unknown_contour_shapes_enabled, load_runtime
+from ...config.runtime import load_runtime
 from ...pricing.compute import compute_price
 from ._grid_overlay_payload import (
     build_grid_overlay_export_dict,
@@ -540,9 +540,7 @@ class GridWindow:
         self._map_category_weights = map_category_weights
         self._home_shell: Optional[tk.Tk] = home_shell
 
-        rt0 = load_runtime()
-        gv_rt = rt0.grid_view
-        self._infer_unknown_contour_shapes = infer_unknown_contour_shapes_enabled(rt0)
+        gv_rt = load_runtime().grid_view
         gv_d = gv_rt if isinstance(gv_rt, dict) else {}
         _ub = gv_d.get("unknown_bg")
         _ub_s = str(_ub).strip() if _ub is not None else ""
@@ -587,8 +585,9 @@ class GridWindow:
         self._compute_max_size_stack: List[str] = []
         # 用户右键手动剔除的空置候选格 (row,col)，不计入空置数、不画橘红（与扩展剩余格一致）
         self._vacant_manual_suppress: Set[Tuple[int, int]] = set()
-        # 诈骗格前缀区缓存（增量：仅重判历史 fraud + 新增空格）
-        self._fraud_zone_prefix_cache = _grid_overlay.FraudZonePrefixCache()
+        # 疑似诈骗格集合缓存：(limit, id(occupied), placed_fingerprint) → 形状推断变时失效
+        self._empty_zone_fraud_memo: Optional[tuple] = None
+        self._empty_zone_fraud_cells: Set[Tuple[int, int]] = set()
 
         # 手动画框的幽灵物品：uid(phantom_N) → ItemKnowledge
         self._phantom_items: Dict[str, ItemKnowledge] = {}
@@ -755,7 +754,6 @@ class GridWindow:
                 self.state.items, self._phantom_items
             ),
             raw_pricing=rp,
-            infer_unknown_contour_shapes=self._infer_unknown_contour_shapes,
         )
         self._infer_shapes = {
             str(uid): (int(t[0]), int(t[1]), int(t[2]), int(t[3]))
@@ -1265,12 +1263,19 @@ class GridWindow:
         if bid > limit:
             return False
         placed = self._fraud_placed_items_for_overlay()
-        return (row, col) in _grid_overlay.fraud_empty_cells_in_zone_prefix(
-            occupied,
+        memo_key = (
             limit,
-            placed,
-            cache=self._fraud_zone_prefix_cache,
+            id(occupied),
+            tuple((p.min_bid, p.w, p.h, p.cells) for p in placed),
         )
+        if self._empty_zone_fraud_memo != memo_key:
+            self._empty_zone_fraud_memo = memo_key
+            self._empty_zone_fraud_cells = (
+                _grid_overlay.fraud_empty_cells_in_zone_prefix(
+                    occupied, limit, placed
+                )
+            )
+        return (row, col) in self._empty_zone_fraud_cells
 
     def _cell_is_vacant_manual_suppress_eligible(self, row: int, col: int) -> bool:
         """是否为「空置候选」格：可右键手动剔除/恢复；不受诈骗格规则限制。"""
@@ -1309,7 +1314,6 @@ class GridWindow:
             vacant_manual_suppress=set(self._vacant_manual_suppress),
             board_snapshot=self._vacant_scan_context_snapshot(),
             placed_items=self._fraud_placed_items_for_overlay(),
-            fraud_zone_cache=self._fraud_zone_prefix_cache,
         )
         g = d.get("geometric")
         if g is not None:
@@ -1782,7 +1786,6 @@ class GridWindow:
             max_box_id=max_anchor_box_id_from_overlay_ui(
                 self.state.items, self._phantom_items
             ),
-            infer_unknown_contour_shapes=self._infer_unknown_contour_shapes,
         )
         inf = export.get("infer_shapes") or {}
         self._infer_shapes = {
@@ -1806,7 +1809,6 @@ class GridWindow:
             vacant_manual_suppress=set(self._vacant_manual_suppress),
             board_snapshot=vacant_ctx,
             placed_items=self._fraud_placed_items_for_overlay(),
-            fraud_zone_cache=self._fraud_zone_prefix_cache,
         )
         return export
 
@@ -1975,7 +1977,6 @@ class GridWindow:
         self._unknown_cell_quality_pref.clear()
         self._manual_shapes_restore_backup = None
         self._vacant_manual_suppress.clear()
-        self._fraud_zone_prefix_cache.invalidate()
 
         self.root.title(
             f"BidKing 策略可视化助手 v{__version__} "
