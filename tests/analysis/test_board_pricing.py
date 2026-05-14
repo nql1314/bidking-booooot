@@ -520,6 +520,43 @@ class BoardPricingTests(unittest.TestCase):
         )
         self.assertGreaterEqual(len(inf), 1)
 
+    def test_infer_shapes_respects_disabled_flag(self) -> None:
+        """pricing 侧关闭推断时：``compute_grid_overlay_infer_shapes`` 返回空且不依赖 CSV。"""
+        from bidking.parsing.state import GameState, ItemKnowledge
+
+        st = GameState()
+        st.map_id = 2101
+        st.items["x"] = ItemKnowledge(
+            uid="x",
+            box_id=0,
+            box_id_confirmed=False,
+            shape=None,
+            quality=5,
+        )
+        occ = {(0, 0)}
+        occ_copy = set(occ)
+        inf = grid_overlay_mod.compute_grid_overlay_infer_shapes(
+            game_state=st,
+            manual_shapes={},
+            occupied_cells=occ_copy,
+            vacant_manual_suppress=set(),
+            max_box_id=30,
+            raw_pricing={},
+            infer_unknown_contour_shapes=False,
+        )
+        self.assertEqual(inf, {})
+        self.assertEqual(occ_copy, occ)
+
+    def test_infer_unknown_contour_shapes_enabled_from_raw(self) -> None:
+        from bidking.config.runtime import infer_unknown_contour_shapes_enabled
+
+        self.assertTrue(infer_unknown_contour_shapes_enabled({"pricing": {}}))
+        self.assertFalse(
+            infer_unknown_contour_shapes_enabled(
+                {"pricing": {"infer_unknown_contour_shapes": False}}
+            )
+        )
+
     def test_infer_pseudo_blocked_keeps_prior_infer_on_foreign_anchor(self) -> None:
         """先前推断占住的格不能再借 ``baseline - self_base`` 排除误放行。"""
         pb = grid_overlay_mod._infer_pseudo_blocked(
