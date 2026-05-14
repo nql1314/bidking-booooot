@@ -13,10 +13,17 @@ from bidking.analysis.grid_overlay import (
 )
 
 
-def _fp(cells: set, w: int, h: int) -> FraudPlacedItem:
+def _fp(
+    cells: set,
+    w: int,
+    h: int,
+    *,
+    anchor_bid: int | None = None,
+) -> FraudPlacedItem:
     fs = frozenset(cells)
     min_bid = min(r * GRID_COLS + c for r, c in fs)
-    return FraudPlacedItem(cells=fs, w=w, h=h, min_bid=min_bid)
+    ab = int(anchor_bid) if anchor_bid is not None else min_bid
+    return FraudPlacedItem(cells=fs, w=w, h=h, min_bid=min_bid, anchor_bid=ab)
 
 
 class FraudEmptyCellsTests(unittest.TestCase):
@@ -27,14 +34,49 @@ class FraudEmptyCellsTests(unittest.TestCase):
             fraud_empty_cells_in_zone_prefix(occ, 20, None), set()
         )
 
-    def test_far_a_outside_prefix_cannot_reach_cells(self) -> None:
-        # C 在 prefix 内；A 的 min_bid 虽大于 bid(C)，但 footprint 超出 limit，BFS 无法碰到 A → 不解释。
+    def test_far_a_anchored_beyond_limit_can_still_explain(self) -> None:
+        # A 锚在 max_anchor 外：只要 min_bid > bid(C) 且棋盘内画得开，仍可解释 C。
         c = (0, 0)
         far = _fp({(0, 9)}, 1, 1)
         occ = {(0, 9)}
         placed = [far]
         fraud = fraud_empty_cells_in_zone_prefix(occ, 7, placed)
-        self.assertIn(c, fraud)
+        self.assertNotIn(c, fraud)
+
+    def test_prefix_exterior_empty_corridor_reaches_explainer(self) -> None:
+        """顶左画形：更早占位并集按 ``B.min_bid < A.min_bid``。"""
+        # (22,4)=224 早铺；(23,4)=234 晚铺；(22,5)=225 为空，需经 (23,5)=235 空走廊到 234。
+        early = _fp({(22, 4)}, 1, 1)
+        late = _fp({(23, 4)}, 1, 1)
+        occ = {(22, 4), (23, 4)}
+        placed = [early, late]
+        fraud = fraud_empty_cells_in_zone_prefix(occ, 234, placed)
+        self.assertNotIn((22, 5), fraud)
+
+    def test_big_shape_explains_without_paint_bid_cap(self) -> None:
+        # 顶左画形不对 P 内 bid 设上界：大矩形 + 低 max_anchor 仍应能解释左侧空格。
+        early = _fp({(23, 2)}, 1, 1)
+        big_cells = {
+            (25, 2),
+            (25, 3),
+            (26, 2),
+            (26, 3),
+            (27, 2),
+            (27, 3),
+            (28, 2),
+            (28, 3),
+        }
+        big = FraudPlacedItem(
+            cells=frozenset(big_cells),
+            w=2,
+            h=4,
+            min_bid=252,
+            anchor_bid=252,
+        )
+        occ = {(23, 2)} | big_cells
+        placed = [early, big]
+        fraud = fraud_empty_cells_in_zone_prefix(occ, 252, placed)
+        self.assertNotIn((23, 4), fraud)
 
     def test_adjacent_later_item_explains_hole(self) -> None:
         occ = {(0, 1)}
@@ -62,6 +104,7 @@ class FraudEmptyCellsTests(unittest.TestCase):
         self.assertEqual(items[0].w, 1)
         self.assertEqual(items[0].h, 1)
         self.assertEqual(items[0].cells, frozenset({(0, 7)}))
+        self.assertEqual(items[0].anchor_bid, 7)
 
 
 if __name__ == "__main__":
