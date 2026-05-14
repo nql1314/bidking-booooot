@@ -12,7 +12,12 @@ from .paths import (
     pricing_map_overlay_path,
     pricing_map_override_path,
 )
-from .runtime import RuntimeConfig, apply_board_snapshot_env_overrides, load_runtime
+from .runtime import (
+    RuntimeConfig,
+    apply_board_snapshot_env_overrides,
+    infer_unknown_contour_shapes_enabled,
+    load_runtime,
+)
 from .pricing import load_pricing, resolve_for, deep_merge
 from .map_runtime_overlay import merged_runtime_with_map_pricing
 
@@ -30,6 +35,7 @@ __all__ = [
     "RuntimeConfig",
     "apply_board_snapshot_env_overrides",
     "load_runtime",
+    "infer_unknown_contour_shapes_enabled",
     "load_pricing",
     "resolve_for",
     "deep_merge",

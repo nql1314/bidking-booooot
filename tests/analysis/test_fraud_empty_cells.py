@@ -8,6 +8,7 @@ import unittest
 from bidking.analysis.grid_overlay import (
     GRID_COLS,
     FraudPlacedItem,
+    FraudZonePrefixCache,
     fraud_empty_cells_in_zone_prefix,
     fraud_placed_items_from_merged_items,
 )
@@ -49,7 +50,27 @@ class FraudEmptyCellsTests(unittest.TestCase):
         fraud = fraud_empty_cells_in_zone_prefix(occ, 10, placed)
         self.assertIn((0, 6), fraud)
 
-    def test_fraud_placed_items_from_merged_items_shape_none(self) -> None:
+    def test_fraud_zone_prefix_cache_same_occupied_skips_full_scan(self) -> None:
+        cache = FraudZonePrefixCache()
+        limit = 10
+        placed = [_fp({(0, 2)}, 1, 1)]
+        occ = {(0, 2)}
+        a = fraud_empty_cells_in_zone_prefix(occ, limit, placed, cache=cache)
+        b = fraud_empty_cells_in_zone_prefix(set(occ), limit, placed, cache=cache)
+        self.assertEqual(a, b)
+        full = fraud_empty_cells_in_zone_prefix(occ, limit, placed, cache=None)
+        self.assertEqual(a, full)
+
+    def test_fraud_zone_prefix_cache_incremental_matches_full(self) -> None:
+        cache = FraudZonePrefixCache()
+        limit = 15
+        placed = [_fp({(0, 3)}, 1, 1)]
+        occ_a = {(0, 3)}
+        fraud_empty_cells_in_zone_prefix(occ_a, limit, placed, cache=cache)
+        occ_b = set()
+        inc = fraud_empty_cells_in_zone_prefix(occ_b, limit, placed, cache=cache)
+        full = fraud_empty_cells_in_zone_prefix(occ_b, limit, placed, cache=None)
+        self.assertEqual(inc, full)
         merged = {
             "u1": {
                 "box_id": 7,
