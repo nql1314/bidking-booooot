@@ -147,3 +147,65 @@ def infer_unknown_contour_shapes_enabled(
     if isinstance(v, str):
         return v.strip().lower() in ("1", "true", "yes", "on")
     return True
+
+
+def infer_fraud_empty_cells_algorithm(
+    cfg: Optional[Union[RuntimeConfig, Mapping[str, Any]]] = None,
+) -> str:
+    """
+    空置前缀区「疑似诈骗格」剔除所用算法名，供 UI 与 :func:`bidking.analysis.grid_overlay.vacant_dict_from_board_snapshot` 使用。
+
+    读取合并后配置 ``grid_view.fraud_empty_cells_algorithm``：
+
+    - ``tiling``（默认）：铺板可解释性，即 :func:`bidking.analysis.grid_overlay.fraud_empty_cells_in_zone_prefix`；
+    - ``tiling_n``：铺板后再去掉 BoxId ``<= limit - n`` 的诈骗候选；``n`` 见 :func:`infer_fraud_empty_cells_tiling_n`；
+    - ``none``（及 ``off`` / ``disabled`` / ``false`` / ``0``）：不做诈骗判断，诈骗格集合恒为空。
+
+    未知非空字符串时回退为 ``tiling``。
+    """
+    raw: Mapping[str, Any]
+    if cfg is None:
+        raw = load_runtime().raw
+    elif isinstance(cfg, RuntimeConfig):
+        raw = cfg.raw
+    else:
+        raw = cfg
+    gv = raw.get("grid_view")
+    if not isinstance(gv, dict):
+        return "tiling"
+    v = gv.get("fraud_empty_cells_algorithm", "tiling")
+    s = str(v).strip().lower()
+    if s in ("none", "off", "disabled", "false", "0"):
+        return "none"
+    if s in ("tiling_n", "tilingn"):
+        return "tiling_n"
+    if s in ("tiling", "tile", "explainability", ""):
+        return "tiling"
+    return "tiling"
+
+
+def infer_fraud_empty_cells_tiling_n(
+    cfg: Optional[Union[RuntimeConfig, Mapping[str, Any]]] = None,
+) -> int:
+    """
+    ``tiling_n`` 诈骗格算法所用的整数 ``n``（来自 ``grid_view.fraud_empty_cells_tiling_n``）。
+
+    仅在 ``fraud_empty_cells_algorithm`` 为 ``tiling_n`` 时参与计算；解析失败或缺失时返回 ``0``
+    （与纯 ``tiling`` 等价）。返回值恒为非负整数。
+    """
+    raw: Mapping[str, Any]
+    if cfg is None:
+        raw = load_runtime().raw
+    elif isinstance(cfg, RuntimeConfig):
+        raw = cfg.raw
+    else:
+        raw = cfg
+    gv = raw.get("grid_view")
+    if not isinstance(gv, dict):
+        return 0
+    v = gv.get("fraud_empty_cells_tiling_n", 0)
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, n)

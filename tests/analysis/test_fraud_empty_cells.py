@@ -8,8 +8,13 @@ import unittest
 from bidking.analysis.grid_overlay import (
     GRID_COLS,
     FraudPlacedItem,
+    fraud_empty_cells_for_algorithm,
     fraud_empty_cells_in_zone_prefix,
     fraud_placed_items_from_merged_items,
+)
+from bidking.config.runtime import (
+    infer_fraud_empty_cells_algorithm,
+    infer_fraud_empty_cells_tiling_n,
 )
 
 
@@ -27,6 +32,60 @@ def _fp(
 
 
 class FraudEmptyCellsTests(unittest.TestCase):
+    def test_fraud_empty_cells_for_algorithm_none_always_empty(self) -> None:
+        occ = {(0, 3)}
+        placed = [_fp({(0, 3)}, 1, 1)]
+        tiling = fraud_empty_cells_in_zone_prefix(occ, 10, placed)
+        self.assertIn((0, 6), tiling)
+        self.assertEqual(
+            fraud_empty_cells_for_algorithm("none", occ, 10, placed),
+            set(),
+        )
+
+    def test_infer_fraud_empty_cells_algorithm_tiling_n(self) -> None:
+        self.assertEqual(
+            infer_fraud_empty_cells_algorithm(
+                {"grid_view": {"fraud_empty_cells_algorithm": "tiling_n"}}
+            ),
+            "tiling_n",
+        )
+
+    def test_infer_fraud_empty_cells_tiling_n(self) -> None:
+        self.assertEqual(infer_fraud_empty_cells_tiling_n({"grid_view": {}}), 0)
+        self.assertEqual(
+            infer_fraud_empty_cells_tiling_n(
+                {"grid_view": {"fraud_empty_cells_tiling_n": -3}}
+            ),
+            0,
+        )
+
+    def test_fraud_empty_cells_for_algorithm_tiling_n_strips_low_bids(self) -> None:
+        # (0,6) bid=6 在纯 tiling 下为诈骗格；tiling_n 且 n=4、limit=10 时 thr=6，去掉 bid<=6
+        occ = {(0, 3)}
+        placed = [_fp({(0, 3)}, 1, 1)]
+        full = fraud_empty_cells_in_zone_prefix(occ, 10, placed)
+        self.assertIn((0, 6), full)
+        tn = fraud_empty_cells_for_algorithm(
+            "tiling_n", occ, 10, placed, fraud_empty_cells_tiling_n=4
+        )
+        self.assertNotIn((0, 6), tn)
+        tn0 = fraud_empty_cells_for_algorithm(
+            "tiling_n", occ, 10, placed, fraud_empty_cells_tiling_n=0
+        )
+        self.assertEqual(tn0, full)
+
+    def test_infer_fraud_empty_cells_algorithm_from_raw(self) -> None:
+        self.assertEqual(
+            infer_fraud_empty_cells_algorithm({"grid_view": {}}),
+            "tiling",
+        )
+        self.assertEqual(
+            infer_fraud_empty_cells_algorithm(
+                {"grid_view": {"fraud_empty_cells_algorithm": "none"}}
+            ),
+            "none",
+        )
+
     def test_no_placed_items_returns_empty_fraud(self) -> None:
         occ = {(0, 1), (1, 0)}
         self.assertEqual(fraud_empty_cells_in_zone_prefix(occ, 20, []), set())
