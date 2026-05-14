@@ -47,7 +47,7 @@ import time
 from datetime import datetime
 import tkinter as tk
 from pathlib import Path
-from tkinter import messagebox, ttk
+from tkinter import font as tkfont, messagebox, ttk
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 
 from ... import __version__
@@ -107,7 +107,8 @@ QUALITY_BG: Dict[int, str] = {
 }
 # 文字色（所有品质都用白）
 QUALITY_FG: Dict[int, str] = {k: "#ffffff" for k in range(1, 7)}
-UNKNOWN_BG = "#fbd99a"  # 未知品质，与空格子和已知品质都有明显区分
+# 未知品质底色默认值；可被 ``configs/runtime.json``（及 ``config.json`` 覆盖层）中 ``grid_view.unknown_bg`` 覆盖。
+UNKNOWN_BG = "#fbd99a"
 UNKNOWN_FG = "#ffffff"
 EMPTY_BG = "#2a2a3a"
 GRID_LINE = "#505060"
@@ -538,6 +539,12 @@ class GridWindow:
         # 地图类别权重入口：category tag -> multiplier，默认由 item_db 使用 1.0。
         self._map_category_weights = map_category_weights
         self._home_shell: Optional[tk.Tk] = home_shell
+
+        gv_rt = load_runtime().grid_view
+        gv_d = gv_rt if isinstance(gv_rt, dict) else {}
+        _ub = gv_d.get("unknown_bg")
+        _ub_s = str(_ub).strip() if _ub is not None else ""
+        self._unknown_bg = _ub_s if _ub_s else UNKNOWN_BG
 
         # 实时 tail：关闭画板或返回主页时置位，供后台线程退出
         self._monitor_stop = threading.Event()
@@ -1106,8 +1113,15 @@ class GridWindow:
         """返回当前格子的精确价或期望价（与合并 ``items`` + ``grid_overlay`` 后的定价一致）。"""
         return estimate_snapshot_item_price_for_uid(self._make_board_snapshot(), uid)
 
-    def _info_summary_text(self) -> str:
-        """顶部状态栏：物品总格数、画版总格数（含空置）、均格；橙/红（含手画）。"""
+    @staticmethod
+    def _stats_from_merged_items(board_snapshot: Dict[str, Any]) -> Tuple[int, int, int, int, int, int, int]:
+        """
+        与 ``analysis.grid_overlay.merged_items_dict`` 一致：有 ``box_id`` 的占位行总格数及 Q5/Q6/
+        品质未知（``quality`` 为空）格。
+
+        形状取合并表中的 ``shape``（已含手动画框、推断外形、手动确认投影）。
+        """
+        merged = _grid_overlay.merged_items_dict(board_snapshot)
         total_cells = 0
         item_count = 0
         q5_count = 0
@@ -1115,43 +1129,62 @@ class GridWindow:
         q5_cells = 0
         q6_cells = 0
         unknown_cells = 0
-
-        def _accum_orange_red(uid: str, k: ItemKnowledge, q: Optional[int]) -> None:
-            nonlocal total_cells, item_count, q5_count, q6_count, q5_cells, q6_cells, unknown_cells
-            if k.box_id is None:
-                return
-            w, h = self._effective_shape_wh(uid, k)
+        for row in merged.values():
+            if not isinstance(row, dict):
+                continue
+            if row.get("box_id") is None:
+                continue
+            w, h = GridWindow._shape_wh(row.get("shape"))
             cells = w * h
             total_cells += cells
             item_count += 1
-            if q == 5:
+            q = row.get("quality")
+            qi: Optional[int]
+            if q is None:
+                qi = None
+            else:
+                try:
+                    qi = int(q)
+                except (TypeError, ValueError):
+                    qi = None
+            if qi == 5:
                 q5_count += 1
                 q5_cells += cells
-            elif q == 6:
+            elif qi == 6:
                 q6_count += 1
                 q6_cells += cells
-            elif q is None:
+            elif qi is None:
                 unknown_cells += cells
+        return (
+            total_cells,
+            item_count,
+            q5_count,
+            q5_cells,
+            q6_count,
+            q6_cells,
+            unknown_cells,
+        )
 
-        for uid, k in self.state.items.items():
-            _accum_orange_red(uid, k, self._display_quality(uid, k))
+    def _tooltip_text_map_merged_stats(self) -> str:
+        return (
+            "画板金（Q5）/ 红（Q6）件数与格数\n"
+            "与 ``merged_items_dict`` 一致（日志 + 幽灵、手动画框、推断外形、偏好与手动确认投影）。\n\n"
+            "「未知」：合并表中 ``quality`` 仍为空的占位物品总格数（品质未定）。\n\n"
+            "「空置」：与 ``pricing.vacant``、图例原「估算总价」旁空置数同源（橘红候选区几何计数 / 200009 总格减占位）。"
+        )
 
-        for uid, k in self._phantom_items.items():
-            q_stat: Optional[int]
-            manual_item = self._valid_manual_confirm_item(uid, k)
-            if manual_item is not None:
-                q_stat = manual_item.quality
-            elif k.quality is not None:
-                q_stat = k.quality
-            else:
-                p = self._phantom_quality_pref.get(uid)
-                if p == PHANTOM_Q_INFER:
-                    q_stat = self._display_quality(uid, k)
-                elif isinstance(p, int) and 1 <= p <= 6:
-                    q_stat = p
-                else:
-                    q_stat = 5
-            _accum_orange_red(uid, k, q_stat)
+    def _info_summary_text(self) -> str:
+        """第二行信息栏：总格、画板格（含空置）、均格；金/红与品质未知格（与 merged_items_dict 一致）。"""
+        snap = self._make_board_snapshot(raw_pricing=self._last_raw_pricing)
+        (
+            total_cells,
+            item_count,
+            q5_count,
+            q5_cells,
+            q6_count,
+            q6_cells,
+            unknown_cells,
+        ) = self._stats_from_merged_items(snap)
 
         avg_cells = total_cells / item_count if item_count else 0.0
         empty_zone = self._compute_empty_zone_count()
@@ -1184,10 +1217,10 @@ class GridWindow:
             f"地图: {self.state.map_id}   第 {self.state.current_round} 回合   "
             f"已知物品: {len(self.state.items)} 件   "
             f"当前物品总格数: {total_cells}   "
-            f"当前画版格数: {board_cells}   "
+            f"当前画板格数: {board_cells}   "
             f"平均格数: {avg_cells:.2f}   "
-            f"橙（含手画）: {q5_count} 件 {q5_cells}格   "
-            f"红（含手画）: {q6_count} 件 {q6_cells}格   "
+            f"金(Q5): {q5_count} 件 {q5_cells}格   "
+            f"红(Q6): {q6_count} 件 {q6_cells}格   "
             f"未知: {unknown_cells}格"
             f"{top_cats}"
             f"{self._board_mode_info_suffix()}"
@@ -1259,6 +1292,12 @@ class GridWindow:
             vacant_manual_suppress=set(self._vacant_manual_suppress),
             board_snapshot=self._vacant_scan_context_snapshot(),
         )
+        g = d.get("geometric")
+        if g is not None:
+            try:
+                return int(g)
+            except (TypeError, ValueError):
+                return None
         return d.get("effective_count")
 
     def _create_phantom(
@@ -1978,12 +2017,12 @@ class GridWindow:
         ]
         if n_empty is not None:
             lines.append(
-                f"提示：状态栏「空置 {n_empty} 格」与 ``grid_overlay.vacant`` 一致；"
-                "定价 ``pricing.vacant`` 优先与 ``grid_overlay.vacant`` 一致（快照已写出时直接读取），否则与 ``vacant_dict_from_board_snapshot`` 计算结果一致。"
+                f"提示：空置 {n_empty} 格（几何/200009 与橘红层同源）现显示在顶栏「地图…未知」后的「空置」；"
+                "定价 ``pricing.vacant`` 与 ``grid_overlay.vacant`` / ``vacant_dict_from_board_snapshot`` 一致。"
             )
         else:
             lines.append(
-                "提示：空置计数暂不可用（例如 ``compute_overlay_vacant_dict`` 未返回 effective_count）。"
+                "提示：空置计数暂不可用（例如无法划定前缀区或几何块为 None）。"
             )
         return "\n".join(lines)
 
@@ -2124,7 +2163,7 @@ class GridWindow:
         lines.extend(
             [
                 f"U = ¥{u_int:,.0f} / 格（pricing.early_vacant_unit_from_scan）",
-                f"顶栏「空置 N 格」与 pricing.vacant 一致，当前 V = {v_eff}。",
+                f"底栏地图行中「空置」格数与 pricing.vacant 一致，当前 V = {v_eff}。",
             ]
         )
         if p.get("ahmad_pricing_active"):
@@ -2238,18 +2277,12 @@ class GridWindow:
         return "\n".join(lines)
 
     def _update_total_label(self) -> None:
-        """更新估算总价标签（pricing.total）。"""
+        """更新估算总价标签（pricing.total）；空置格数已改在顶栏地图行展示。"""
         p = self._last_pricing_for_tooltips
         if not isinstance(p, dict) or p.get("total") is None:
             p = self._build_pricing_snapshot_dict()
         total = float(p.get("total") or 0)
-        empty_count = self._compute_empty_zone_count()
-        if empty_count and empty_count > 0:
-            self._total_label.config(
-                text=(f"估算总价  ¥{total:,.0f}" f"    空置 {empty_count} 格")
-            )
-        else:
-            self._total_label.config(text=f"估算总价  ¥{total:,.0f}")
+        self._total_label.config(text=f"估算总价  ¥{total:,.0f}")
 
     def _update_vacant_estimate_bar(self) -> None:
         """更新顶栏两行：①仓位估价 points + 推荐出价；②三档 est_* 与仓位估价区间。"""
@@ -2261,6 +2294,22 @@ class GridWindow:
             snapshot_path_hint=self._snapshot_path,
         )
         self._last_pricing_for_tooltips = p
+        try:
+            vac_n = int(p.get("vacant") or 0)
+        except (TypeError, ValueError):
+            vac_n = 0
+        if hasattr(self, "_map_merged_stats_label"):
+            _tc, _ic, q5c, q5g, q6c, q6g, unk_cells = self._stats_from_merged_items(base)
+            mid = int(self.state.map_id or 0)
+            self._map_merged_stats_label.config(
+                text=(
+                    f"地图 {mid}   "
+                    f"金 {q5c}件·{q5g}格   "
+                    f"红 {q6c}件·{q6g}格   "
+                    f"未知 {unk_cells}格   "
+                    f"空置 {vac_n}格"
+                )
+            )
         pts = p.get("points")
         mult = _instant_win_multiplier_for_round(self.state.current_round)
         if pts is not None:
@@ -2321,15 +2370,8 @@ class GridWindow:
             except (TypeError, ValueError):
                 eu_f = None
             if eu_f is not None:
-                try:
-                    v_scan = int(p.get("vacant") or 0)
-                except (TypeError, ValueError):
-                    v_scan = 0
                 self._est_label_early.config(
-                    text=(
-                        f"扫描单价 ¥{eu_f:,.0f}/格"
-                        f"    空置 {v_scan} 格"
-                    ),
+                    text=(f"扫描单价 ¥{eu_f:,.0f}/格"),
                 )
                 self._est_early_wrap.pack(side="left", padx=(0, 16))
             else:
@@ -2422,8 +2464,8 @@ class GridWindow:
         except tk.TclError:
             pass
 
-        self._build_vacant_estimate_bar()
         self._build_info_bar()
+        self._build_vacant_estimate_bar()
         self._build_legend()
         self._build_canvas()
         if self._snapshots:
@@ -2459,23 +2501,69 @@ class GridWindow:
                 pass
 
     def _build_info_bar(self) -> None:
+        """底栏：左起为地图金红未知 + 当局数据；中间长说明可伸缩；右为置顶/返回主页。"""
         bar = tk.Frame(self.root, bg="#1a1a2e", pady=4)
         bar.pack(fill="x", padx=8)
+        # 0=地图/当局（贴左）；1=长文案（吃宽）；2=置顶/主页（贴右）
+        bar.columnconfigure(0, weight=0)
+        bar.columnconfigure(1, weight=1)
+        bar.columnconfigure(2, weight=0)
 
-        # StringVar 方便后续 _refresh() 直接更新，无需重建 Label
+        self._stats_inline_wrap = tk.Frame(bar, bg="#1a1a2e")
+        self._map_merged_stats_wrap = tk.Frame(self._stats_inline_wrap, bg="#1a1a2e")
+        self._map_merged_stats_label = tk.Label(
+            self._map_merged_stats_wrap,
+            text="",
+            bg="#1a1a2e",
+            fg="#e8d0ff",
+            font=("微软雅黑", 10),
+            cursor="hand2",
+        )
+        self._map_merged_stats_label.pack(side="left")
+        self._map_merged_stats_wrap.pack(side="left", padx=(0, 12))
+        _PricingHoverTip(
+            self._map_merged_stats_label,
+            self._tooltip_text_map_merged_stats,
+        )
+        self._event_stats_wrap = tk.Frame(self._stats_inline_wrap, bg="#1a1a2e")
+        self._event_stats_label = tk.Label(
+            self._event_stats_wrap,
+            text="当局数据",
+            bg="#1a1a2e",
+            fg="#9fd9ff",
+            font=("微软雅黑", 10),
+            cursor="hand2",
+        )
+        self._event_stats_label.pack(side="left")
+        self._event_stats_wrap.pack(side="left", padx=(0, 4))
+        _PricingHoverTip(self._event_stats_label, self._tooltip_text_event_stats)
+        self._stats_inline_wrap.grid(row=0, column=0, sticky="w", padx=(10, 8))
+
         self._info_text = tk.StringVar(value=self._info_summary_text())
-        tk.Label(
+        self._info_bar_label = tk.Label(
             bar,
             textvariable=self._info_text,
             bg="#1a1a2e",
             fg="#ccccdd",
             font=("微软雅黑", 10),
-            wraplength=CANVAS_MAX_W - 20,
             justify="left",
-        ).pack(side="left")
+            anchor="nw",
+            wraplength=320,
+        )
+        self._info_bar_label.grid(row=0, column=1, sticky="nw", padx=(0, 6))
+
+        def _on_info_bar_label_configure(evt: tk.Event) -> None:
+            try:
+                w = int(evt.width)
+            except (TypeError, ValueError):
+                return
+            if w > 8:
+                self._info_bar_label.config(wraplength=max(80, w - 4))
+
+        self._info_bar_label.bind("<Configure>", _on_info_bar_label_configure)
 
         right = tk.Frame(bar, bg="#1a1a2e")
-        right.pack(side="right", padx=4)
+        right.grid(row=0, column=2, sticky="e", padx=(4, 0))
         self._topmost_pin_photo = self._create_topmost_pin_photo()
         pin_kw: Dict[str, Any] = {
             "master": right,
@@ -2499,7 +2587,6 @@ class GridWindow:
         self._btn_topmost = tk.Button(**pin_kw)
         self._btn_topmost.pack(side="left", padx=(0, 6))
         if self._topmost_pin_photo is not None:
-            # 防止个别环境下 Button 与 PhotoImage 引用链断裂
             self._btn_topmost.image = self._topmost_pin_photo  # type: ignore[attr-defined]
 
         if self._home_shell is not None:
@@ -2527,8 +2614,22 @@ class GridWindow:
                 padx=4,
             ).pack(side="left")
 
+        def _lock_info_bar_side_columns(_evt: Optional[tk.Event] = None) -> None:
+            """左列地图统计、右列置顶/主页设 minsize，避免缩窗时被压没。"""
+            try:
+                bar.update_idletasks()
+                sw = int(self._stats_inline_wrap.winfo_reqwidth()) + 12
+                rw = int(right.winfo_reqwidth()) + 12
+                bar.columnconfigure(0, minsize=max(160, sw))
+                bar.columnconfigure(2, minsize=max(72, rw))
+            except tk.TclError:
+                pass
+
+        bar.bind("<Configure>", lambda e: _lock_info_bar_side_columns(e))
+        self.root.after_idle(_lock_info_bar_side_columns)
+
     def _build_vacant_estimate_bar(self) -> None:
-        """窗口最上方：第一行仓位估价 points、推荐出价、扫描单价与当局数据；第二行三档 est 与仓位估价区间。"""
+        """窗口最上方：①仓位估价、推荐出价、扫描单价；②全红/全橙/金红/区间。"""
         bar = tk.Frame(self.root, bg="#152030", pady=4)
         bar.pack(fill="x", padx=8, pady=(6, 0))
         row1 = tk.Frame(bar, bg="#152030")
@@ -2565,17 +2666,6 @@ class GridWindow:
             cursor="hand2",
         )
         self._est_label_early.pack(side="left")
-        self._event_stats_wrap = tk.Frame(row1, bg="#152030")
-        self._event_stats_label = tk.Label(
-            self._event_stats_wrap,
-            text="当局数据",
-            bg="#152030",
-            fg="#9fd9ff",
-            font=("微软雅黑", 10),
-            cursor="hand2",
-        )
-        self._event_stats_label.pack(side="left")
-        self._event_stats_wrap.pack(side="left", padx=(0, 16))
         row2 = tk.Frame(bar, bg="#152030")
         row2.pack(fill="x", padx=10, pady=(6, 0))
         tip_lbl = dict(
@@ -2592,7 +2682,6 @@ class GridWindow:
         _PricingHoverTip(self._est_label_aisha, self._tooltip_text_main_points)
         _PricingHoverTip(self._est_label_recommend, self._tooltip_text_recommend_bid)
         _PricingHoverTip(self._est_label_early, self._tooltip_text_early_exclusions)
-        _PricingHoverTip(self._event_stats_label, self._tooltip_text_event_stats)
         _PricingHoverTip(
             self._est_label_red, lambda: self._tooltip_text_position_estimate("red")
         )
@@ -2621,7 +2710,7 @@ class GridWindow:
         tk.Label(
             row1,
             text=" 未知 ",
-            bg=UNKNOWN_BG,
+            bg=self._unknown_bg,
             fg="#ffffff",
             font=("微软雅黑", 8),
             relief="flat",
@@ -2674,18 +2763,104 @@ class GridWindow:
         self._total_label.pack(side="right", padx=12)
         _PricingHoverTip(self._total_label, self._tooltip_text_grid_total)
 
-        tk.Label(
-            row2,
-            text=(
-                "左键空格拖普通幽灵；Ctrl+左键空格拖金幽灵；Ctrl+右键空格拖红幽灵；"
-                "Ctrl+左键命中四角：对角缩放；四边把手仍左键拖；"
-                "右键幽灵删格；日志物品轮廓未锁时右键命中可还原手动画框；"
-                "弹窗双击行确认；Ctrl+Shift+Z：还原轮廓"
-            ),
-            bg="#222233",
-            fg="#555577",
-            font=("微软雅黑", 8),
-        ).pack(side="left", padx=8)
+        self._pack_legend_operation_hint(row2)
+
+    def _pack_legend_operation_hint(self, parent: tk.Frame) -> None:
+        """图例第二行操作说明：按宽度自动换行；正文与快捷键、鼠标键、金/红/推断幽灵分色。"""
+        bg = "#222233"
+        base = "#aab6cc"
+        key = "#e8eef8"
+        mod = "#7ec0ff"
+        gold = "#f0c868"
+        red = "#ff9393"
+        infer = "#8fd8b8"
+        font_spec: Tuple[str, int] = ("微软雅黑", 8)
+        ch_w = max(1, tkfont.Font(parent, font=font_spec).measure("中"))
+
+        wrap = tk.Frame(parent, bg=bg)
+        wrap.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=8)
+
+        text = tk.Text(
+            wrap,
+            wrap=tk.CHAR,
+            width=48,
+            height=4,
+            font=font_spec,
+            bg=bg,
+            fg=base,
+            borderwidth=0,
+            highlightthickness=0,
+            padx=0,
+            pady=0,
+            cursor="arrow",
+            takefocus=False,
+            insertwidth=0,
+        )
+        text.pack(fill=tk.X, expand=True)
+
+        for tag, color in (
+            ("base", base),
+            ("key", key),
+            ("mod", mod),
+            ("gold", gold),
+            ("red", red),
+            ("infer", infer),
+        ):
+            text.tag_configure(tag, foreground=color)
+
+        segments: List[Tuple[str, str]] = [
+            ("左键", "key"),
+            ("空格拖", "base"),
+            ("普通幽灵", "infer"),
+            ("；", "base"),
+            ("Ctrl", "mod"),
+            ("+左键空格拖", "base"),
+            ("金幽灵", "gold"),
+            ("；", "base"),
+            ("Ctrl", "mod"),
+            ("+右键空格拖", "base"),
+            ("红幽灵", "red"),
+            ("；", "base"),
+            ("Ctrl", "mod"),
+            ("+左键命中四角：对角缩放；四边把手仍", "base"),
+            ("左键", "key"),
+            ("拖；", "base"),
+            ("右键", "key"),
+            ("幽灵删格；日志物品轮廓未锁时", "base"),
+            ("右键", "key"),
+            ("命中可还原手动画框；", "base"),
+            ("弹窗", "base"),
+            ("双击", "key"),
+            ("行确认；", "base"),
+            ("Ctrl", "mod"),
+            ("+", "base"),
+            ("Shift", "key"),
+            ("+Z：还原轮廓", "base"),
+        ]
+        for piece, tag in segments:
+            text.insert(tk.END, piece, tag)
+
+        def _sync_hint_geometry(_event: tk.Event | None = None) -> None:
+            w = wrap.winfo_width()
+            if w <= ch_w * 12:
+                return
+            cols = max(24, (w - 8) // ch_w)
+            text.configure(state=tk.NORMAL)
+            text.configure(width=cols)
+            # 无 \\n 时 index 的逻辑行恒为 1，必须用 displaylines 统计软换行后的行数
+            text.update_idletasks()
+            try:
+                dlines = int(
+                    text.tk.call(text._w, "count", "-displaylines", "1.0", "end-1c")
+                )
+            except tk.TclError:
+                dlines = int(float(text.index("end-1c").split(".")[0]))
+            text.configure(height=max(2, dlines * 2))
+            text.configure(state=tk.DISABLED)
+
+        text.configure(state=tk.DISABLED)
+        wrap.bind("<Configure>", _sync_hint_geometry, add="+")
+        wrap.after_idle(_sync_hint_geometry)
 
     def _build_nav_bar(self) -> None:
         """快照导航栏：上一步 / 当前位置 / 下一步（仅快照模式显示）。"""
@@ -2998,7 +3173,7 @@ class GridWindow:
                 bg = PHANTOM_BG
                 fg = QUALITY_FG.get(q, UNKNOWN_FG) if q else "#e8e8f0"
         else:
-            bg = QUALITY_BG.get(q, UNKNOWN_BG)
+            bg = QUALITY_BG.get(q, self._unknown_bg)
             fg = QUALITY_FG.get(q, UNKNOWN_FG)
         tag = f"item_{uid}"
         price_value = self._display_price_value(uid, k)
