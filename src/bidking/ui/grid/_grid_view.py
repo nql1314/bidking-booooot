@@ -30,7 +30,7 @@
   - ahmad：与 universal 同套几何与空置逻辑，窗口标题缀「艾哈迈德(快递站特化）」；顶栏 Ahmad 主价仍由
     日志英雄 + 地图自动判定（己方身份来自配置 ``board_snapshot.self_user_uid`` 或 ``self_name_substring``）。
   - raven：状态栏附带铺板顺序提示。
-  - 地图技能 200009（所有藏品格数）：在已知区内已占位格数未达到该总数前，空置计数与橘红层**忽略诈骗格过滤**；吃满后且扫描上仅剩金红候选时，才对几何空置应用诈骗格剔除。
+  - 地图技能 200009（所有藏品格数）：在已知区内已占位格数未达到该总数前，空置计数与橘红层**忽略诈骗格过滤**；吃满后对几何空置应用诈骗格剔除。
   - 诈骗格规则**仅用于**上述自动空置区（计数与初始橘红），**不限制**右键手动剔除/恢复空置标记。
   - 空置候选格：普通右键可手动剔除该格（不计空置、不铺橘红），再右键同一格可恢复。
 """
@@ -114,7 +114,7 @@ EMPTY_BG = "#2a2a3a"
 GRID_LINE = "#505060"
 
 # 空缺区域橘红覆盖层与空置计数：由 ``grid_overlay.compute_overlay_vacant_dict`` 统一计算；
-# 诈骗格剔除仅在扫描推断仅剩金红候选且 200009 吃满后生效（见 ``fraud_zone_cell_exclusion_enabled``）。
+# 诈骗格剔除在 200009 吃满后生效；未满总数前关闭（见 ``fraud_zone_cell_exclusion_enabled``）。
 EMPTY_ZONE_COLOR = "#cc4400"  # 橘红
 EMPTY_ZONE_STIPPLE = "gray25"  # 约 25% 覆盖度，模拟半透明
 
@@ -585,8 +585,8 @@ class GridWindow:
         self._compute_max_size_stack: List[str] = []
         # 用户右键手动剔除的空置候选格 (row,col)，不计入空置数、不画橘红（与扩展剩余格一致）
         self._vacant_manual_suppress: Set[Tuple[int, int]] = set()
-        # 疑似诈骗格集合缓存：(limit, id(occupied)) → 避免同一 occupied 对象上重复全表扫描
-        self._empty_zone_fraud_memo: Optional[Tuple[int, int]] = None
+        # 疑似诈骗格集合缓存：(limit, id(occupied), placed_fingerprint) → 形状推断变时失效
+        self._empty_zone_fraud_memo: Optional[tuple] = None
         self._empty_zone_fraud_cells: Set[Tuple[int, int]] = set()
 
         # 手动画框的幽灵物品：uid(phantom_N) → ItemKnowledge
@@ -771,6 +771,21 @@ class GridWindow:
             phantom_items=self._phantom_items,
             manual_shapes=self._manual_shapes_merged_for_occupied(),
             exclude_uid=exclude_uid,
+            item_shape_wh=lambda u, kk: self._effective_shape_wh(
+                u, kk, with_infer=True
+            ),
+            item_origin=lambda u, kk: self._effective_display_origin(
+                u, kk, with_infer=True
+            ),
+        )
+
+    def _fraud_placed_items_for_overlay(self) -> List[_grid_overlay.FraudPlacedItem]:
+        """与 ``_build_occupied`` 同源的 :class:`~bidking.analysis.grid_overlay.FraudPlacedItem` 列表。"""
+        return _grid_overlay.fraud_placed_items_from_build_occupied_like(
+            items=self.state.items,
+            phantom_items=self._phantom_items,
+            manual_shapes=self._manual_shapes_merged_for_occupied(),
+            exclude_uid="",
             item_shape_wh=lambda u, kk: self._effective_shape_wh(
                 u, kk, with_infer=True
             ),
@@ -1247,11 +1262,18 @@ class GridWindow:
         bid = row * GRID_COLS + col
         if bid > limit:
             return False
-        memo_key = (limit, id(occupied))
+        placed = self._fraud_placed_items_for_overlay()
+        memo_key = (
+            limit,
+            id(occupied),
+            tuple((p.min_bid, p.w, p.h, p.cells) for p in placed),
+        )
         if self._empty_zone_fraud_memo != memo_key:
             self._empty_zone_fraud_memo = memo_key
             self._empty_zone_fraud_cells = (
-                _grid_overlay.fraud_empty_cells_in_zone_prefix(occupied, limit)
+                _grid_overlay.fraud_empty_cells_in_zone_prefix(
+                    occupied, limit, placed
+                )
             )
         return (row, col) in self._empty_zone_fraud_cells
 
@@ -1291,6 +1313,7 @@ class GridWindow:
             max_box_id=self._empty_zone_max_box_id(),
             vacant_manual_suppress=set(self._vacant_manual_suppress),
             board_snapshot=self._vacant_scan_context_snapshot(),
+            placed_items=self._fraud_placed_items_for_overlay(),
         )
         g = d.get("geometric")
         if g is not None:
@@ -1785,6 +1808,7 @@ class GridWindow:
             ),
             vacant_manual_suppress=set(self._vacant_manual_suppress),
             board_snapshot=vacant_ctx,
+            placed_items=self._fraud_placed_items_for_overlay(),
         )
         return export
 

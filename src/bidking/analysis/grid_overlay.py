@@ -10,13 +10,14 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List, Mapping, Optional, Set, Tuple
+from collections import deque
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 from ..parsing import item_db
 from ..parsing.state import GameState, ItemKnowledge
 from . import unknown_value as _unknown_value
 from ._shape_wh import shape_wh_from_snapshot
-from .scan_inference import possible_qualities_from_scan_history
 
 GRID_COLS = 10
 GRID_ROWS = 30
@@ -317,102 +318,179 @@ def map_skill_hidden_vacant(
     return max(0, th - occ)
 
 
-def vacant_neighbor_occupied(row: int, col: int, occupied: set) -> bool:
-    """邻居是否在网格外（视同阻挡）或已被物品/幽灵占用。"""
-    if not (0 <= row < GRID_ROWS and 0 <= col < GRID_COLS):
-        return True
-    return (row, col) in occupied
+@dataclass(frozen=True)
+class FraudPlacedItem:
+    """与画板占位同源的已放置物品矩形，供诈骗格可解释性判定。"""
+
+    cells: frozenset[tuple[int, int]]
+    w: int
+    h: int
+    min_bid: int
 
 
-def vacant_side_effective_blocks(row: int, col: int, occupied: set, *, left: bool) -> bool:
-    """中间空格某一侧是否构成「有效夹挡」（与 GridWindow 橘红层规则一致）。"""
-    if left:
-        if col <= 0:
-            return True
-        nc = col - 1
-    else:
-        if col >= GRID_COLS - 1:
-            return True
-        nc = col + 1
-    if vacant_neighbor_occupied(row, nc, occupied):
-        return True
-    if row > 0 and not vacant_neighbor_occupied(row - 1, nc, occupied):
-        return True
+def _empty_region_bfs_prefix(
+    seed: Tuple[int, int],
+    occ_kept: Set[Tuple[int, int]],
+    limit: int,
+) -> Set[Tuple[int, int]]:
+    """从 ``seed`` 在前缀区内四连通扩张；仅 ``occ_kept`` 中的格视为阻挡（更早已铺物品）。"""
+
+    def walkable(nr: int, nc: int) -> bool:
+        if not (0 <= nr < GRID_ROWS and 0 <= nc < GRID_COLS):
+            return False
+        if nr * GRID_COLS + nc > limit:
+            return False
+        return (nr, nc) not in occ_kept
+
+    sr, sc = seed
+    if not walkable(sr, sc):
+        return set()
+    out: Set[Tuple[int, int]] = set()
+    q: deque[Tuple[int, int]] = deque([(sr, sc)])
+    out.add((sr, sc))
+    while q:
+        r, c = q.popleft()
+        for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            nr, nc = r + dr, c + dc
+            if not walkable(nr, nc) or (nr, nc) in out:
+                continue
+            out.add((nr, nc))
+            q.append((nr, nc))
+    return out
+
+
+def _axis_aligned_wh_fits_in_region(
+    region: Set[Tuple[int, int]], w: int, h: int
+) -> bool:
+    if w <= 0 or h <= 0:
+        return False
+    for top in range(GRID_ROWS - h + 1):
+        for left in range(GRID_COLS - w + 1):
+            ok = True
+            for dr in range(h):
+                for dc in range(w):
+                    if (top + dr, left + dc) not in region:
+                        ok = False
+                        break
+                if not ok:
+                    break
+            if ok:
+                return True
     return False
 
 
-def cell_four_cardinal_neighbors_unoccupied(row: int, col: int, occupied: set) -> bool:
-    """上下左右四格均在网内且未被物品/幽灵占用。"""
-    for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
-        nr, nc = row + dr, col + dc
-        if not (0 <= nr < GRID_ROWS and 0 <= nc < GRID_COLS):
-            return False
-        if (nr, nc) in occupied:
-            return False
-    return True
+def fraud_placed_items_from_merged_items(
+    items: Mapping[str, Any],
+) -> List[FraudPlacedItem]:
+    """由合并物品表行（快照/UI 同源）构造 :class:`FraudPlacedItem` 列表。"""
+    out: List[FraudPlacedItem] = []
+    for row in items.values():
+        if not isinstance(row, dict):
+            continue
+        cell_set = _occupied_cells_item_board_display(row)
+        if not cell_set:
+            continue
+        w, h = shape_wh_from_snapshot(row.get("shape"))
+        cells = frozenset(cell_set)
+        min_bid = min(r * GRID_COLS + c for r, c in cells)
+        out.append(FraudPlacedItem(cells=cells, w=w, h=h, min_bid=min_bid))
+    return out
 
 
-def column_downward_all_vacant(row: int, col: int, occupied: set) -> bool:
-    """自 (row+1,col) 起至网格底，同列是否全部未占位。"""
-    for rr in range(row + 1, GRID_ROWS):
-        if (rr, col) in occupied:
-            return False
-    return True
+def fraud_placed_items_from_build_occupied_like(
+    *,
+    items: Mapping[str, Any],
+    phantom_items: Mapping[str, Any],
+    manual_shapes: Mapping[str, Tuple[int, int, int, int]],
+    exclude_uid: str = "",
+    item_shape_wh: Optional[Callable[[str, Any], Tuple[int, int]]] = None,
+    item_origin: Optional[Callable[[str, Any], Tuple[int, int]]] = None,
+) -> List[FraudPlacedItem]:
+    """与 :func:`build_occupied_cells` 相同规则，按件输出矩形（用于与 ``occupied`` 严格一致）。"""
+    out: List[FraudPlacedItem] = []
+    for uid, k in items.items():
+        if uid == exclude_uid:
+            continue
+        bid = getattr(k, "box_id", None)
+        if bid is None:
+            continue
+        if not getattr(k, "box_id_confirmed", False) and uid not in manual_shapes:
+            continue
+        if uid in manual_shapes:
+            w, h, dc, dr = manual_shapes[uid]
+        else:
+            if item_shape_wh is not None:
+                w, h = item_shape_wh(uid, k)
+            else:
+                w, h = _live_shape_wh(getattr(k, "shape", None))
+            if item_origin is not None:
+                dc, dr = item_origin(uid, k)
+            else:
+                ib = int(bid)
+                dc, dr = ib % GRID_COLS, ib // GRID_COLS
+        cells = frozenset((dr + ddr, dc + ddc) for ddr in range(h) for ddc in range(w))
+        min_bid = min(r * GRID_COLS + c for r, c in cells)
+        out.append(FraudPlacedItem(cells=cells, w=w, h=h, min_bid=min_bid))
+    for phid in phantom_items:
+        if phid == exclude_uid or phid not in manual_shapes:
+            continue
+        w, h, dc, dr = manual_shapes[phid]
+        cells = frozenset((dr + ddr, dc + ddc) for ddr in range(h) for ddc in range(w))
+        min_bid = min(r * GRID_COLS + c for r, c in cells)
+        out.append(FraudPlacedItem(cells=cells, w=w, h=h, min_bid=min_bid))
+    for uid, k in items.items():
+        if uid == exclude_uid:
+            continue
+        bid = getattr(k, "box_id", None)
+        if bid is None:
+            continue
+        if getattr(k, "box_id_confirmed", False) or uid in manual_shapes:
+            continue
+        b = int(bid)
+        r, c = b // GRID_COLS, b % GRID_COLS
+        cells = frozenset({(r, c)})
+        out.append(FraudPlacedItem(cells=cells, w=1, h=1, min_bid=b))
+    return out
 
 
-def fraud_empty_cells_in_zone_prefix(occupied: set, limit: int) -> Set[Tuple[int, int]]:
-    """BoxId 0..limit 内应排除的空置候选（诈骗格）集合。"""
+def fraud_empty_cells_in_zone_prefix(
+    occupied: set,
+    limit: int,
+    placed_items: Optional[Sequence[FraudPlacedItem]] = None,
+) -> Set[Tuple[int, int]]:
+    """
+    BoxId 0..limit 内应排除的空置候选（诈骗格）集合。
+
+    铺板可解释性：空格 ``C``（bid ``b``）若存在物品 ``A`` 满足 ``A.min_bid > b``，
+    且在「仅保留 ``min_bid(B) < min_bid(A)`` 的物品占位」的版式下从 ``C`` 做四连通
+    得到空域 ``R``（等价于撤掉 ``A`` 及所有更晚铺上的物品），``R`` 与 ``A.cells`` 相交，
+    且 ``A.w×A.h`` 轴对齐矩形可完全落于 ``R`` 内，则 ``C`` 非诈骗格。无 ``placed_items``
+    信息时返回空集合（不做剔除）。
+    """
+    if not placed_items:
+        return set()
+    placed_list = list(placed_items)
     fraud: Set[Tuple[int, int]] = set()
-    last_bid = limit
-
-    for bid in range(last_bid + 1):
+    for bid in range(limit + 1):
         r, c = bid // GRID_COLS, bid % GRID_COLS
         if (r, c) in occupied:
             continue
-        if c != 0 and c != GRID_COLS - 1:
-            continue
-        inward_occ = (
-            (c == 0 and (r, 1) in occupied)
-            or (c == GRID_COLS - 1 and (r, GRID_COLS - 2) in occupied)
-        )
-        if not inward_occ:
-            continue
-        if not column_downward_all_vacant(r, c, occupied):
-            continue
-        for rr in range(r, GRID_ROWS):
-            if rr * GRID_COLS + c > last_bid:
+        explained = False
+        for A in placed_list:
+            if A.min_bid <= bid:
+                continue
+            occ_kept: Set[Tuple[int, int]] = set()
+            for B in placed_list:
+                if B.min_bid < A.min_bid:
+                    occ_kept |= B.cells
+            R = _empty_region_bfs_prefix((r, c), occ_kept, limit)
+            if not (R & A.cells):
+                continue
+            if _axis_aligned_wh_fits_in_region(R, A.w, A.h):
+                explained = True
                 break
-            if (rr, c) not in occupied:
-                fraud.add((rr, c))
-
-    for bid in range(last_bid + 1):
-        r, c = bid // GRID_COLS, bid % GRID_COLS
-        if (r, c) in occupied:
-            continue
-        if not cell_four_cardinal_neighbors_unoccupied(r, c, occupied):
-            continue
-        if not column_downward_all_vacant(r, c, occupied):
-            continue
-        fraud.add((r, c))
-
-    for bid in range(last_bid + 1):
-        r, c = bid // GRID_COLS, bid % GRID_COLS
-        if (r, c) in occupied:
-            continue
-        if not (r > 0 and (r - 1, c) in occupied):
-            continue
-        if r >= GRID_ROWS - 1:
-            continue
-        bid_below = (r + 1) * GRID_COLS + c
-        if bid_below <= last_bid:
-            continue
-        if not (
-            vacant_side_effective_blocks(r, c, occupied, left=True)
-            and vacant_side_effective_blocks(r, c, occupied, left=False)
-        ):
-            continue
-        fraud.add((r, c))
-
+        if not explained:
+            fraud.add((r, c))
     return fraud
 
 
@@ -426,19 +504,6 @@ def occupied_cells_in_empty_zone_prefix(occupied: set, limit: int) -> int:
             continue
         n += 1
     return n
-
-
-def fraud_exclusion_eligible_from_scan(board_snapshot: Dict[str, Any]) -> bool:
-    """
-    扫描推断下「剩余未知品质」是否仅为金红（Q5/Q6）。
-
-    仅在此条件下对空置候选应用 ``fraud_empty_cells_in_zone_prefix`` 剔除（诈骗格）；
-    若仍可能为 Q1–Q4，则不剔除，避免早期误判。
-    """
-    poss = possible_qualities_from_scan_history(board_snapshot)
-    if not poss:
-        return False
-    return bool(poss <= frozenset({5, 6}))
 
 
 def empty_zone_ignore_fraud_filter(
@@ -462,13 +527,17 @@ def fraud_zone_cell_exclusion_enabled(
     limit: int,
 ) -> bool:
     """
-    是否对几何空置计数应用诈骗格过滤：200009 吃满后 **且** 扫描上仅剩金红候选时。
+    是否对几何空置计数应用诈骗格过滤。
+
+    当 200009 总格数已知且前缀区内占位尚未达到该总数时关闭（见
+    :func:`empty_zone_ignore_fraud_filter`）；否则开启。
     """
     if not board_snapshot:
         return False
     if empty_zone_ignore_fraud_filter(occupied, limit, board_snapshot):
         return False
-    return fraud_exclusion_eligible_from_scan(board_snapshot)
+    return True
+
 
 def compute_overlay_vacant_dict(
     *,
@@ -476,13 +545,15 @@ def compute_overlay_vacant_dict(
     max_box_id: int,
     vacant_manual_suppress: Set[Tuple[int, int]],
     board_snapshot: Optional[Dict[str, Any]] = None,
+    placed_items: Optional[Sequence[FraudPlacedItem]] = None,
 ) -> Dict[str, Any]:
     """
     写入 ``grid_overlay["vacant"]`` 的块；定价与 UI 共用同一套逻辑。
 
     - **200009**：``raw_pricing.event_stats.total_grid_count`` 非空时，空置 = 总数 − ``len(occupied)``；
     - **几何前缀区**：否则数 0..max(BoxId) 内空格；
-    - ``board_snapshot``：须含 ``raw_pricing``（及 ``game_state.scan_history`` 供金红候选判断）。
+    - ``board_snapshot``：须含 ``raw_pricing``（200009 总格数）；``game_state`` 供合并物品表等。
+    - ``placed_items``：非空时用于诈骗格判定（须与 ``occupied`` 同源）；缺省则从 ``board_snapshot`` 合并物品表构造。
     """
     total_h = map_skill_total_hidden_for_overlay(board_snapshot)
     if total_h is not None:
@@ -499,8 +570,21 @@ def compute_overlay_vacant_dict(
             "source": "no_confirmed_anchor",
         }
     limit = min(max_box_id, GRID_MAX_BOX_ID)
-    fraud_cells = fraud_empty_cells_in_zone_prefix(occupied, limit)
     apply_fraud_excl = fraud_zone_cell_exclusion_enabled(board_snapshot, occupied, limit)
+    if apply_fraud_excl:
+        if placed_items is not None:
+            placed_for_fraud = list(placed_items)
+        elif board_snapshot is not None:
+            placed_for_fraud = fraud_placed_items_from_merged_items(
+                merged_items_dict_from_snapshot(board_snapshot)
+            )
+        else:
+            placed_for_fraud = []
+        fraud_cells = fraud_empty_cells_in_zone_prefix(
+            occupied, limit, placed_for_fraud
+        )
+    else:
+        fraud_cells = set()
     count = 0
     for bid in range(limit + 1):
         row, col = bid // GRID_COLS, bid % GRID_COLS
@@ -1155,14 +1239,14 @@ __all__ = [
     "apply_manual_shapes_to_items",
     "board_display_occupied_cells_merged",
     "build_occupied_cells",
-    "cell_four_cardinal_neighbors_unoccupied",
-    "column_downward_all_vacant",
     "compute_overlay_vacant_dict",
     "compute_grid_overlay_infer_shapes",
     "empty_zone_ignore_fraud_filter",
     "fraud_empty_cells_in_zone_prefix",
-    "fraud_exclusion_eligible_from_scan",
+    "fraud_placed_items_from_build_occupied_like",
+    "fraud_placed_items_from_merged_items",
     "fraud_zone_cell_exclusion_enabled",
+    "FraudPlacedItem",
     "map_skill_hidden_vacant",
     "map_skill_total_hidden_for_overlay",
     "max_anchor_box_id_merged",
@@ -1174,6 +1258,4 @@ __all__ = [
     "vacant_block_from_board_snapshot",
     "vacant_dict_from_board_snapshot",
     "vacant_manual_suppress_cells_from_snapshot",
-    "vacant_neighbor_occupied",
-    "vacant_side_effective_blocks",
 ]
