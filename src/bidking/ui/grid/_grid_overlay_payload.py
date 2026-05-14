@@ -45,6 +45,7 @@ def build_grid_overlay_export_dict(
     vacant_manual_suppress: Set[Tuple[int, int]],
     occupied_cells: set,
     max_box_id: int,
+    infer_unknown_contour_shapes: bool = True,
 ) -> Dict[str, Any]:
     """组装写入 ``grid_overlay`` 的字段；不含 ``vacant``（须用全量占位格在 :meth:`GridWindow._grid_overlay_to_json` 中计算）。"""
     ph = {uid: item_knowledge_to_json(k) for uid, k in phantom_items.items()}
@@ -67,6 +68,7 @@ def build_grid_overlay_export_dict(
         vacant_manual_suppress=set(vacant_manual_suppress),
         max_box_id=int(max_box_id),
         raw_pricing=raw_pricing,
+        infer_unknown_contour_shapes=infer_unknown_contour_shapes,
     )
     infer_out = {uid: [int(x) for x in tup] for uid, tup in infer.items()}
     overlay_for_merged = {

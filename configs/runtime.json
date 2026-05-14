@@ -218,5 +218,8 @@
   },
   "grid_view": {
     "unknown_bg": "#1a7394"
+  },
+  "pricing": {
+    "infer_unknown_contour_shapes": true
   }
 }

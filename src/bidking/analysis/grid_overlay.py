@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 from ..parsing import item_db
@@ -379,6 +379,80 @@ def _axis_aligned_wh_fits_in_region(
     return False
 
 
+def _fraud_placed_fingerprint(
+    placed_list: Sequence[FraudPlacedItem],
+) -> Tuple[Tuple[int, int, int, frozenset[tuple[int, int]]], ...]:
+    return tuple(sorted((p.min_bid, p.w, p.h, p.cells) for p in placed_list))
+
+
+def _prefix_empty_cells_in_zone(occupied: set, limit: int) -> Set[Tuple[int, int]]:
+    out: Set[Tuple[int, int]] = set()
+    for bid in range(limit + 1):
+        r, c = bid // GRID_COLS, bid % GRID_COLS
+        if (r, c) not in occupied:
+            out.add((r, c))
+    return out
+
+
+def _prefix_cell_explained_by_placed(
+    bid: int,
+    placed_list: Sequence[FraudPlacedItem],
+    limit: int,
+) -> bool:
+    """空格 (bid) 是否可被某件更晚铺上的物品几何解释（与 fraud 判定一致）。"""
+    for A in placed_list:
+        if A.min_bid <= bid:
+            continue
+        occ_kept: Set[Tuple[int, int]] = set()
+        for B in placed_list:
+            if B.min_bid < A.min_bid:
+                occ_kept |= B.cells
+        r, c = bid // GRID_COLS, bid % GRID_COLS
+        R = _empty_region_bfs_prefix((r, c), occ_kept, limit)
+        if not (R & A.cells):
+            continue
+        if _axis_aligned_wh_fits_in_region(R, A.w, A.h):
+            return True
+    return False
+
+
+def _fraud_empty_cells_full(
+    occupied: set,
+    limit: int,
+    placed_list: Sequence[FraudPlacedItem],
+) -> Set[Tuple[int, int]]:
+    fraud: Set[Tuple[int, int]] = set()
+    for bid in range(limit + 1):
+        r, c = bid // GRID_COLS, bid % GRID_COLS
+        if (r, c) in occupied:
+            continue
+        if not _prefix_cell_explained_by_placed(bid, placed_list, limit):
+            fraud.add((r, c))
+    return fraud
+
+
+@dataclass
+class FraudZonePrefixCache:
+    """
+    在 ``limit`` 与 ``placed`` 指纹不变时，用 ``frozenset(occupied)`` 比较版式；
+    仅重判「上一轮 fraud ∩ 当前仍空」与「本轮新增前缀空格」，其余已判非 fraud 的空格不重跑。
+    """
+
+    limit: int = -1
+    placed_fp: Tuple[Tuple[int, int, int, frozenset[tuple[int, int]]], ...] = ()
+    fraud_cells: Set[Tuple[int, int]] = field(default_factory=set)
+    last_prefix_empty: Set[Tuple[int, int]] = field(default_factory=set)
+    last_occupied_frozen: Optional[frozenset] = None
+
+    def invalidate(self) -> None:
+        """新对局或需强制全表扫描时调用。"""
+        self.limit = -1
+        self.placed_fp = ()
+        self.fraud_cells = set()
+        self.last_prefix_empty = set()
+        self.last_occupied_frozen = None
+
+
 def fraud_placed_items_from_merged_items(
     items: Mapping[str, Any],
 ) -> List[FraudPlacedItem]:
@@ -457,6 +531,8 @@ def fraud_empty_cells_in_zone_prefix(
     occupied: set,
     limit: int,
     placed_items: Optional[Sequence[FraudPlacedItem]] = None,
+    *,
+    cache: Optional[FraudZonePrefixCache] = None,
 ) -> Set[Tuple[int, int]]:
     """
     BoxId 0..limit 内应排除的空置候选（诈骗格）集合。
@@ -466,32 +542,54 @@ def fraud_empty_cells_in_zone_prefix(
     得到空域 ``R``（等价于撤掉 ``A`` 及所有更晚铺上的物品），``R`` 与 ``A.cells`` 相交，
     且 ``A.w×A.h`` 轴对齐矩形可完全落于 ``R`` 内，则 ``C`` 非诈骗格。无 ``placed_items``
     信息时返回空集合（不做剔除）。
+
+    传入非空 ``cache``（与 ``limit``、``placed`` 指纹一致）且
+    ``frozenset(occupied)`` 与上次相同时直接返回缓存结果；否则在仍满足指纹与
+    ``limit`` 时仅重判「此前 fraud 中仍为空的格」与「相对上次新增的前缀空格」。
     """
     if not placed_items:
+        if cache is not None:
+            cache.invalidate()
         return set()
     placed_list = list(placed_items)
-    fraud: Set[Tuple[int, int]] = set()
-    for bid in range(limit + 1):
-        r, c = bid // GRID_COLS, bid % GRID_COLS
-        if (r, c) in occupied:
+    fp = _fraud_placed_fingerprint(placed_list)
+
+    if cache is None:
+        return _fraud_empty_cells_full(occupied, limit, placed_list)
+
+    occ_f = frozenset(occupied)
+    if cache.limit != limit or cache.placed_fp != fp or cache.last_occupied_frozen is None:
+        fraud = _fraud_empty_cells_full(occupied, limit, placed_list)
+        cache.limit = limit
+        cache.placed_fp = fp
+        cache.fraud_cells = set(fraud)
+        cache.last_prefix_empty = _prefix_empty_cells_in_zone(occupied, limit)
+        cache.last_occupied_frozen = occ_f
+        return set(fraud)
+
+    if cache.last_occupied_frozen == occ_f:
+        return set(cache.fraud_cells)
+
+    current_empty = _prefix_empty_cells_in_zone(occupied, limit)
+    new_empty = current_empty - cache.last_prefix_empty
+    to_check = (cache.fraud_cells & current_empty) | new_empty
+
+    fraud = set(cache.fraud_cells)
+    fraud &= current_empty
+
+    for rc in to_check:
+        if rc not in current_empty:
             continue
-        explained = False
-        for A in placed_list:
-            if A.min_bid <= bid:
-                continue
-            occ_kept: Set[Tuple[int, int]] = set()
-            for B in placed_list:
-                if B.min_bid < A.min_bid:
-                    occ_kept |= B.cells
-            R = _empty_region_bfs_prefix((r, c), occ_kept, limit)
-            if not (R & A.cells):
-                continue
-            if _axis_aligned_wh_fits_in_region(R, A.w, A.h):
-                explained = True
-                break
-        if not explained:
-            fraud.add((r, c))
-    return fraud
+        bid = rc[0] * GRID_COLS + rc[1]
+        if _prefix_cell_explained_by_placed(bid, placed_list, limit):
+            fraud.discard(rc)
+        else:
+            fraud.add(rc)
+
+    cache.fraud_cells = fraud
+    cache.last_prefix_empty = current_empty
+    cache.last_occupied_frozen = occ_f
+    return set(fraud)
 
 
 def occupied_cells_in_empty_zone_prefix(occupied: set, limit: int) -> int:
@@ -546,6 +644,7 @@ def compute_overlay_vacant_dict(
     vacant_manual_suppress: Set[Tuple[int, int]],
     board_snapshot: Optional[Dict[str, Any]] = None,
     placed_items: Optional[Sequence[FraudPlacedItem]] = None,
+    fraud_zone_cache: Optional[FraudZonePrefixCache] = None,
 ) -> Dict[str, Any]:
     """
     写入 ``grid_overlay["vacant"]`` 的块；定价与 UI 共用同一套逻辑。
@@ -554,17 +653,22 @@ def compute_overlay_vacant_dict(
     - **几何前缀区**：否则数 0..max(BoxId) 内空格；
     - ``board_snapshot``：须含 ``raw_pricing``（200009 总格数）；``game_state`` 供合并物品表等。
     - ``placed_items``：非空时用于诈骗格判定（须与 ``occupied`` 同源）；缺省则从 ``board_snapshot`` 合并物品表构造。
+    - ``fraud_zone_cache``：可选；传入时复用 :class:`FraudZonePrefixCache` 做增量诈骗格扫描（UI）。
     """
     total_h = map_skill_total_hidden_for_overlay(board_snapshot)
     if total_h is not None:
         sv = map_skill_hidden_vacant(total_h, occupied_cell_count=len(occupied))
         if sv is not None:
             sv_i = int(sv)
+            if fraud_zone_cache is not None:
+                fraud_zone_cache.invalidate()
             return {
                 "geometric": sv_i,
                 "source": "map_skill_total_hidden_minus_occupied",
             }
     if max_box_id < 0:
+        if fraud_zone_cache is not None:
+            fraud_zone_cache.invalidate()
         return {
             "geometric": None,
             "source": "no_confirmed_anchor",
@@ -581,9 +685,14 @@ def compute_overlay_vacant_dict(
         else:
             placed_for_fraud = []
         fraud_cells = fraud_empty_cells_in_zone_prefix(
-            occupied, limit, placed_for_fraud
+            occupied,
+            limit,
+            placed_for_fraud,
+            cache=fraud_zone_cache,
         )
     else:
+        if fraud_zone_cache is not None:
+            fraud_zone_cache.invalidate()
         fraud_cells = set()
     count = 0
     for bid in range(limit + 1):
@@ -1088,9 +1197,13 @@ def compute_grid_overlay_infer_shapes(
     vacant_manual_suppress: Set[Tuple[int, int]],
     max_box_id: int,
     raw_pricing: Dict[str, Any],
+    infer_unknown_contour_shapes: bool = True,
 ) -> Dict[str, List[int]]:
     """
     对 **品质已知、轮廓未知** 且未手动画框的日志物品，估计 ``[w,h,dc,dr]``（与 ``manual_shapes`` 同形）。
+
+    ``infer_unknown_contour_shapes=False`` 时（可由 ``configs`` 里 ``pricing.infer_unknown_contour_shapes`` 关闭）
+    不读价库、不做推断，返回 ``{}``；``occupied_cells`` 保持为传入的基底占位（与有推断时最终不含推断格的效果一致）。
 
     - 默认：在权重期望价 ±20% 价带内的 CSV 候选中取掉落概率最高者定 ``(w,h)``；
       价带为空时回退为全候选按概率。
@@ -1101,10 +1214,16 @@ def compute_grid_overlay_infer_shapes(
       仅允许覆盖当前物品自身的基底占位格（通常为锚格），但若该格已被先前推断占用则不可再放。
       首选外形不满足时按掉落概率依次尝试其余候选外形，仍无解则跳过该件推断。
     - 当 ``raw_pricing.event_stats`` 中低档总格 **q12+q3+q4** 齐备（或 ``q1+q2+q3+q4`` 等价已知），且扫描史已覆盖品质
-      1–4、场上 Q1–Q4 物品轮廓与锚格均已锁定时：对 **金 (5)、红 (6)** 用两种贪心延展矩形
-      （先上下后左右 / 先左右后上下），在上述阻挡语义与 ``max_box_id`` 约束下取 **面积较大** 者；
+      1–4、场上 Q1–Q4 物品轮廓与锚格均已锁定时：对 **金 (5)、红 (6)** 在已有 CSV 候选（与默认路径相同的 ``filter_csv_candidates_for_query`` 结果非空）前提下，
+      用两种贪心延展矩形（先上下后左右 / 先左右后上下），在上述阻挡语义与 ``max_box_id`` 约束下取 **面积较大** 者；
+      贪心所得 ``(w,h)`` 须与候选中至少一件的外形一致，否则退回默认路径的价带/概率候选枚举。
       金优先于红；每推断成功一件即将其矩形并入后续件的阻挡集。
     """
+    if not infer_unknown_contour_shapes:
+        base = set(occupied_cells)
+        occupied_cells.clear()
+        occupied_cells.update(base)
+        return {}
     csv_index, csv_items = _load_item_prices_db()
     if not csv_items:
         return {}
@@ -1165,22 +1284,35 @@ def compute_grid_overlay_infer_shapes(
         ar, ac = bid_i // GRID_COLS, bid_i % GRID_COLS
         self_base = _infer_base_occupied_cells_for_uid(uid, k, manual_shapes)
         pseudo_blocked = _infer_pseudo_blocked(baseline_occ, inferred_occ, self_base)
+        placed_greedy_q56 = False
         if use_rect_q56 and q in (5, 6):
-            r1a, c1a, r2a, c2a = _infer_greedy_rect_ud_then_lr(ar, ac, pseudo_blocked, sup, mx)
-            r1b, c1b, r2b, c2b = _infer_greedy_rect_lr_then_ud(ar, ac, pseudo_blocked, sup, mx)
-            area_a = (r2a - r1a + 1) * (c2a - c1a + 1)
-            area_b = (r2b - r1b + 1) * (c2b - c1b + 1)
-            if area_a >= area_b:
-                r1, c1, r2, c2 = r1a, c1a, r2a, c2a
-            else:
-                r1, c1, r2, c2 = r1b, c1b, r2b, c2b
-            w = c2 - c1 + 1
-            h = r2 - r1 + 1
-            out[uid] = [w, h, int(c1), int(r1)]
-            for r in range(r1, r2 + 1):
-                for c in range(c1, c2 + 1):
-                    inferred_occ.add((r, c))
-        else:
+            cand_wh: Set[Tuple[int, int]] = set()
+            for c in filt:
+                wh = shape_wh_from_snapshot(c.shape)
+                if wh is not None:
+                    cand_wh.add(wh)
+            if cand_wh:
+                r1a, c1a, r2a, c2a = _infer_greedy_rect_ud_then_lr(ar, ac, pseudo_blocked, sup, mx)
+                r1b, c1b, r2b, c2b = _infer_greedy_rect_lr_then_ud(ar, ac, pseudo_blocked, sup, mx)
+                wa, ha = c2a - c1a + 1, r2a - r1a + 1
+                wb, hb = c2b - c1b + 1, r2b - r1b + 1
+                area_a = wa * ha
+                area_b = wb * hb
+                greedy_opts: List[Tuple[int, int, int, int, int, int]] = []
+                if (wa, ha) in cand_wh:
+                    greedy_opts.append((area_a, r1a, c1a, r2a, c2a, 1))
+                if (wb, hb) in cand_wh:
+                    greedy_opts.append((area_b, r1b, c1b, r2b, c2b, 0))
+                if greedy_opts:
+                    _, r1, c1, r2, c2, _ = max(greedy_opts, key=lambda t: (t[0], t[5]))
+                    w = c2 - c1 + 1
+                    h = r2 - r1 + 1
+                    out[uid] = [w, h, int(c1), int(r1)]
+                    for r in range(r1, r2 + 1):
+                        for c in range(c1, c2 + 1):
+                            inferred_occ.add((r, c))
+                    placed_greedy_q56 = True
+        if not placed_greedy_q56:
             confirmed_tl = bool(getattr(k, "box_id_confirmed", False))
             chosen_tpl: Optional[Tuple[int, int, int, int]] = None
             for w, h in _infer_ordered_wh_for_default_infer(filt, map_w, mid_n):
@@ -1243,6 +1375,7 @@ __all__ = [
     "compute_grid_overlay_infer_shapes",
     "empty_zone_ignore_fraud_filter",
     "fraud_empty_cells_in_zone_prefix",
+    "FraudZonePrefixCache",
     "fraud_placed_items_from_build_occupied_like",
     "fraud_placed_items_from_merged_items",
     "fraud_zone_cell_exclusion_enabled",
