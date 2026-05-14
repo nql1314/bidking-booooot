@@ -6,6 +6,9 @@
 - ``phantom_quality_pref``：显式 Q1–Q6 写入合并行的 ``quality``（幽灵 JSON 常为 ``quality: null``）；
 - ``manual_shapes``：对尚无 ``shape`` 的条目写入 ``shape = w*10+h``；
 - ``manual_confirm_item_id``：按 ``item_prices.csv`` 投影 ``item_cid`` / ``quality`` / ``shape`` / ``price``。
+
+诈骗格剔除算法由 ``grid_view.fraud_empty_cells_algorithm`` 选择（``tiling`` / ``tiling_n`` / ``none``）；
+``tiling_n`` 另读 ``grid_view.fraud_empty_cells_tiling_n``（整数 n），见 :func:`fraud_empty_cells_for_algorithm`。
 """
 
 from __future__ import annotations
@@ -474,6 +477,47 @@ def fraud_empty_cells_in_zone_prefix(
     return fraud
 
 
+def fraud_empty_cells_for_algorithm(
+    algorithm: str,
+    occupied: set,
+    limit: int,
+    placed_items: Optional[Sequence[FraudPlacedItem]] = None,
+    *,
+    fraud_empty_cells_tiling_n: int = 0,
+) -> Set[Tuple[int, int]]:
+    """
+    按配置的诈骗格算法计算前缀区内「疑似诈骗」空置格集合。
+
+    - ``tiling``：铺板可解释性（顶左画形），即 :func:`fraud_empty_cells_in_zone_prefix`；
+    - ``tiling_n``：先算 ``tiling``，再**去掉** BoxId ``b <= limit - n`` 的格（这些格不再视为诈骗格）；
+      ``n`` 由参数 ``fraud_empty_cells_tiling_n`` 传入（通常来自配置）；``n <= 0`` 时与 ``tiling`` 相同。
+    - ``none``：不做诈骗判断，恒返回空集（几何空置不因诈骗格剔除）。
+
+    未知算法名时回退为 ``tiling``，与旧行为一致。
+    """
+    a = (algorithm or "").strip().lower().replace(" ", "_").replace("-", "_")
+    if a in ("none", "off", "disabled", "false", "0"):
+        return set()
+    base = fraud_empty_cells_in_zone_prefix(occupied, limit, placed_items)
+    if a in ("tiling_n", "tilingn"):
+        try:
+            n = int(fraud_empty_cells_tiling_n)
+        except (TypeError, ValueError):
+            n = 0
+        n = max(0, n)
+        if n <= 0:
+            return base
+        thr = int(limit) - n
+        out: Set[Tuple[int, int]] = set()
+        for cell in base:
+            r, c = cell
+            b = r * GRID_COLS + c
+            if b > thr:
+                out.add(cell)
+        return out
+    return base
+
+
 def occupied_cells_in_empty_zone_prefix(occupied: set, limit: int) -> int:
     """BoxId 0..limit（含）内已被物品/幽灵占用的格数。"""
     n = 0
@@ -526,6 +570,8 @@ def compute_overlay_vacant_dict(
     vacant_manual_suppress: Set[Tuple[int, int]],
     board_snapshot: Optional[Dict[str, Any]] = None,
     placed_items: Optional[Sequence[FraudPlacedItem]] = None,
+    fraud_empty_cells_algorithm: str = "tiling",
+    fraud_empty_cells_tiling_n: int = 0,
 ) -> Dict[str, Any]:
     """
     写入 ``grid_overlay["vacant"]`` 的块；定价与 UI 共用同一套逻辑。
@@ -534,6 +580,7 @@ def compute_overlay_vacant_dict(
     - **几何前缀区**：否则数 0..max(BoxId) 内空格；
     - ``board_snapshot``：须含 ``raw_pricing``（200009 总格数）；``game_state`` 供合并物品表等。
     - ``placed_items``：非空时用于诈骗格判定（须与 ``occupied`` 同源）；缺省则从 ``board_snapshot`` 合并物品表构造。
+    - ``fraud_empty_cells_algorithm`` / ``fraud_empty_cells_tiling_n``：见 :func:`fraud_empty_cells_for_algorithm`。
     """
     total_h = map_skill_total_hidden_for_overlay(board_snapshot)
     if total_h is not None:
@@ -560,8 +607,12 @@ def compute_overlay_vacant_dict(
             )
         else:
             placed_for_fraud = []
-        fraud_cells = fraud_empty_cells_in_zone_prefix(
-            occupied, limit, placed_for_fraud
+        fraud_cells = fraud_empty_cells_for_algorithm(
+            fraud_empty_cells_algorithm,
+            occupied,
+            limit,
+            placed_for_fraud,
+            fraud_empty_cells_tiling_n=fraud_empty_cells_tiling_n,
         )
     else:
         fraud_cells = set()
@@ -758,13 +809,37 @@ def vacant_manual_suppress_cells_from_snapshot(board_snapshot: Dict[str, Any]) -
 
 def vacant_dict_from_board_snapshot(
     board_snapshot: Dict[str, Any],
+    *,
+    fraud_empty_cells_algorithm: Optional[str] = None,
+    fraud_empty_cells_tiling_n: Optional[int] = None,
 ) -> Dict[str, Any]:
     """由完整画板快照计算 ``vacant`` 块；供 ``build_snapshot_pricing_dict`` 与工具链复用。"""
+    from ..config.runtime import (
+        infer_fraud_empty_cells_algorithm,
+        infer_fraud_empty_cells_tiling_n,
+    )
+
+    algo = (
+        fraud_empty_cells_algorithm
+        if fraud_empty_cells_algorithm is not None
+        else infer_fraud_empty_cells_algorithm()
+    )
+    tn = (
+        fraud_empty_cells_tiling_n
+        if fraud_empty_cells_tiling_n is not None
+        else infer_fraud_empty_cells_tiling_n()
+    )
+    try:
+        tn_i = max(0, int(tn))
+    except (TypeError, ValueError):
+        tn_i = 0
     return compute_overlay_vacant_dict(
         occupied=snapshot_occupied_cells(board_snapshot),
         max_box_id=max_anchor_box_id_merged(board_snapshot),
         vacant_manual_suppress=vacant_manual_suppress_cells_from_snapshot(board_snapshot),
         board_snapshot=board_snapshot,
+        fraud_empty_cells_algorithm=algo,
+        fraud_empty_cells_tiling_n=tn_i,
     )
 
 
@@ -1232,6 +1307,7 @@ __all__ = [
     "compute_overlay_vacant_dict",
     "compute_grid_overlay_infer_shapes",
     "empty_zone_ignore_fraud_filter",
+    "fraud_empty_cells_for_algorithm",
     "fraud_empty_cells_in_zone_prefix",
     "fraud_placed_items_from_build_occupied_like",
     "fraud_placed_items_from_merged_items",

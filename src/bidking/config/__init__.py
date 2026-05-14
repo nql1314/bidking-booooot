@@ -15,6 +15,8 @@ from .paths import (
 from .runtime import (
     RuntimeConfig,
     apply_board_snapshot_env_overrides,
+    infer_fraud_empty_cells_algorithm,
+    infer_fraud_empty_cells_tiling_n,
     infer_unknown_contour_shapes_enabled,
     load_runtime,
 )
@@ -35,6 +37,8 @@ __all__ = [
     "RuntimeConfig",
     "apply_board_snapshot_env_overrides",
     "load_runtime",
+    "infer_fraud_empty_cells_algorithm",
+    "infer_fraud_empty_cells_tiling_n",
     "infer_unknown_contour_shapes_enabled",
     "load_pricing",
     "resolve_for",
