@@ -31,7 +31,7 @@
     日志英雄 + 地图自动判定（己方身份来自配置 ``board_snapshot.self_user_uid`` 或 ``self_name_substring``）。
   - raven：状态栏附带铺板顺序提示。
   - 地图技能 200009（所有藏品格数）：在已知区内已占位格数未达到该总数前，空置计数与橘红层**忽略诈骗格过滤**；吃满后对几何空置应用诈骗格剔除。
-  - 诈骗格规则**仅用于**上述自动空置区（计数与初始橘红），**不限制**右键手动剔除/恢复空置标记。
+  - 诈骗格规则**仅用于**上述自动空置区（计数与初始橘红），**不限制**右键手动剔除/恢复空置标记。算法名由配置 ``grid_view.fraud_empty_cells_algorithm`` 选择（``tiling`` / ``tiling_n`` / ``none``）；``tiling_n`` 另配 ``grid_view.fraud_empty_cells_tiling_n``（整数 n）。
   - 空置候选格：普通右键可手动剔除该格（不计空置、不铺橘红），再右键同一格可恢复。
 """
 
@@ -72,7 +72,11 @@ from ...analysis._board_pricing import (
 from ...analysis import grid_overlay as _grid_overlay
 from ...analysis.raw_pricing import build_raw_pricing_dict
 from ...analysis.snapshot import game_state_to_json, item_knowledge_to_json
-from ...config.runtime import load_runtime
+from ...config.runtime import (
+    infer_fraud_empty_cells_algorithm,
+    infer_fraud_empty_cells_tiling_n,
+    load_runtime,
+)
 from ...pricing.compute import compute_price
 from ._grid_overlay_payload import (
     build_grid_overlay_export_dict,
@@ -540,11 +544,18 @@ class GridWindow:
         self._map_category_weights = map_category_weights
         self._home_shell: Optional[tk.Tk] = home_shell
 
-        gv_rt = load_runtime().grid_view
+        _rt_cfg = load_runtime()
+        gv_rt = _rt_cfg.grid_view
         gv_d = gv_rt if isinstance(gv_rt, dict) else {}
         _ub = gv_d.get("unknown_bg")
         _ub_s = str(_ub).strip() if _ub is not None else ""
         self._unknown_bg = _ub_s if _ub_s else UNKNOWN_BG
+        self._fraud_empty_cells_algorithm = infer_fraud_empty_cells_algorithm(
+            _rt_cfg.raw
+        )
+        self._fraud_empty_cells_tiling_n = infer_fraud_empty_cells_tiling_n(
+            _rt_cfg.raw
+        )
 
         # 实时 tail：关闭画板或返回主页时置位，供后台线程退出
         self._monitor_stop = threading.Event()
@@ -909,13 +920,16 @@ class GridWindow:
         w: int,
         h: int,
         exclude_uid: str = "",
+        *,
+        occupied: Optional[Set[Tuple[int, int]]] = None,
     ) -> bool:
         """检查指定矩形是否覆盖已有可靠物品或幽灵物品。"""
         if row < 0 or col < 0 or w <= 0 or h <= 0:
             return True
         if col + w > GRID_COLS or row + h > GRID_ROWS:
             return True
-        occupied = self._build_occupied(exclude_uid=exclude_uid)
+        if occupied is None:
+            occupied = self._build_occupied(exclude_uid=exclude_uid)
         return any(cell in occupied for cell in self._rect_cells(row, col, w, h))
 
     def _query_item_for_grid(
@@ -1264,16 +1278,20 @@ class GridWindow:
             return False
         placed = self._fraud_placed_items_for_overlay()
         memo_key = (
+            self._fraud_empty_cells_algorithm,
+            self._fraud_empty_cells_tiling_n,
             limit,
             id(occupied),
             tuple((p.min_bid, p.anchor_bid, p.w, p.h, p.cells) for p in placed),
         )
         if self._empty_zone_fraud_memo != memo_key:
             self._empty_zone_fraud_memo = memo_key
-            self._empty_zone_fraud_cells = (
-                _grid_overlay.fraud_empty_cells_in_zone_prefix(
-                    occupied, limit, placed
-                )
+            self._empty_zone_fraud_cells = _grid_overlay.fraud_empty_cells_for_algorithm(
+                self._fraud_empty_cells_algorithm,
+                occupied,
+                limit,
+                placed,
+                fraud_empty_cells_tiling_n=self._fraud_empty_cells_tiling_n,
             )
         return (row, col) in self._empty_zone_fraud_cells
 
@@ -1314,6 +1332,8 @@ class GridWindow:
             vacant_manual_suppress=set(self._vacant_manual_suppress),
             board_snapshot=self._vacant_scan_context_snapshot(),
             placed_items=self._fraud_placed_items_for_overlay(),
+            fraud_empty_cells_algorithm=self._fraud_empty_cells_algorithm,
+            fraud_empty_cells_tiling_n=self._fraud_empty_cells_tiling_n,
         )
         g = d.get("geometric")
         if g is not None:
@@ -1809,6 +1829,8 @@ class GridWindow:
             vacant_manual_suppress=set(self._vacant_manual_suppress),
             board_snapshot=vacant_ctx,
             placed_items=self._fraud_placed_items_for_overlay(),
+            fraud_empty_cells_algorithm=self._fraud_empty_cells_algorithm,
+            fraud_empty_cells_tiling_n=self._fraud_empty_cells_tiling_n,
         )
         return export
 
@@ -3033,7 +3055,10 @@ class GridWindow:
     # ── 绘制 ──────────────────────────────────────────────────────────────
 
     def _draw(self) -> None:
-        self._sync_infer_shapes_from_analysis()
+        # 手动画幽灵预览框时：占位与推断输入未变，不必每帧重算 raw_pricing + infer_shapes
+        phantom_preview = self._phantom_draw_state is not None
+        if not phantom_preview:
+            self._sync_infer_shapes_from_analysis()
         canvas = self.canvas
         canvas.delete("all")
 
@@ -3124,6 +3149,7 @@ class GridWindow:
                 min_c,
                 preview_w,
                 preview_h,
+                occupied=self._occupied_for_draw,
             )
             if preview_invalid:
                 preview_color = "#cc4444"
@@ -3156,13 +3182,14 @@ class GridWindow:
                 font=("微软雅黑", 10, "bold"),
             )
 
-        # 每次绘制后同步更新估价标签（先算 pricing 缓存，再刷新总价）
-        if hasattr(self, "_est_label_red"):
-            self._update_vacant_estimate_bar()
-        if hasattr(self, "_total_label"):
-            self._update_total_label()
-        if hasattr(self, "_info_text"):
-            self._info_text.set(self._info_summary_text())
+        # 拖拽中只重绘画布：顶栏定价/信息栏依赖完整快照，每帧算会卡顿；松手后 _refresh 会更新
+        if not phantom_preview and not self._drag_state:
+            if hasattr(self, "_est_label_red"):
+                self._update_vacant_estimate_bar()
+            if hasattr(self, "_total_label"):
+                self._update_total_label()
+            if hasattr(self, "_info_text"):
+                self._info_text.set(self._info_summary_text())
 
         # 绘制完成，释放缓存
         self._occupied_for_draw = None
