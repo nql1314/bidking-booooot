@@ -10,7 +10,6 @@
 
 from __future__ import annotations
 
-from collections import deque
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
@@ -326,57 +325,7 @@ class FraudPlacedItem:
     w: int
     h: int
     min_bid: int
-
-
-def _empty_region_bfs_prefix(
-    seed: Tuple[int, int],
-    occ_kept: Set[Tuple[int, int]],
-    limit: int,
-) -> Set[Tuple[int, int]]:
-    """从 ``seed`` 在前缀区内四连通扩张；仅 ``occ_kept`` 中的格视为阻挡（更早已铺物品）。"""
-
-    def walkable(nr: int, nc: int) -> bool:
-        if not (0 <= nr < GRID_ROWS and 0 <= nc < GRID_COLS):
-            return False
-        if nr * GRID_COLS + nc > limit:
-            return False
-        return (nr, nc) not in occ_kept
-
-    sr, sc = seed
-    if not walkable(sr, sc):
-        return set()
-    out: Set[Tuple[int, int]] = set()
-    q: deque[Tuple[int, int]] = deque([(sr, sc)])
-    out.add((sr, sc))
-    while q:
-        r, c = q.popleft()
-        for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
-            nr, nc = r + dr, c + dc
-            if not walkable(nr, nc) or (nr, nc) in out:
-                continue
-            out.add((nr, nc))
-            q.append((nr, nc))
-    return out
-
-
-def _axis_aligned_wh_fits_in_region(
-    region: Set[Tuple[int, int]], w: int, h: int
-) -> bool:
-    if w <= 0 or h <= 0:
-        return False
-    for top in range(GRID_ROWS - h + 1):
-        for left in range(GRID_COLS - w + 1):
-            ok = True
-            for dr in range(h):
-                for dc in range(w):
-                    if (top + dr, left + dc) not in region:
-                        ok = False
-                        break
-                if not ok:
-                    break
-            if ok:
-                return True
-    return False
+    anchor_bid: int  # 盘面 ``box_id``（顶左锚格 bid），与 ``manual_shapes`` 顶左或合并表一致
 
 
 def fraud_placed_items_from_merged_items(
@@ -393,7 +342,16 @@ def fraud_placed_items_from_merged_items(
         w, h = shape_wh_from_snapshot(row.get("shape"))
         cells = frozenset(cell_set)
         min_bid = min(r * GRID_COLS + c for r, c in cells)
-        out.append(FraudPlacedItem(cells=cells, w=w, h=h, min_bid=min_bid))
+        bid_raw = row.get("box_id")
+        try:
+            anchor_bid = int(bid_raw) if bid_raw is not None else min_bid
+        except (TypeError, ValueError):
+            anchor_bid = min_bid
+        out.append(
+            FraudPlacedItem(
+                cells=cells, w=w, h=h, min_bid=min_bid, anchor_bid=anchor_bid
+            )
+        )
     return out
 
 
@@ -430,14 +388,29 @@ def fraud_placed_items_from_build_occupied_like(
                 dc, dr = ib % GRID_COLS, ib // GRID_COLS
         cells = frozenset((dr + ddr, dc + ddc) for ddr in range(h) for ddc in range(w))
         min_bid = min(r * GRID_COLS + c for r, c in cells)
-        out.append(FraudPlacedItem(cells=cells, w=w, h=h, min_bid=min_bid))
+        anchor_bid = int(bid)
+        out.append(
+            FraudPlacedItem(
+                cells=cells, w=w, h=h, min_bid=min_bid, anchor_bid=anchor_bid
+            )
+        )
     for phid in phantom_items:
         if phid == exclude_uid or phid not in manual_shapes:
             continue
         w, h, dc, dr = manual_shapes[phid]
+        pk = phantom_items[phid]
         cells = frozenset((dr + ddr, dc + ddc) for ddr in range(h) for ddc in range(w))
         min_bid = min(r * GRID_COLS + c for r, c in cells)
-        out.append(FraudPlacedItem(cells=cells, w=w, h=h, min_bid=min_bid))
+        bph = getattr(pk, "box_id", None)
+        if bph is not None:
+            anchor_bid = int(bph)
+        else:
+            anchor_bid = dr * GRID_COLS + dc
+        out.append(
+            FraudPlacedItem(
+                cells=cells, w=w, h=h, min_bid=min_bid, anchor_bid=anchor_bid
+            )
+        )
     for uid, k in items.items():
         if uid == exclude_uid:
             continue
@@ -449,7 +422,7 @@ def fraud_placed_items_from_build_occupied_like(
         b = int(bid)
         r, c = b // GRID_COLS, b % GRID_COLS
         cells = frozenset({(r, c)})
-        out.append(FraudPlacedItem(cells=cells, w=1, h=1, min_bid=b))
+        out.append(FraudPlacedItem(cells=cells, w=1, h=1, min_bid=b, anchor_bid=b))
     return out
 
 
@@ -461,11 +434,12 @@ def fraud_empty_cells_in_zone_prefix(
     """
     BoxId 0..limit 内应排除的空置候选（诈骗格）集合。
 
-    铺板可解释性：空格 ``C``（bid ``b``）若存在物品 ``A`` 满足 ``A.min_bid > b``，
-    且在「仅保留 ``min_bid(B) < min_bid(A)`` 的物品占位」的版式下从 ``C`` 做四连通
-    得到空域 ``R``（等价于撤掉 ``A`` 及所有更晚铺上的物品），``R`` 与 ``A.cells`` 相交，
-    且 ``A.w×A.h`` 轴对齐矩形可完全落于 ``R`` 内，则 ``C`` 非诈骗格。无 ``placed_items``
-    信息时返回空集合（不做剔除）。
+    铺板可解释性（顶左画形、不做 BFS 空域）：候选空格 ``C``（坐标 ``(r,c)``，bid ``b``）
+    若存在物品 ``A`` 满足 ``A.min_bid > b``，将 ``A`` 的 ``w×h`` 以 ``C`` 为顶左得到占格集合
+    ``P``；若 ``P`` 完全落在棋盘内（仅受 ``GRID_ROWS``/``GRID_COLS`` 约束，不对 ``P`` 内
+    bid 设上界），且 ``P`` 与所有满足 ``B.min_bid < A.min_bid`` 的 ``B.cells`` 之并 无交集，则 ``C``
+    可由 ``A`` 的铺法解释（非诈骗格）。解释物 ``A`` 的锚格可大于 ``limit``。与更晚物品的占位
+    相交不阻挡。无 ``placed_items`` 时返回空集。
     """
     if not placed_items:
         return set()
@@ -479,16 +453,22 @@ def fraud_empty_cells_in_zone_prefix(
         for A in placed_list:
             if A.min_bid <= bid:
                 continue
-            occ_kept: Set[Tuple[int, int]] = set()
+            early_occ: Set[Tuple[int, int]] = set()
             for B in placed_list:
                 if B.min_bid < A.min_bid:
-                    occ_kept |= B.cells
-            R = _empty_region_bfs_prefix((r, c), occ_kept, limit)
-            if not (R & A.cells):
+                    early_occ |= B.cells
+            if r + A.h > GRID_ROWS or c + A.w > GRID_COLS:
                 continue
-            if _axis_aligned_wh_fits_in_region(R, A.w, A.h):
-                explained = True
-                break
+            paint: Set[Tuple[int, int]] = set()
+            for ddr in range(A.h):
+                for ddc in range(A.w):
+                    paint.add((r + ddr, c + ddc))
+            if not paint:
+                continue
+            if paint & early_occ:
+                continue
+            explained = True
+            break
         if not explained:
             fraud.add((r, c))
     return fraud
@@ -1088,9 +1068,13 @@ def compute_grid_overlay_infer_shapes(
     vacant_manual_suppress: Set[Tuple[int, int]],
     max_box_id: int,
     raw_pricing: Dict[str, Any],
+    infer_unknown_contour_shapes: bool = True,
 ) -> Dict[str, List[int]]:
     """
     对 **品质已知、轮廓未知** 且未手动画框的日志物品，估计 ``[w,h,dc,dr]``（与 ``manual_shapes`` 同形）。
+
+    ``infer_unknown_contour_shapes=False`` 时（可由 ``configs`` 里 ``pricing.infer_unknown_contour_shapes`` 关闭）
+    不读价库、不做推断，返回 ``{}``；``occupied_cells`` 保持为传入的基底占位（与有推断时最终不含推断格的效果一致）。
 
     - 默认：在权重期望价 ±20% 价带内的 CSV 候选中取掉落概率最高者定 ``(w,h)``；
       价带为空时回退为全候选按概率。
@@ -1101,10 +1085,16 @@ def compute_grid_overlay_infer_shapes(
       仅允许覆盖当前物品自身的基底占位格（通常为锚格），但若该格已被先前推断占用则不可再放。
       首选外形不满足时按掉落概率依次尝试其余候选外形，仍无解则跳过该件推断。
     - 当 ``raw_pricing.event_stats`` 中低档总格 **q12+q3+q4** 齐备（或 ``q1+q2+q3+q4`` 等价已知），且扫描史已覆盖品质
-      1–4、场上 Q1–Q4 物品轮廓与锚格均已锁定时：对 **金 (5)、红 (6)** 用两种贪心延展矩形
-      （先上下后左右 / 先左右后上下），在上述阻挡语义与 ``max_box_id`` 约束下取 **面积较大** 者；
+      1–4、场上 Q1–Q4 物品轮廓与锚格均已锁定时：对 **金 (5)、红 (6)** 在已有 CSV 候选（与默认路径相同的 ``filter_csv_candidates_for_query`` 结果非空）前提下，
+      用两种贪心延展矩形（先上下后左右 / 先左右后上下），在上述阻挡语义与 ``max_box_id`` 约束下取 **面积较大** 者；
+      贪心所得 ``(w,h)`` 须与候选中至少一件的外形一致，否则退回默认路径的价带/概率候选枚举。
       金优先于红；每推断成功一件即将其矩形并入后续件的阻挡集。
     """
+    if not infer_unknown_contour_shapes:
+        base = set(occupied_cells)
+        occupied_cells.clear()
+        occupied_cells.update(base)
+        return {}
     csv_index, csv_items = _load_item_prices_db()
     if not csv_items:
         return {}

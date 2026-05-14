@@ -1266,7 +1266,7 @@ class GridWindow:
         memo_key = (
             limit,
             id(occupied),
-            tuple((p.min_bid, p.w, p.h, p.cells) for p in placed),
+            tuple((p.min_bid, p.anchor_bid, p.w, p.h, p.cells) for p in placed),
         )
         if self._empty_zone_fraud_memo != memo_key:
             self._empty_zone_fraud_memo = memo_key
