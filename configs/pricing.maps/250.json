@@ -1,6 +1,6 @@
 {
   "pricing": {
-    "fallback_bid_price": 155555
+    "fallback_bid_price": 222222
   },
   "automation": {
     "bid_cap_price": 1500000,
