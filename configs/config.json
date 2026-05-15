@@ -1,7 +1,11 @@
 {
   "pricing": {
     "enable_opponent_bid_adjustment": true,
-    "infer_unknown_contour_shapes": false
+    "infer_unknown_contour_shapes": true
+  },
+  "grid_view": {
+    "unknown_bg": "#1a7394",
+    "fraud_empty_cells_algorithm": "tiling_strict"
   },
   "board_snapshot": {
     "enabled": true,
@@ -9,7 +13,7 @@
     "write_mode": "both",
     "schema_version_min": 1,
     "self_user_uid": "",
-    "self_name_substring": ""
+    "self_name_substring": "AIR1314"
   },
   "automation": {
     "bot_runner": "fresh_aisha_bot",
@@ -49,10 +53,5 @@
   },
   "advisor": {
     "role": "aisha"
-  },
-  "grid_view": {
-    "unknown_bg": "#1a7394",
-    "fraud_empty_cells_algorithm": "None",
-    "fraud_empty_cells_tiling_n": 30
   }
 }
