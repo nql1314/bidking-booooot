@@ -169,7 +169,7 @@ ITEM_SKILL_DESC: Dict[int, str] = {
 # 用于把「用了哪件道具」对齐到 raw 定价统计；多键表示绿白分拆或并列来源。
 # 「价」侧地图直读见 :data:`SKILL_LOG_PRICE_AVG_BINDINGS` / :data:`SKILL_LOG_PRICE_TOTAL_BINDINGS` 与
 # :func:`bidking.analysis.raw_pricing.read_skill_log_direct_prices`；部分道具见 :data:`ITEM_SKILL_CANONICAL_SKILL_CID` 并入规范 SkillCid。
-# 估价类道具对应 ``*_price_total``（总价，来自日志 HitItemTotalPrice 或轮廓 HitBox 价汇总）。
+# 估价类道具对应 ``*_price_total``（总价，来自日志 HitItemTotalPrice）。
 ITEM_SKILL_EVENT_STATS: Dict[int, Tuple[str, ...]] = {
     # 绿白总格：与 ``event_stats.q12_grid_count`` 对齐（由 q1_grid_count+q2_grid_count 在 raw_pricing 末尾汇总）
     100104: ("q12_grid_count",),
@@ -273,7 +273,7 @@ MAP_SKILL_FORCE_QUALITY: Dict[int, int] = {
     990002: 6,   # 该技能只命中品质=6的物品
 }
 
-# 轮廓类技能（英雄品质扫描 ∪ 地图强制品质）：可从 HitBoxList 推理件数/占格/价
+# 轮廓类技能（英雄品质扫描 ∪ 地图强制品质）：可从 HitBoxList 推理件数/占格
 OUTLINE_SKILL_QUALITY: Dict[int, int] = {**HERO_SKILL_QUALITY, **MAP_SKILL_FORCE_QUALITY}
 
 SKILL_Q12_COUNT = 1002044
@@ -321,7 +321,7 @@ CANONICAL_SKILL_CID_Q5_AVG_GRID = 200015
 CANONICAL_SKILL_CID_ALL_ITEMS_AVG_GRID = 200014
 
 # ─── 技能日志 JSON 字段 → event_stats「价」侧直接绑定（与 ``raw_pricing.read_skill_log_direct_prices`` 一致）──
-# 不含随机 3/6/9/12 均价下界、不含轮廓 HitBox 聚合出的 q1–q4_price_total。
+# 不含随机 3/6/9/12 均价下界；q1–q4 档总价由估价道具 ItemSkillLog 写入。
 SKILL_LOG_PRICE_AVG_BINDINGS: Tuple[Tuple[int, str, str], ...] = (
     (MAP_SKILL_AVG_PURPLE_PRICE, "AllHitItemAvgPrice", "q4_price_avg"),
     (MAP_SKILL_AVG_GOLD_PRICE, "AllHitItemAvgPrice", "q5_price_avg"),

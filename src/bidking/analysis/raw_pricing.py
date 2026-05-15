@@ -118,7 +118,7 @@ def read_skill_log_direct_prices(skill_entries: Dict[int, dict]) -> Dict[str, An
 
     返回的键与 ``build_raw_pricing_dict`` 里 ``event_stats`` 对应字段一致；取值规则与
     :data:`SKILL_LOG_PRICE_AVG_BINDINGS`、:data:`SKILL_LOG_PRICE_TOTAL_BINDINGS` 同步维护。
-    紫档 ``q4_price_total``、绿白/蓝档总价等仍主要由轮廓 HitBox 在 ``build_raw_pricing_dict`` 第 2 段写入。
+    绿白/蓝/紫档 ``*_price_total`` 等由估价类道具 ``ItemSkillLog``（第 1 段）写入，不由轮廓 HitBox 推导。
     """
     out: Dict[str, Any] = {}
     for skill_cid, field, key in SKILL_LOG_PRICE_AVG_BINDINGS:
@@ -464,8 +464,6 @@ def _shape_cell_count(slot_type: Any) -> int:
 def _aggregate_hitbox_list(boxes: List[dict]) -> Dict[str, Any]:
     count = 0
     total_cells = 0
-    total_price = 0
-    priced_items = 0
     for box in boxes or []:
         if not isinstance(box, dict):
             continue
@@ -473,20 +471,11 @@ def _aggregate_hitbox_list(boxes: List[dict]) -> Dict[str, Any]:
             continue
         count += 1
         total_cells += _shape_cell_count(box.get("ItemSlotType"))
-        if "ItemPrice" in box:
-            try:
-                total_price += int(box["ItemPrice"])
-                priced_items += 1
-            except (TypeError, ValueError):
-                pass
     avg_cells = (total_cells / count) if count else None
-    avg_price = (total_price / priced_items) if priced_items else None
     return {
         "count": count,
         "total_cells": total_cells,
-        "total_price": total_price,
         "avg_cells": avg_cells,
-        "avg_price": avg_price,
     }
 
 
@@ -936,7 +925,7 @@ def build_raw_pricing_dict(
         "item_100127_price_total": item_100127_price_total_item,
     }
 
-    # ── 2) 由直接字段推导的模糊量 + 轮廓技能 HitBoxList 补全 ───────────────
+    # ── 2) 轮廓技能 HitBoxList 补全件数/占格（不推导价格）────────────────
     for q in (1, 2, 3, 4, 5, 6):
         agg = _best_outline_aggregate_for_quality(skill_entries, q)
         if agg is None or agg["count"] <= 0:
@@ -946,22 +935,16 @@ def build_raw_pricing_dict(
                 direct["q1_count"] = int(agg["count"])
             if not direct["q1_grid_count"] and agg["total_cells"]:
                 direct["q1_grid_count"] = int(agg["total_cells"])
-            if direct["q1_price_total"] in (None, 0) and agg["total_price"]:
-                direct["q1_price_total"] = int(agg["total_price"])
         if q == 2:
             if direct["q2_count"] in (None, 0):
                 direct["q2_count"] = int(agg["count"])
             if not direct["q2_grid_count"] and agg["total_cells"]:
                 direct["q2_grid_count"] = int(agg["total_cells"])
-            if direct["q2_price_total"] in (None, 0) and agg["total_price"]:
-                direct["q2_price_total"] = int(agg["total_price"])
         if q == 3:
             if direct["q3_count"] in (None, 0):
                 direct["q3_count"] = int(agg["count"])
             if not direct["q3_grid_count"] and agg["total_cells"]:
                 direct["q3_grid_count"] = int(agg["total_cells"])
-            if direct["q3_price_total"] in (None, 0) and agg["total_price"]:
-                direct["q3_price_total"] = int(agg["total_price"])
         if q == 4:
             if direct["q4_count"] in (None, 0):
                 direct["q4_count"] = int(agg["count"])
@@ -969,10 +952,6 @@ def build_raw_pricing_dict(
                 direct["q4_grid_count"] = int(agg["total_cells"])
             if direct["q4_grid_avg"] is None and agg["avg_cells"] is not None:
                 direct["q4_grid_avg"] = float(agg["avg_cells"])
-            if direct["q4_price_total"] in (None, 0) and agg["total_price"]:
-                direct["q4_price_total"] = int(agg["total_price"])
-            if direct["q4_price_avg"] is None and agg["avg_price"] is not None:
-                direct["q4_price_avg"] = float(agg["avg_price"])
         if q == 5:
             if direct["q5_count"] in (None, 0):
                 direct["q5_count"] = int(agg["count"])
@@ -980,10 +959,6 @@ def build_raw_pricing_dict(
                 direct["q5_grid_count"] = int(agg["total_cells"])
             if direct["q5_grid_avg"] is None and agg["avg_cells"] is not None:
                 direct["q5_grid_avg"] = float(agg["avg_cells"])
-            if direct["q5_price_total"] in (None, 0) and agg["total_price"]:
-                direct["q5_price_total"] = int(agg["total_price"])
-            if direct["q5_price_avg"] is None and agg["avg_price"] is not None:
-                direct["q5_price_avg"] = float(agg["avg_price"])
         if q == 6:
             if direct["q6_count"] in (None, 0):
                 direct["q6_count"] = int(agg["count"])
@@ -991,10 +966,6 @@ def build_raw_pricing_dict(
                 direct["q6_grid_count"] = int(agg["total_cells"])
             if direct["q6_grid_avg"] is None and agg["avg_cells"] is not None:
                 direct["q6_grid_avg"] = float(agg["avg_cells"])
-            if direct["q6_price_total"] in (None, 0) and agg["total_price"]:
-                direct["q6_price_total"] = int(agg["total_price"])
-            if direct["q6_price_avg"] is None and agg["avg_price"] is not None:
-                direct["q6_price_avg"] = float(agg["avg_price"])
 
     # 全局：件数、总隐藏格、均格 与分档相同，满足 grid_count ≈ count * grid_avg，由其二可保守补第三项。
     _infer_tier_count_grid_price(
