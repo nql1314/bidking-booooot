@@ -95,48 +95,6 @@ def _infer_pseudo_blocked(
     return inferred_occ | (baseline_occ - self_base)
 
 
-def _infer_greedy_rect_ud_then_lr(
-    ar: int,
-    ac: int,
-    occupied: Set[Tuple[int, int]],
-    suppress: Set[Tuple[int, int]],
-    max_bid: int,
-) -> Tuple[int, int, int, int]:
-    """先上下扩至最大，再左右扩至最大（锚格 ``(ar,ac)`` 含于矩形内）。"""
-    r1, r2 = ar, ar
-    while r1 > 0 and _infer_rect_feasible(r1 - 1, ac, r2, ac, occupied, suppress, max_bid):
-        r1 -= 1
-    while r2 + 1 < GRID_ROWS and _infer_rect_feasible(r1, ac, r2 + 1, ac, occupied, suppress, max_bid):
-        r2 += 1
-    c1, c2 = ac, ac
-    while c1 > 0 and _infer_rect_feasible(r1, c1 - 1, r2, c2, occupied, suppress, max_bid):
-        c1 -= 1
-    while c2 + 1 < GRID_COLS and _infer_rect_feasible(r1, c1, r2, c2 + 1, occupied, suppress, max_bid):
-        c2 += 1
-    return r1, c1, r2, c2
-
-
-def _infer_greedy_rect_lr_then_ud(
-    ar: int,
-    ac: int,
-    occupied: Set[Tuple[int, int]],
-    suppress: Set[Tuple[int, int]],
-    max_bid: int,
-) -> Tuple[int, int, int, int]:
-    """先左右扩至最大，再上下扩至最大。"""
-    c1, c2 = ac, ac
-    while c1 > 0 and _infer_rect_feasible(ar, c1 - 1, ar, c2, occupied, suppress, max_bid):
-        c1 -= 1
-    while c2 + 1 < GRID_COLS and _infer_rect_feasible(ar, c1, ar, c2 + 1, occupied, suppress, max_bid):
-        c2 += 1
-    r1, r2 = ar, ar
-    while r1 > 0 and _infer_rect_feasible(r1 - 1, c1, r2, c2, occupied, suppress, max_bid):
-        r1 -= 1
-    while r2 + 1 < GRID_ROWS and _infer_rect_feasible(r1, c1, r2 + 1, c2, occupied, suppress, max_bid):
-        r2 += 1
-    return r1, c1, r2, c2
-
-
 def _infer_pick_wh_from_candidates(
     candidates: List[Any],
     map_category_weights: Optional[Dict[int, float]],
@@ -330,8 +288,8 @@ def compute_grid_overlay_infer_shapes(
       首选外形不满足时按掉落概率依次尝试其余候选外形，仍无解则跳过该件推断。
     - 当 ``raw_pricing.event_stats`` 中低档总格 **q12+q3+q4** 齐备（或 ``q1+q2+q3+q4`` 等价已知），且扫描史已覆盖品质
       1–4、场上 Q1–Q4 物品轮廓与锚格均已锁定时：对 **金 (5)、红 (6)** 在已有 CSV 候选（与默认路径相同的 ``filter_csv_candidates_for_query`` 结果非空）前提下，
-      用两种贪心延展矩形（先上下后左右 / 先左右后上下），在上述阻挡语义与 ``max_box_id`` 约束下取 **面积较大** 者；
-      贪心所得 ``(w,h)`` 须与候选中至少一件的外形一致，否则退回默认路径的价带/概率候选枚举。
+      先将候选去重为 ``(w,h)`` 集合，再按 **面积降序**（同面积则 ``(w,h)`` 字典序）在阻挡语义与 ``max_box_id`` 下尝试放置（与默认路径相同的 ``box_id_confirmed`` 顶左/枚举规则），
+      取 **首个可行** 者即候选中可放置的 **最大面积** 外形；若均不可行则跳过该件（与低档件无解时一致）。
       金优先于红；每推断成功一件即将其矩形并入后续件的阻挡集。
     """
     if not infer_unknown_contour_shapes:
@@ -400,20 +358,29 @@ def compute_grid_overlay_infer_shapes(
         self_base = _infer_base_occupied_cells_for_uid(uid, k, manual_shapes)
         pseudo_blocked = _infer_pseudo_blocked(baseline_occ, inferred_occ, self_base)
         if use_rect_q56 and q in (5, 6):
-            r1a, c1a, r2a, c2a = _infer_greedy_rect_ud_then_lr(ar, ac, pseudo_blocked, sup, mx)
-            r1b, c1b, r2b, c2b = _infer_greedy_rect_lr_then_ud(ar, ac, pseudo_blocked, sup, mx)
-            area_a = (r2a - r1a + 1) * (c2a - c1a + 1)
-            area_b = (r2b - r1b + 1) * (c2b - c1b + 1)
-            if area_a >= area_b:
-                r1, c1, r2, c2 = r1a, c1a, r2a, c2a
-            else:
-                r1, c1, r2, c2 = r1b, c1b, r2b, c2b
-            w = c2 - c1 + 1
-            h = r2 - r1 + 1
-            out[uid] = [w, h, int(c1), int(r1)]
-            for r in range(r1, r2 + 1):
-                for c in range(c1, c2 + 1):
-                    inferred_occ.add((r, c))
+            confirmed_tl = bool(getattr(k, "box_id_confirmed", False))
+            cand_wh: Set[Tuple[int, int]] = set()
+            for c in filt:
+                wh = shape_wh_from_snapshot(c.shape)
+                cand_wh.add(wh)
+            ordered_wh = sorted(cand_wh, key=lambda wh: (-wh[0] * wh[1], wh[0], wh[1]))
+            chosen_q56: Optional[Tuple[int, int, int, int]] = None
+            for w, h in ordered_wh:
+                for dr, dc in _infer_default_placement_candidates(
+                    ar, ac, w, h, box_id_confirmed=confirmed_tl
+                ):
+                    if _infer_rect_feasible(dr, dc, dr + h - 1, dc + w - 1, pseudo_blocked, sup, mx):
+                        chosen_q56 = (w, h, dr, dc)
+                        break
+                if chosen_q56 is not None:
+                    break
+            if chosen_q56 is None:
+                continue
+            w, h, dr, dc = chosen_q56
+            out[uid] = [w, h, int(dc), int(dr)]
+            for ddr in range(h):
+                for ddc in range(w):
+                    inferred_occ.add((dr + ddr, dc + ddc))
         else:
             confirmed_tl = bool(getattr(k, "box_id_confirmed", False))
             chosen_tpl: Optional[Tuple[int, int, int, int]] = None

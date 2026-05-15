@@ -2,7 +2,7 @@
 """Fresh BidKing automation loop.
 
 - 整窗 / 区域 OCR 识别大厅、结束、回合等界面状态；
-- 固定流程：道具 → 截图 OCR → :func:`compute_price` → 输入出价 → 确认；
+- 固定流程：道具 → 截图 OCR → :func:`compute_price`（读画板快照）→ 输入出价 → 确认；
 - 若 OCR 见到「对局结束」等，执行固定的局后点击链。
 """
 
@@ -158,13 +158,12 @@ CHINESE_ROUND_NUMBERS = {
 class CaptureResult:
     text: str
     image_path: Path | None
-    parsed: dict[str, Any]
 
 
 @dataclass
 class Observation:
+    """轮询/回合 OCR 结果与界面布尔信号；整窗原文在 ``capture.text``。"""
     capture: CaptureResult
-    end_text: str  # poll: 整窗 OCR；round: 空串（不维护整窗文案）
     round_no: int | None
     end_prompt: bool
     reward_continue: bool
@@ -493,11 +492,8 @@ def compute_price(
     *,
     config_path: Path,
     round_no: int,
-    observation: Observation | None = None,
-    knowledge_patch: dict[str, Any] | None = None,
 ) -> tuple[int, dict[str, Any]]:
-    """出价计算：调用 ``bidking.pricing``（快照 ``pricing`` 与对手列均在 pricing 层解析）。"""
-    _ = observation, knowledge_patch
+    """出价计算：调用 ``bidking.pricing``（读画板快照等均在 pricing 层完成）。"""
     bs_cfg = config.get("board_snapshot") or {}
     bs_data = load_board_snapshot_for_loop(config) if bool(bs_cfg.get("enabled")) else None
     effective_round = int(round_no)
@@ -620,15 +616,6 @@ def classify_bid_confirm_status(ocr_text: str) -> str:
     return "unknown"
 
 
-def reset_capture_scan_session(sess: dict[str, Any] | None) -> None:
-    """新对局/大厅等时机重置扫描会话（对手价网格 OCR 已停用时仅保留占位键）。"""
-    if sess is None:
-        return
-    sess.clear()
-    sess["opp_lobby_key"] = None
-    sess["opp_self_slot"] = None
-
-
 def ensure_output_dir(config: dict[str, Any], config_path: Path) -> Path:
     debug = config.get("debug", {})
     raw = debug.get("runs_dir", "runs")
@@ -687,21 +674,18 @@ def _observe_finalize_poll(
     *,
     t_obs: float,
     image_path: Path | None,
-    central_text: str,
     full_window_text: str,
     home_bid_text: str,
 ) -> Observation:
-    """主循环轮询：整窗 + home 信号；``end_text`` 为整窗 OCR 串。"""
+    """主循环轮询：整窗 + 主页竞拍区 OCR → 布尔信号与 ``round_no``。"""
     t_parse = time.perf_counter()
-    capture = CaptureResult(text=central_text, image_path=image_path, parsed={})
+    capture = CaptureResult(text=full_window_text, image_path=image_path)
     perf_log_elapsed(f"observe[{label}] capture_meta", t_parse)
-    round_no = parse_round_number(central_text) or parse_round_number(full_window_text)
-    parsed_facts = capture.parsed.get("parsed_facts") or []
+    round_no = parse_round_number(full_window_text)
     failed_settlement = has_failed_auction_settlement(full_window_text)
 
     any_signal = bool(
-        parsed_facts
-        or round_no is not None
+        round_no is not None
         or has_end_prompt(full_window_text)
         or has_reward_continue(full_window_text)
         or failed_settlement
@@ -711,7 +695,6 @@ def _observe_finalize_poll(
     perf_log_elapsed(f"observe[{label}] 总计", t_obs)
     return Observation(
         capture=capture,
-        end_text=full_window_text,
         round_no=round_no,
         end_prompt=has_end_prompt(full_window_text),
         reward_continue=has_reward_continue(full_window_text),
@@ -766,8 +749,7 @@ def observe_state_round(
     round_no = parse_round_number(ocr_text)
     perf_log_elapsed(f"observe[{label}] 总计", t_obs)
     return Observation(
-        capture=CaptureResult(text=ocr_text, image_path=image_path, parsed={}),
-        end_text="",
+        capture=CaptureResult(text=ocr_text, image_path=image_path),
         round_no=round_no,
         end_prompt=False,
         reward_continue=False,
@@ -811,20 +793,13 @@ def observe_state_poll(
         home_bid_text = rapidocr_once(ImageOps.grayscale(home_crop).convert("RGB"))
         perf_log_elapsed(f"observe[{label}] OCR_home_bid_region", t_home)
 
-    central_text = full_window_text
     return _observe_finalize_poll(
         label,
         t_obs=t_obs,
         image_path=image_path,
-        central_text=central_text,
         full_window_text=full_window_text,
         home_bid_text=home_bid_text,
     )
-
-
-def apply_observation_memory(observation: Observation, knowledge_patch: dict[str, Any] | None) -> dict[str, Any] | None:
-    _ = observation
-    return knowledge_patch
 
 
 def save_round_debug_bundle(
@@ -833,8 +808,6 @@ def save_round_debug_bundle(
     *,
     round_no: int,
     raw_text: str,
-    knowledge_patch: dict[str, Any] | None,
-    advisor_input: dict[str, Any],
     details: dict[str, Any],
     final_price: int,
 ) -> None:
@@ -845,14 +818,6 @@ def save_round_debug_bundle(
     stamp = time.strftime("%Y%m%d_%H%M%S")
     prefix = runs_dir / f"{stamp}_round{round_no}"
     (prefix.with_suffix(".ocr.txt")).write_text(raw_text or "", encoding="utf-8")
-    (prefix.with_suffix(".knowledge.json")).write_text(
-        json.dumps(knowledge_patch or {}, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    (prefix.with_suffix(".advisor_input.json")).write_text(
-        json.dumps(advisor_input, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
     payload = {
         "final_price": final_price,
         "details": details,
@@ -981,36 +946,6 @@ def click_absolute_screen(config: dict[str, Any], x: int, y: int, label: str) ->
     if not dry_run:
         human_click_at_screen(config, int(x), int(y), log_detail=label)
     sleep_interruptible(pause_value)
-
-
-def loot_overlay_in_bidding_poll_snapshot(observation: Observation, round_no: int | None) -> bool:
-    """主循环里 ``observed round=N … end=False lobby=False … any=True`` 一类状态：有轮次、在拍、无其它弹层。"""
-    if round_no is None or not observation.has_any_signal:
-        return False
-    return not (
-        observation.end_prompt
-        or observation.auction_lobby
-        or observation.reward_continue
-        or observation.failed_auction_settlement
-        or observation.home_bid_button
-    )
-
-
-def click_loot_overlay_dismiss_if_enabled(config: dict[str, Any]) -> None:
-    """关闭右侧战利品半透明遮罩：``handle_round`` 开头与主轮询（见 ``loot_overlay_dismiss.poll_*``）均可调用。
-
-    ``click_screen`` 与 ``clicks`` 相同：以 ``window.reference_client_size`` 为基准的客户区逻辑坐标，
-    经 ``client_to_screen`` 缩放并加上客户区在屏幕上的原点；不是 ``stuck_after_handled_round`` 那种裸屏幕像素。
-    """
-    section = config.get("safety", {}).get("loot_overlay_dismiss", {})
-    if not bool(section.get("enabled", False)):
-        return
-    cx, cy = _screen_click_pair_from_config(section.get("click_screen"), (1264, 171))
-    sx, sy = client_to_screen(config, {"x": cx, "y": cy})
-    log(f"loot_overlay_dismiss: round-start ref_client=({cx},{cy}) -> screen=({sx},{sy})", gui_verbose_only=True)
-    click_absolute_screen(config, sx, sy, "loot_overlay_dismiss")
-    sleep_interruptible(float(section.get("after_dismiss_pause_seconds", 0.35)))
-    park_mouse_if_configured(config)
 
 
 def run_stuck_after_handled_recovery(config: dict[str, Any]) -> None:
@@ -1167,7 +1102,6 @@ def input_bid(
             return "verify_timeout"
 
         log(f"bid_confirm: no 已出价 yet, retry after {retry_pause}s", gui_verbose_only=True)
-        click_loot_overlay_dismiss_if_enabled(config)
         sleep_interruptible(retry_pause)
 
 
@@ -1432,12 +1366,8 @@ def handle_round(
     config: dict[str, Any],
     config_path: Path,
     round_no: int,
-    knowledge_patch: dict[str, Any] | None,
-    scan_session: dict[str, Any] | None = None,
-) -> dict[str, Any] | None:
-    _ = scan_session
+) -> None:
     ensure_not_stopped()
-    click_loot_overlay_dismiss_if_enabled(config)
     tool_rounds = {int(item) for item in config.get("automation", {}).get("tool_rounds", [1, 2])}
     ran_tool_this_round = int(round_no) in tool_rounds
     observation = observe_state_round(
@@ -1453,13 +1383,10 @@ def handle_round(
     else:
         log(f"round {round_no}: tool skipped by config", gui_verbose_only=True)
 
-    knowledge_patch = apply_observation_memory(observation, knowledge_patch)
     price, details = compute_price(
         config,
         config_path=config_path,
         round_no=int(round_no),
-        observation=observation,
-        knowledge_patch=knowledge_patch,
     )
     log(f"compute_price -> {price}")
     log(f"bid details: {format_bid_details_line(details)}")
@@ -1470,8 +1397,6 @@ def handle_round(
         config_path,
         round_no=round_no,
         raw_text=observation.capture.text,
-        knowledge_patch=knowledge_patch,
-        advisor_input={},
         details=details,
         final_price=price,
     )
@@ -1481,7 +1406,6 @@ def handle_round(
             gui_verbose_only=True,
         )
     input_bid(config, price, config_path=config_path)
-    return knowledge_patch
 
 
 def handle_end_transition(
@@ -1521,21 +1445,16 @@ def run_loop(
     max_runs = lv["max_runs"]
     prepare_target_window(config, center=True)
 
-    log("BidKing bot 已启动（交互层；出价由 compute_price 注入）；按 F9 停止")
+    log("BidKing bot 已启动（交互层；出价由 pricing.compute_price 读快照计算）；按 F9 停止")
     log("mode: full-window OCR -> lobby/end/round handling", gui_verbose_only=True)
 
     handled_rounds: set[int] = set()
-    knowledge_patch: dict[str, Any] | None = None
     cached_game_uid: str | None = None
     preflight_esc_before_next_map_select = True
     await_non_lobby_after_preflight_esc = False
     pending_game_start_deadline: float | None = None
     startup_warehouse_sort_done = False
     warehouse_sort_milestones_done: set[int] = set()
-    scan_session: dict[str, Any] = {
-        "opp_lobby_key": None,
-        "opp_self_slot": None,
-    }
     completed_runs = 0
     last_end_at = 0.0
     last_lobby_at = 0.0
@@ -1553,7 +1472,6 @@ def run_loop(
     stuck_handled_threshold = lv["stuck_handled_threshold"]
     stuck_already_handled_polls = 0
     loop_index = 0
-    last_loot_poll_overlay_dismiss_at = 0.0
 
     while True:
         loop_index += 1
@@ -1583,7 +1501,6 @@ def run_loop(
                 mode_loop = "ahmad_premium"
 
             observation = observe_state_poll(config, config_path, "poll")
-            knowledge_patch = apply_observation_memory(observation, knowledge_patch)
 
             bs_cfg = config.get("board_snapshot") or {}
             bs_enabled = bool(bs_cfg.get("enabled"))
@@ -1626,8 +1543,6 @@ def run_loop(
                     f"loop {loop_index}: 新局 game_uid {cached_game_uid!r} -> {game_uid!r}；重置回合状态"
                 )
                 handled_rounds.clear()
-                knowledge_patch = apply_observation_memory(observation, None)
-                reset_capture_scan_session(scan_session)
             if bs_enabled and game_uid is not None:
                 cached_game_uid = game_uid
 
@@ -1640,16 +1555,6 @@ def run_loop(
                 f"home_bid={observation.home_bid_button} any={observation.has_any_signal}",
                 gui_verbose_only=True,
             )
-            loot_poll = config.get("safety", {}).get("loot_overlay_dismiss", {}) or {}
-            if (
-                bool(loot_poll.get("enabled", False))
-                and bool(loot_poll.get("poll_dismiss_enabled", True))
-                and loot_overlay_in_bidding_poll_snapshot(observation, round_no)
-            ):
-                poll_min = max(0.0, float(loot_poll.get("poll_dismiss_min_seconds", 2.5)))
-                if time.monotonic() - last_loot_poll_overlay_dismiss_at >= poll_min:
-                    click_loot_overlay_dismiss_if_enabled(config)
-                    last_loot_poll_overlay_dismiss_at = time.monotonic()
 
             if not observation.has_any_signal:
                 since_post_confirm = time.monotonic() - last_post_continue_confirm_at
@@ -1680,8 +1585,6 @@ def run_loop(
                     last_post_continue_confirm_at = confirm_at
                 completed_runs += 1
                 preflight_esc_before_next_map_select = True
-                knowledge_patch = None
-                reset_capture_scan_session(scan_session)
                 log(f"completed runs: {completed_runs}/{max_runs}")
                 if completed_runs >= max_runs:
                     log("target runs reached; exit")
@@ -1693,8 +1596,6 @@ def run_loop(
                 pending_game_start_deadline = None
                 if time.monotonic() - last_reward_continue_at >= reward_continue_debounce:
                     run_reward_continue_transition(config)
-                    knowledge_patch = None
-                    reset_capture_scan_session(scan_session)
                     last_reward_continue_at = time.monotonic()
                 else:
                     log(f"loop {loop_index}: reward continue ignored by debounce", gui_verbose_only=True)
@@ -1706,8 +1607,6 @@ def run_loop(
                 if time.monotonic() - last_failed_auction_at >= transition_debounce:
                     run_failed_auction_settlement_transition(config)
                     preflight_esc_before_next_map_select = True
-                    knowledge_patch = None
-                    reset_capture_scan_session(scan_session)
                     handled_rounds.clear()
                     last_failed_auction_at = time.monotonic()
                 else:
@@ -1743,8 +1642,6 @@ def run_loop(
                                 time.monotonic() + game_start_timeout_seconds
                             )
                         handled_rounds.clear()
-                        knowledge_patch = None
-                        reset_capture_scan_session(scan_session)
                         last_lobby_at = time.monotonic()
                 else:
                     log(f"loop {loop_index}: auction lobby ignored by debounce", gui_verbose_only=True)
@@ -1774,8 +1671,6 @@ def run_loop(
                             if completed_runs > 0 and completed_runs % 5 == 0:
                                 warehouse_sort_milestones_done.add(int(completed_runs))
                 run_home_bid_button_transition(config)
-                knowledge_patch = None
-                reset_capture_scan_session(scan_session)
                 last_home_bid_at = time.monotonic()
                 sleep_interruptible(poll_seconds)
                 continue
@@ -1795,8 +1690,6 @@ def run_loop(
             if round_no == 1 and any(value > 1 for value in handled_rounds):
                 log("new auction inferred from round 1; reset handled rounds")
                 handled_rounds.clear()
-                knowledge_patch = apply_observation_memory(observation, None)
-                reset_capture_scan_session(scan_session)
             if round_no not in handled_rounds:
                 stuck_already_handled_polls = 0
 
@@ -1813,8 +1706,6 @@ def run_loop(
                     run_stuck_after_handled_recovery(config)
                     stuck_already_handled_polls = 0
                     handled_rounds.clear()
-                    knowledge_patch = None
-                    reset_capture_scan_session(scan_session)
                     sleep_interruptible(poll_seconds)
                     continue
                 log(f"loop {loop_index}: round {round_no} already handled; waiting", gui_verbose_only=True)
@@ -1822,9 +1713,7 @@ def run_loop(
                 continue
 
             log(f"loop {loop_index}: round {round_no} -> handle_round", gui_verbose_only=True)
-            knowledge_patch = handle_round(
-                config, config_path, round_no, knowledge_patch, scan_session
-            )
+            handle_round(config, config_path, round_no)
             handled_rounds.add(round_no)
 
             if round_no >= 5:
@@ -1850,8 +1739,6 @@ def run_loop(
                 last_post_continue_confirm_at = confirm_at
             completed_runs += 1
             preflight_esc_before_next_map_select = True
-            knowledge_patch = None
-            reset_capture_scan_session(scan_session)
             log(f"completed runs: {completed_runs}/{max_runs}")
             if completed_runs >= max_runs:
                 log("target runs reached; exit")
