@@ -21,6 +21,7 @@ bidking-aisha = "bidking.runner.aisha_main:main"
 bidking-viewer = "bidking.runner.viewer_main:main"
 bidking-parse-log = "bidking.parsing.parse_log:main"
 bidking-game-tables = "bidking.tools.game_tables:main"
+bidking-skill-table = "bidking.tools.skill_table:main"
 bot_runner = "bidking.ui.app:main"
 grid_view = "bidking.runner.viewer_main:main"
 
