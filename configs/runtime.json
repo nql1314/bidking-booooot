@@ -116,8 +116,8 @@
     "unknown_escape_cooldown_seconds": 2.0,
     "post_confirm_escape_block_seconds": 60.0,
     "warehouse_auto_sort": {
-      "wait_after_warehouse_click_seconds": 5.0,
-      "wait_after_auto_sort_click_seconds": 5.0,
+      "wait_after_warehouse_click_seconds": 3.0,
+      "wait_after_auto_sort_click_seconds": 3.0,
       "warehouse_button_click": {
         "origin": "left_top",
         "x": 127,
