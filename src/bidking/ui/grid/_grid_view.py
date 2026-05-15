@@ -21,8 +21,8 @@
   - 通过 queue.SimpleQueue 传信号给 UI 主线程
   - UI 主线程每 300ms 通过 root.after() 轮询队列，按需重绘
   - 新对局开始（S2C_33）时：若配置了快照路径则先备份至该路径同级 ``run/`` 再删除旧快照文件（``run/`` 内 ``*.json`` 超过 100 个时按修改时间删最早的），随后清空并重置界面并写入新快照
-  - 日志监听与写快照均在 threading.RLock 保护下进行；``_refresh`` 结束时会写出 ``snapshot_path``
-   （含 ``grid_overlay`` 手画幽灵/轮廓/空置剔除等），手动画框与拖调轮廓也会触发刷新从而落盘
+  - 日志 tail 解析到新事件后，主线程 ``_poll_updates`` 触发的 ``_refresh(write_snapshot=True)`` 才会写出 ``snapshot_path``；
+    手动画框、拖调轮廓、回放翻页等本地操作只刷新界面，不落盘，避免频繁 JSON 序列化导致卡顿
 
 看板角色（board_mode）：
   - elsa / universal / ahmad / raven：空置候选区（橘红）与顶部空置估价均由 ``grid_overlay`` 统一计算，无「第几回合起才显示」门槛。
@@ -31,7 +31,7 @@
     日志英雄 + 地图自动判定（己方身份来自配置 ``board_snapshot.self_user_uid`` 或 ``self_name_substring``）。
   - raven：状态栏附带铺板顺序提示。
   - 地图技能 200009（所有藏品格数）：在已知区内已占位格数未达到该总数前，空置计数与橘红层**忽略诈骗格过滤**；吃满后对几何空置应用诈骗格剔除。
-  - 诈骗格规则**仅用于**上述自动空置区（计数与初始橘红），**不限制**右键手动剔除/恢复空置标记。算法名由配置 ``grid_view.fraud_empty_cells_algorithm`` 选择（``tiling`` / ``tiling_n`` / ``none``）；``tiling_n`` 另配 ``grid_view.fraud_empty_cells_tiling_n``（整数 n）。
+  - 诈骗格规则**仅用于**上述自动空置区（计数与初始橘红），**不限制**右键手动剔除/恢复空置标记。算法名由配置 ``grid_view.fraud_empty_cells_algorithm`` 选择（``tiling_strict`` / ``tiling_n`` / ``none``）；``tiling_n`` 另配 ``grid_view.fraud_empty_cells_tiling_n``（整数 n）。
   - 空置候选格：普通右键可手动剔除该格（不计空置、不铺橘红），再右键同一格可恢复。
 """
 
@@ -614,7 +614,7 @@ class GridWindow:
         self._topmost_pinned: bool = False
         self._topmost_pin_photo: Optional[Any] = None
 
-        # 线程安全：后台线程写 state，主线程读 state；用 RLock 以便在持锁的 poll 路径内可再入 _refresh→写快照
+        # 线程安全：后台线程写 state，主线程读 state；用 RLock 以便在持锁的 poll 路径内可再入 _refresh→按需写快照
         self._lock: threading.RLock = threading.RLock()
         self._queue: queue.SimpleQueue = queue.SimpleQueue()
         # 'update' = 普通刷新, 'new_game' = 新对局（需重置整个界面）
@@ -1979,7 +1979,7 @@ class GridWindow:
                         _archive_board_snapshot_then_unlink(sp)
                     self._reset_for_new_game()
                 else:
-                    self._refresh()
+                    self._refresh(write_snapshot=True)
 
         # 继续调度下一次轮询
         if not self._monitor_stop.is_set():
@@ -2013,10 +2013,13 @@ class GridWindow:
             width=min(cw, CANVAS_MAX_W),
             height=min(ch, CANVAS_MAX_H),
         )
-        self._refresh()
+        self._refresh(write_snapshot=True)
 
-    def _refresh(self) -> None:
-        """普通刷新：更新信息栏、总价标签、重绘 Canvas。"""
+    def _refresh(self, *, write_snapshot: bool = False) -> None:
+        """普通刷新：更新信息栏、总价标签、重绘 Canvas。
+
+        ``write_snapshot`` 仅在日志 tail 发现新事件后的主线程刷新中置真，避免本地操作每次落盘。
+        """
         rp = build_raw_pricing_dict(
             map_id=int(self.state.map_id or 0),
             skill_logs=list(self._skill_logs),
@@ -2034,9 +2037,8 @@ class GridWindow:
         self._sanitize_phantom_quality_prefs()
         self._validate_manual_confirmations()
 
-        self._info_text.set(self._info_summary_text())
         self._draw()
-        if self._snapshot_path:
+        if write_snapshot and self._snapshot_path:
             with self._lock:
                 self._emit_board_snapshot_unlocked(rp)
 

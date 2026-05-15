@@ -157,11 +157,12 @@ def infer_fraud_empty_cells_algorithm(
 
     读取合并后配置 ``grid_view.fraud_empty_cells_algorithm``：
 
-    - ``tiling``（默认）：铺板可解释性，即 :func:`bidking.analysis.grid_overlay.fraud_empty_cells_in_zone_prefix`；
+    - ``tiling_strict``（默认）：铺板可解释性，即 :func:`bidking.analysis.fraud_empty_cells.fraud_empty_cells_in_zone_prefix`；
+      兼容旧配置值 ``tiling`` / ``tile`` / ``explainability``。
     - ``tiling_n``：铺板后再去掉 BoxId ``<= limit - n`` 的诈骗候选；``n`` 见 :func:`infer_fraud_empty_cells_tiling_n`；
     - ``none``（及 ``off`` / ``disabled`` / ``false`` / ``0``）：不做诈骗判断，诈骗格集合恒为空。
 
-    未知非空字符串时回退为 ``tiling``。
+    未知非空字符串时回退为 ``tiling_strict``。
     """
     raw: Mapping[str, Any]
     if cfg is None:
@@ -172,16 +173,23 @@ def infer_fraud_empty_cells_algorithm(
         raw = cfg
     gv = raw.get("grid_view")
     if not isinstance(gv, dict):
-        return "tiling"
-    v = gv.get("fraud_empty_cells_algorithm", "tiling")
+        return "tiling_strict"
+    v = gv.get("fraud_empty_cells_algorithm", "tiling_strict")
     s = str(v).strip().lower()
     if s in ("none", "off", "disabled", "false", "0"):
         return "none"
     if s in ("tiling_n", "tilingn"):
         return "tiling_n"
-    if s in ("tiling", "tile", "explainability", ""):
-        return "tiling"
-    return "tiling"
+    if s in (
+        "tiling_strict",
+        "tilingstrict",
+        "tiling",
+        "tile",
+        "explainability",
+        "",
+    ):
+        return "tiling_strict"
+    return "tiling_strict"
 
 
 def infer_fraud_empty_cells_tiling_n(
@@ -191,7 +199,7 @@ def infer_fraud_empty_cells_tiling_n(
     ``tiling_n`` 诈骗格算法所用的整数 ``n``（来自 ``grid_view.fraud_empty_cells_tiling_n``）。
 
     仅在 ``fraud_empty_cells_algorithm`` 为 ``tiling_n`` 时参与计算；解析失败或缺失时返回 ``0``
-    （与纯 ``tiling`` 等价）。返回值恒为非负整数。
+    （与纯 ``tiling_strict`` 等价）。返回值恒为非负整数。
     """
     raw: Mapping[str, Any]
     if cfg is None:
