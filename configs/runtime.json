@@ -215,13 +215,5 @@
       "440": 10000,
       "450": 25000
     }
-  },
-  "grid_view": {
-    "unknown_bg": "#1a7394",
-    "fraud_empty_cells_algorithm": "tiling_strict",
-    "fraud_empty_cells_tiling_n": 0
-  },
-  "pricing": {
-    "infer_unknown_contour_shapes": true
   }
 }
