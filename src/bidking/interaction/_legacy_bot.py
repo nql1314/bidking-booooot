@@ -1452,6 +1452,7 @@ def run_loop(
     cached_game_uid: str | None = None
     preflight_esc_before_next_map_select = True
     await_non_lobby_after_preflight_esc = False
+    await_non_lobby_stuck_polls = 0
     pending_game_start_deadline: float | None = None
     startup_warehouse_sort_done = False
     warehouse_sort_milestones_done: set[int] = set()
@@ -1515,6 +1516,7 @@ def run_loop(
 
             if await_non_lobby_after_preflight_esc and not observation.auction_lobby:
                 await_non_lobby_after_preflight_esc = False
+                await_non_lobby_stuck_polls = 0
 
             if pending_game_start_deadline is not None:
                 if game_started_from_poll(bs_data, observation):
@@ -1527,6 +1529,7 @@ def run_loop(
                     press_escape(config)
                     preflight_esc_before_next_map_select = False
                     await_non_lobby_after_preflight_esc = True
+                    await_non_lobby_stuck_polls = 0
                     pending_game_start_deadline = None
                     last_lobby_at = 0.0
                     sleep_interruptible(poll_seconds)
@@ -1625,13 +1628,24 @@ def run_loop(
                         press_escape(config)
                         preflight_esc_before_next_map_select = False
                         await_non_lobby_after_preflight_esc = True
+                        await_non_lobby_stuck_polls = 0
                         last_lobby_at = time.monotonic()
                     elif await_non_lobby_after_preflight_esc:
-                        log(
-                            f"loop {loop_index}: auction lobby: 已 ESC，"
-                            "等待退出大厅界面后再从主页进入选图",
-                            gui_verbose_only=True,
-                        )
+                        await_non_lobby_stuck_polls += 1
+                        if await_non_lobby_stuck_polls > 5:
+                            log(
+                                f"loop {loop_index}: auction lobby: 已 ESC 后仍在大厅 "
+                                f"（{await_non_lobby_stuck_polls} 次轮询），再按一次 ESC",
+                                gui_verbose_only=True,
+                            )
+                            press_escape(config)
+                            await_non_lobby_stuck_polls = 0
+                        else:
+                            log(
+                                f"loop {loop_index}: auction lobby: 已 ESC，"
+                                "等待退出大厅界面后再从主页进入选图",
+                                gui_verbose_only=True,
+                            )
                         sleep_interruptible(poll_seconds)
                         continue
                     else:
@@ -1659,16 +1673,16 @@ def run_loop(
                             reason = "开局首次回到主页"
                         elif (
                             completed_runs > 0
-                            and completed_runs % 5 == 0
+                            and completed_runs % 10 == 0
                             and completed_runs not in warehouse_sort_milestones_done
                         ):
                             need_wh_sort = True
-                            reason = f"已完成 {completed_runs} 局（每 5 局整理）"
+                            reason = f"已完成 {completed_runs} 局（每 10 局整理）"
                         if need_wh_sort:
                             log(f"warehouse auto_sort: 触发整理 ({reason})", gui_verbose_only=True)
                             run_warehouse_auto_sort(config)
                             startup_warehouse_sort_done = True
-                            if completed_runs > 0 and completed_runs % 5 == 0:
+                            if completed_runs > 0 and completed_runs % 10 == 0:
                                 warehouse_sort_milestones_done.add(int(completed_runs))
                 run_home_bid_button_transition(config)
                 last_home_bid_at = time.monotonic()
