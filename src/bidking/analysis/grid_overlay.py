@@ -9,8 +9,8 @@
 - ``manual_shapes``：对尚无 ``shape`` 的条目写入 ``shape = w*10+h``；
 - ``manual_confirm_item_id``：按 ``item_prices.csv`` 投影 ``item_cid`` / ``quality`` / ``shape`` / ``price``。
 
-诈骗格剔除算法由 ``grid_view.fraud_empty_cells_algorithm`` 选择（``tiling_strict`` / ``tiling_n`` / ``none``）；
-``tiling_n`` 另读 ``grid_view.fraud_empty_cells_tiling_n``（整数 n），见 :func:`bidking.analysis.fraud_empty_cells.fraud_empty_cells_for_algorithm`。
+诈骗格剔除算法由 ``grid_view.fraud_empty_cells_algorithm`` 配置（字符串，或 ``["tiling", n]`` / ``{"tiling": n}`` 与铺板 trim 合并书写），
+详见 :func:`bidking.config.runtime.infer_fraud_empty_cells_algorithm_and_trim` 与 :func:`bidking.analysis.fraud_empty_cells.fraud_empty_cells_for_algorithm`。
 """
 
 from __future__ import annotations

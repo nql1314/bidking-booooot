@@ -19,24 +19,14 @@
       ],
       "between_clicks_seconds": 1.0
     },
-    "park_mouse_after_clicks": true,
-    "loot_overlay_dismiss": {
-      "enabled": true,
-      "click_screen": [
-        1264,
-        130
-      ],
-      "after_dismiss_pause_seconds": 0.35,
-      "poll_dismiss_enabled": true,
-      "poll_dismiss_min_seconds": 2.5
-    }
+    "park_mouse_after_clicks": false
   },
   "window": {
     "title_keyword": "BidKing",
     "title_regex": "",
     "process_name": "BidKing.exe",
     "hwnd": 0,
-    "center_on_start": true,
+    "center_on_start": false,
     "force_topmost_bump": true,
     "reference_client_size": {
       "width": 1920,
