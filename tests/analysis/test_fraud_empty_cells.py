@@ -77,7 +77,13 @@ class FraudEmptyCellsTests(unittest.TestCase):
     def test_infer_fraud_empty_cells_algorithm_from_raw(self) -> None:
         self.assertEqual(
             infer_fraud_empty_cells_algorithm({"grid_view": {}}),
-            "tiling",
+            "tiling_strict",
+        )
+        self.assertEqual(
+            infer_fraud_empty_cells_algorithm(
+                {"grid_view": {"fraud_empty_cells_algorithm": "tiling"}}
+            ),
+            "tiling_strict",
         )
         self.assertEqual(
             infer_fraud_empty_cells_algorithm(
@@ -85,6 +91,13 @@ class FraudEmptyCellsTests(unittest.TestCase):
             ),
             "none",
         )
+
+    def test_fraud_empty_cells_tiling_alias_matches_tiling_strict(self) -> None:
+        occ: set = set()
+        placed = [_fp({(0, 0)}, 1, 1, anchor_bid=0)]
+        strict = fraud_empty_cells_for_algorithm("tiling_strict", occ, 10, placed)
+        legacy = fraud_empty_cells_for_algorithm("tiling", occ, 10, placed)
+        self.assertEqual(strict, legacy)
 
     def test_no_placed_items_returns_empty_fraud(self) -> None:
         occ = {(0, 1), (1, 0)}
