@@ -13,20 +13,18 @@
     "write_mode": "both",
     "schema_version_min": 1,
     "self_user_uid": "",
-    "self_name_substring": "AIR1314"
+    "self_name_substring": "Nico666"
   },
   "automation": {
-    "bot_runner": "fresh_aisha_bot",
-    "selected_mode": "aisha_premium",
+    "bot_runner": "fresh_bidking_bot",
+    "selected_mode": "ahmad_premium",
     "tool_rounds": [],
     "default_map": "1",
     "default_runs": 1,
-    "selected_map": "230",
-    "selected_runs": 1,
+    "selected_map": "210",
+    "selected_runs": 99,
     "warehouse_auto_sort": {
-      "enabled": true,
-      "wait_after_warehouse_click_seconds": 5.0,
-      "wait_after_auto_sort_click_seconds": 5.0
+      "enabled": true
     }
   },
   "debug": {
@@ -40,7 +38,7 @@
   },
   "timing": {
     "poll_seconds": 1,
-    "round_detect_wait_seconds": 8.0,
+    "round_detect_wait_seconds": 5.0,
     "round1_extra_wait_seconds": 2.0,
     "tool_after_wait_seconds": 5.0,
     "click_pause_seconds": 0.12,
@@ -52,6 +50,6 @@
     "reward_continue_debounce_seconds": 1.0
   },
   "advisor": {
-    "role": "aisha"
+    "role": "ahmad"
   }
 }

@@ -6,11 +6,24 @@
     "default_map": "1",
     "bid_cap_price": 250000,
     "bid_ratio_by_round": {
-      "1": 0.9,
-      "2": 1.0,
-      "3": 1.1,
-      "4": 1.15,
-      "5": 1.2
+      "1": 0.8,
+      "2": 0.9,
+      "3": 1.0,
+      "4": 1.05,
+      "5": 1.1
     }
+  },
+  "timing": {
+    "poll_seconds": 1,
+    "round_detect_wait_seconds": 4.0,
+    "round1_extra_wait_seconds": 2.0,
+    "tool_after_wait_seconds": 5.0,
+    "click_pause_seconds": 0.12,
+    "after_bid_confirm_wait_seconds": 1.0,
+    "bid_confirm_verify_max_seconds": 30,
+    "bid_confirm_retry_pause_seconds": 0.35,
+    "bid_confirm_capture_delay_seconds": 0,
+    "transition_debounce_seconds": 5.0,
+    "reward_continue_debounce_seconds": 1.0
   }
 }

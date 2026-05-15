@@ -712,7 +712,7 @@ def observe_state_round(
     *,
     auction_round_no: int | None = None,
 ) -> Observation:
-    """回合内：整窗 OCR 识别轮次；不再做中央区结构化解析、对手价或底价区 OCR。"""
+    """回合开始：前窗、可配置的轮次检测等待；不做整窗 OCR（轮次已由主循环 poll/快照确定）。"""
     t_obs = time.perf_counter()
     bring_window_to_front(config)
     t_cap = time.perf_counter()
@@ -739,14 +739,11 @@ def observe_state_round(
         t_pad = time.perf_counter()
         sleep_interruptible(target_pre)
         perf_log_elapsed(f"observe[{label}] round_detect_wait_pad", t_pad)
-    frame, _info = capture_window_frame(config)
-    t_ocr = time.perf_counter()
-    ocr_text = rapidocr_once(ImageOps.grayscale(frame).convert("RGB"))
-    perf_log_elapsed(f"observe[{label}] OCR_full_window", t_ocr)
+    ocr_text = ""
     if bool(config.get("debug", {}).get("save_ocr_text", True)):
         (runs_dir / f"{timestamp}_{label}_full_window.txt").write_text(ocr_text, encoding="utf-8")
 
-    round_no = parse_round_number(ocr_text)
+    round_no = int(auction_round_no) if auction_round_no is not None else None
     perf_log_elapsed(f"observe[{label}] 总计", t_obs)
     return Observation(
         capture=CaptureResult(text=ocr_text, image_path=image_path),
