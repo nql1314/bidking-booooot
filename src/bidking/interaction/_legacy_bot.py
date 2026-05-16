@@ -17,7 +17,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 import pyautogui
 from PIL import Image, ImageOps
@@ -292,12 +292,44 @@ def persist_overlay_patch(overlay_path: Path, patch: dict[str, Any]) -> None:
     )
 
 
+def _automation_run_schedule(auto: dict[str, Any]) -> tuple[int, int, int, float]:
+    """解析「次数×循环」与循环间隔休息（分钟）。
+
+    - ``selected_runs``：每循环完成的局数（次数）；
+    - ``run_cycles``：循环遍数，默认 1；
+    - ``cycle_rest_minutes``：相邻两循环之间的休息分钟数，默认 1（可为 0 关闭）。
+
+    总目标局数 = 次数 × 循环。
+    """
+    per = int(auto.get("selected_runs") or auto.get("default_runs", 1))
+    if per < 1:
+        per = 1
+    cycles_raw = auto.get("run_cycles", 1)
+    try:
+        cycles = int(cycles_raw)
+    except (TypeError, ValueError):
+        cycles = 1
+    if cycles < 1:
+        cycles = 1
+    try:
+        rest_min = float(auto.get("cycle_rest_minutes", 1.0))
+    except (TypeError, ValueError):
+        rest_min = 1.0
+    if rest_min < 0.0:
+        rest_min = 0.0
+    total = per * cycles
+    if total < 1:
+        total = 1
+    return per, cycles, total, rest_min
+
+
 def refresh_poll_loop_locals(config: dict[str, Any]) -> dict[str, Any]:
     """从 config 读取轮询间隔、地图与回合限制等，便于与 GUI 写入的 config.json 同步。"""
     timing = config.get("timing") or {}
     auto = config.get("automation") or {}
     safety = config.get("safety") or {}
     stuck = safety.get("stuck_after_handled_round") or {}
+    runs_per_cycle, run_cycles, max_runs, cycle_rest_minutes = _automation_run_schedule(auto)
     return {
         "poll_seconds": float(timing.get("poll_seconds", 1.0)),
         "transition_debounce": float(timing.get("transition_debounce_seconds", 8.0)),
@@ -307,7 +339,10 @@ def refresh_poll_loop_locals(config: dict[str, Any]) -> dict[str, Any]:
         "stuck_handled_enabled": bool(stuck.get("enabled", True)),
         "stuck_handled_threshold": max(1, int(stuck.get("consecutive_poll_threshold", 60))),
         "selected_map": resolve_automation_map_config_key(auto),
-        "max_runs": int(auto.get("selected_runs") or auto.get("default_runs", 1)),
+        "runs_per_cycle": runs_per_cycle,
+        "run_cycles": run_cycles,
+        "cycle_rest_minutes": cycle_rest_minutes,
+        "max_runs": max_runs,
         "game_start_timeout_seconds": float(auto.get("game_start_timeout_seconds", 60.0)),
         "map_select_no_start_esc_after": max(1, int(auto.get("map_select_no_start_esc_after", 3))),
     }
@@ -1345,7 +1380,7 @@ def run_warehouse_auto_sort(config: dict[str, Any]) -> None:
     log("warehouse auto_sort: 已 ESC 返回主界面", gui_verbose_only=True)
 
 
-def run_aisha_loop(config_path: Path) -> None:
+def run_aisha_loop(config_path: Path, **run_loop_kwargs: Any) -> None:
     """兼容入口：清快照、强制 ``aisha_premium`` 后进入 :func:`run_loop`。"""
     cfg0 = load_merged_bot_config(config_path)
     if board_snapshot_file_missing(cfg0):
@@ -1358,6 +1393,7 @@ def run_aisha_loop(config_path: Path) -> None:
         app_log_path=Path.cwd() / "fresh_aisha_bot.log",
         clear_snapshot_on_start=True,
         force_selected_mode="aisha_premium",
+        **run_loop_kwargs,
     )
 
 
@@ -1425,6 +1461,7 @@ def run_loop(
     app_log_path: Path | None = None,
     clear_snapshot_on_start: bool = False,
     force_selected_mode: str | None = None,
+    progress_sink: Callable[[int, int], None] | None = None,
 ) -> None:
     # 与控制台同内容的运行日志；cwd 在脚本与 PyInstaller exe 下均为进程当前工作目录
     set_app_log_file(app_log_path or (Path.cwd() / "bidking_fresh_bot.log"))
@@ -1438,10 +1475,17 @@ def run_loop(
     lv = refresh_poll_loop_locals(config)
     selected_map = lv["selected_map"]
     max_runs = lv["max_runs"]
+    runs_per_cycle = lv["runs_per_cycle"]
+    run_cycles = lv["run_cycles"]
+    cycle_rest_minutes = lv["cycle_rest_minutes"]
     prepare_target_window(config, center=True)
 
     log("BidKing bot 已启动（交互层；出价由 pricing.compute_price 读快照计算）；按 F9 停止")
     log("mode: full-window OCR -> lobby/end/round handling", gui_verbose_only=True)
+    log(
+        f"运行计划：每循环 {runs_per_cycle} 局 × {run_cycles} 循环 → 合计 {max_runs} 局；"
+        f"循环间休息 {cycle_rest_minutes:g} 分钟（0 表示不休息）",
+    )
 
     handled_rounds: set[int] = set()
     cached_game_uid: str | None = None
@@ -1470,6 +1514,25 @@ def run_loop(
     stuck_already_handled_polls = 0
     loop_index = 0
 
+    def _notify_run_progress() -> None:
+        if progress_sink is not None:
+            progress_sink(completed_runs, max_runs)
+
+    def _maybe_cycle_rest() -> None:
+        if (
+            runs_per_cycle > 0
+            and completed_runs % runs_per_cycle == 0
+            and completed_runs < max_runs
+            and cycle_rest_minutes > 0.0
+        ):
+            rest_sec = float(cycle_rest_minutes) * 60.0
+            log(
+                f"本循环已完成 {runs_per_cycle} 局（累计 {completed_runs}/{max_runs}），"
+                f"休息 {cycle_rest_minutes:g} 分钟…"
+            )
+            sleep_interruptible(rest_sec)
+
+    _notify_run_progress()
     while True:
         loop_index += 1
         try:
@@ -1490,6 +1553,9 @@ def run_loop(
             stuck_handled_threshold = lv["stuck_handled_threshold"]
             selected_map = lv["selected_map"]
             max_runs = lv["max_runs"]
+            runs_per_cycle = lv["runs_per_cycle"]
+            cycle_rest_minutes = lv["cycle_rest_minutes"]
+            _notify_run_progress()
             game_start_timeout_seconds = lv["game_start_timeout_seconds"]
             map_select_no_start_esc_after = lv["map_select_no_start_esc_after"]
             mode_loop = str(
@@ -1593,6 +1659,8 @@ def run_loop(
                 completed_runs += 1
                 preflight_esc_before_next_map_select = True
                 log(f"completed runs: {completed_runs}/{max_runs}")
+                _notify_run_progress()
+                _maybe_cycle_rest()
                 if completed_runs >= max_runs:
                     log("target runs reached; exit")
                     return
@@ -1761,6 +1829,8 @@ def run_loop(
             completed_runs += 1
             preflight_esc_before_next_map_select = True
             log(f"completed runs: {completed_runs}/{max_runs}")
+            _notify_run_progress()
+            _maybe_cycle_rest()
             if completed_runs >= max_runs:
                 log("target runs reached; exit")
                 return

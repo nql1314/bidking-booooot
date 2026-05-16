@@ -28,7 +28,7 @@
   - elsa / universal / ahmad / raven：空置候选区（橘红）与顶部空置估价均由 ``grid_overlay`` 统一计算，无「第几回合起才显示」门槛。
   - universal：与 elsa 同套几何与空置逻辑，窗口标题缀「通用看板」便于区分。
   - ahmad：与 universal 同套几何与空置逻辑，窗口标题缀「艾哈迈德(快递站特化）」；顶栏 Ahmad 主价仍由
-    日志英雄 + 地图自动判定（己方身份来自配置 ``board_snapshot.self_user_uid`` 或 ``self_name_substring``）。
+    日志英雄 + 地图自动判定（己方身份来自配置 ``board_snapshot.self_user_uid`` 或跨对局 UID 推断）。
   - raven：状态栏附带铺板顺序提示。
   - 地图技能 200009（所有藏品格数）：在已知区内已占位格数未达到该总数前，空置计数与橘红层**忽略诈骗格过滤**；吃满后对几何空置应用诈骗格剔除。
   - 诈骗格规则**仅用于**上述自动空置区（计数与初始橘红），**不限制**右键手动剔除/恢复空置标记。由 ``grid_view.fraud_empty_cells_algorithm`` 指定：字符串 ``tiling_strict`` / ``tiling_n`` / ``none``，或列表 ``["tiling", n]`` / 对象 ``{"tiling": n}`` 将铺板与 trim 写在一起（等价于原 ``tiling_n`` + ``n``）；旧键 ``fraud_empty_cells_tiling_n`` 仍兼容。
@@ -2539,9 +2539,20 @@ class GridWindow:
         self._build_info_bar()
         self._build_vacant_estimate_bar()
         self._build_legend()
+
+        self._mid_row = tk.Frame(self.root, bg="#1a1a2e")
+        self._mid_row.pack(fill="both", expand=True, padx=8, pady=(4, 8))
+        self._center_column = tk.Frame(self._mid_row, bg="#1a1a2e")
+        self._center_column.pack(side="left", fill="both", expand=True)
+
         self._build_canvas()
         if self._snapshots:
             self._build_nav_bar()
+
+        from ._sponsor_column import build_sponsor_column
+
+        _, self._sponsor_qr_photo = build_sponsor_column(self._mid_row)
+
         self.root.bind(
             "<Control-Shift-V>", lambda _e: self._on_expand_log_items_into_vacant()
         )
@@ -2936,8 +2947,8 @@ class GridWindow:
 
     def _build_nav_bar(self) -> None:
         """快照导航栏：上一步 / 当前位置 / 下一步（仅快照模式显示）。"""
-        bar = tk.Frame(self.root, bg="#161625", pady=6)
-        bar.pack(fill="x", padx=8)
+        bar = tk.Frame(self._center_column, bg="#161625", pady=6)
+        bar.pack(fill="x", padx=0)
 
         btn_cfg = dict(
             font=("微软雅黑", 9, "bold"),
@@ -3028,8 +3039,8 @@ class GridWindow:
         self._snap_goto(self._snap_idx + 1)
 
     def _build_canvas(self) -> None:
-        outer = tk.Frame(self.root, bg="#1a1a2e")
-        outer.pack(fill="both", expand=True, anchor="w", padx=8, pady=(4, 8))
+        outer = tk.Frame(self._center_column, bg="#1a1a2e")
+        outer.pack(fill="both", expand=True, anchor="w")
 
         cw = GRID_COLS * CELL_W + 1
         ch = GRID_ROWS * CELL_H + 1

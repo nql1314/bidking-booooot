@@ -21,7 +21,7 @@ from ..ui.grid import GridWindow
 
 
 # 启动看板页顶栏说明（与历史 bot GUI 说明一致）；B 站地址单独做可点击超链接
-_LAUNCH_TAB_BANNER_PREFIX = "免费分享 禁止倒卖 Q群 956946772 B站（你的关注是我最大的动力） "
+_LAUNCH_TAB_BANNER_PREFIX = "免费分享 禁止倒卖 Q群 956946772 关注我B站 了解最新功能 "
 _BILIBILI_SPACE_URL = "https://space.bilibili.com/1934731"
 
 

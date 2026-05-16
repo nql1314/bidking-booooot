@@ -37,7 +37,7 @@ def _hero_110_red_scout_signal(
     config: dict[str, Any],
     computed_price_floor: float,
 ) -> tuple[bool, list[dict[str, Any]]]:
-    self_uid, name_hint = board_snapshot_self_identity(config, board_snapshot)
+    self_uid, _ = board_snapshot_self_identity(config, board_snapshot)
     players = (board_snapshot.get("game_state") or {}).get("players") or {}
     if not isinstance(players, dict):
         return False, []
@@ -51,9 +51,6 @@ def _hero_110_red_scout_signal(
         if not isinstance(pdata, dict):
             continue
         if self_uid and str(p_uid) == self_uid:
-            continue
-        pname = str(pdata.get("name") or "")
-        if name_hint and name_hint in pname:
             continue
         try:
             hc = int(pdata.get("hero_cid") or 0)

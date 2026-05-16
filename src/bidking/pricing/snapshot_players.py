@@ -2,26 +2,57 @@ from __future__ import annotations
 
 from typing import Any
 
+from ._self_uid_inference import (
+    apply_self_uid_inference_to_board_snapshot,
+    resolve_effective_self_user_uid,
+)
+
 
 def _self_identity_from_board_snapshot(board_snapshot: dict[str, Any] | None) -> tuple[str, str]:
-    """快照根级 ``self_user_uid`` / ``self_name_substring``。"""
+    """快照根级 ``self_user_uid``（``self_name_substring`` 已废弃，恒为空）。"""
     if not board_snapshot:
         return "", ""
     return (
         str(board_snapshot.get("self_user_uid") or "").strip(),
-        str(board_snapshot.get("self_name_substring") or "").strip(),
+        "",
+    )
+
+
+def effective_self_user_uid_on_snapshot(
+    board_snapshot: dict[str, Any] | None, *, fallback_uid: str = ""
+) -> str:
+    """显式 UID（快照根或 ``fallback_uid``，须在本局 ``players`` 内）→ 推断 ``inferred_self_user_uid``。"""
+    if not board_snapshot or not isinstance(board_snapshot, dict):
+        return (fallback_uid or "").strip()
+    fb = (fallback_uid or "").strip()
+    apply_self_uid_inference_to_board_snapshot(
+        board_snapshot, config_self_user_uid=fb
+    )
+    return resolve_effective_self_user_uid(
+        board_snapshot, config_self_user_uid=fb
     )
 
 
 def board_snapshot_self_identity(
     config: dict[str, Any], board_snapshot: dict[str, Any] | None = None
 ) -> tuple[str, str]:
-    if board_snapshot:
-        u, h = _self_identity_from_board_snapshot(board_snapshot)
-        if u or h:
-            return u, h
-    bs = config.get("board_snapshot") or {}
-    return str(bs.get("self_user_uid") or "").strip(), str(bs.get("self_name_substring") or "").strip()
+    """解析己方玩家 UID：见 :func:`resolve_effective_self_user_uid` 的优先级说明。
+
+    返回 ``(self_user_uid, "")``；第二项保留为兼容旧调用方，恒为空字符串。
+    """
+    bs_cfg = config.get("board_snapshot") or {}
+    cfg_uid = str(bs_cfg.get("self_user_uid") or "").strip()
+    if board_snapshot and isinstance(board_snapshot, dict):
+        apply_self_uid_inference_to_board_snapshot(
+            board_snapshot, config_self_user_uid=cfg_uid
+        )
+        return (
+            resolve_effective_self_user_uid(
+                board_snapshot, config_self_user_uid=cfg_uid
+            ),
+            "",
+        )
+    return cfg_uid, ""
 
 
 def player_round_price_bid(pdata: dict[str, Any], round_no: int) -> int | None:
@@ -50,23 +81,17 @@ def max_other_player_bid_from_snapshot_players(
     self_name_substring: str = "",
     board_snapshot: dict[str, Any] | None = None,
 ) -> int | None:
-    u, h = _self_identity_from_board_snapshot(board_snapshot)
-    if u:
-        self_user_uid = u
-    if h:
-        self_name_substring = h
+    del self_name_substring  # 已废弃，仅保留参数以兼容旧调用
+    self_uid = effective_self_user_uid_on_snapshot(
+        board_snapshot, fallback_uid=self_user_uid
+    )
     key_int = int(bid_round - 1)
     key_str = str(key_int)
-    self_uid = (self_user_uid or "").strip()
-    name_hint = (self_name_substring or "").strip()
     best: int | None = None
     for p_uid, pdata in players.items():
         if not isinstance(pdata, dict):
             continue
         if self_uid and str(p_uid) == self_uid:
-            continue
-        pname = str(pdata.get("name") or "")
-        if name_hint and name_hint in pname:
             continue
         prices = pdata.get("prices") or {}
         raw = prices.get(key_str)
@@ -103,7 +128,7 @@ def self_round_bid_from_snapshot(
 def iter_opponent_round_bids_from_snapshot(
     config: dict[str, Any], board_snapshot: dict[str, Any], round_no: int
 ) -> list[int]:
-    self_uid, name_hint = board_snapshot_self_identity(config, board_snapshot)
+    self_uid, _ = board_snapshot_self_identity(config, board_snapshot)
     players = (board_snapshot.get("game_state") or {}).get("players") or {}
     if not isinstance(players, dict):
         return []
@@ -112,9 +137,6 @@ def iter_opponent_round_bids_from_snapshot(
         if not isinstance(pdata, dict):
             continue
         if self_uid and str(p_uid) == self_uid:
-            continue
-        pname = str(pdata.get("name") or "")
-        if name_hint and name_hint in pname:
             continue
         b = player_round_price_bid(pdata, round_no)
         if b is not None:

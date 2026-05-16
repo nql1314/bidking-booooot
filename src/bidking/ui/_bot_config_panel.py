@@ -3,9 +3,9 @@
 聚合了原 ``BidKingApp``（bot 总控）中的可编辑项：
 - 出价参数（pricing / automation）  —— 写入 ``configs/pricing.maps/<map_id>.json``
 - 棋盘快照（board_snapshot）         —— 写入 ``configs/config.json`` 的 overlay
-- 「本地覆盖」里的两个 JSON 编辑器
-  - 主配置 overlay（``configs/config.json``）
+- 「本地覆盖」里的两个 JSON 编辑器（**左右两列**：左为当前地图，右为主配置）
   - 当前地图自定义（``configs/pricing.maps/<map_id>.json``）
+  - 主配置 overlay（``configs/config.json``）
 
 设计上**独立持久化**：所有「保存」最终都落在磁盘上的 ``configs/`` 下。
 bot 总控 GUI 在启动 bot 前再从磁盘 reload；因此 panel 与 BidKingApp
@@ -19,7 +19,6 @@ panel 自带一个**地图下拉**——和 ``BidKingApp.自动化`` 页中的�
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 import tkinter as tk
 from tkinter import messagebox, ttk
@@ -46,6 +45,10 @@ CONFIG_OVERLAY_PATH = config_overlay_path()
 DEFAULT_BID_RATIO_BY_ROUND: dict[str, float] = {
     "1": 0.6, "2": 0.65, "3": 0.75, "4": 0.95, "5": 1.0,
 }
+
+# 策略面板内两列 JSON 编辑器共用尺寸（列宽约半屏）
+_JSON_EDIT_COL_WIDTH = 46
+_JSON_EDIT_HEIGHT = 16
 
 
 def _load_json(path: Path) -> dict:
@@ -75,8 +78,6 @@ class BotConfigPanel:
             r: tk.StringVar(value=str(DEFAULT_BID_RATIO_BY_ROUND[str(r)]))
             for r in range(1, 6)
         }
-        self.self_user_uid_var = tk.StringVar(value="")
-        self.self_name_substring_var = tk.StringVar(value="")
 
         self.config_json_auto_apply_var = tk.BooleanVar(value=True)
         self.map_overlay_auto_apply_var = tk.BooleanVar(value=True)
@@ -139,8 +140,17 @@ class BotConfigPanel:
 
         self._build_pricing_box(outer)
         self._build_snapshot_box(outer)
-        self._build_config_json_editor(outer)
-        self._build_map_overlay_editor(outer)
+        json_row = ttk.Frame(outer)
+        json_row.pack(fill="both", expand=True, pady=(0, 8))
+        json_row.columnconfigure(0, weight=1)
+        json_row.columnconfigure(1, weight=1)
+        json_row.rowconfigure(0, weight=1)
+        map_col = ttk.Frame(json_row)
+        cfg_col = ttk.Frame(json_row)
+        map_col.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
+        cfg_col.grid(row=0, column=1, sticky="nsew", padx=(4, 0))
+        self._build_map_overlay_editor(map_col)
+        self._build_config_json_editor(cfg_col)
 
     def _build_pricing_box(self, parent: tk.Widget) -> None:
         price_box = ttk.LabelFrame(parent, text="出价参数（pricing / automation）", padding=10)
@@ -194,7 +204,9 @@ class BotConfigPanel:
             snap_box,
             text=(
                 "写入 configs/config.json 的 board_snapshot：快照 JSON 默认路径为项目根下 "
-                "``data/board_snapshot.json``（与 item_prices 等同目录）；「己方 UID」与「名称关键字」至少填其一。"
+                "``data/board_snapshot.json``（与 item_prices 等同目录）。"
+                "己方 UID 由跨局推断或 ``BIDKING_SELF_USER_UID`` 环境变量提供；"
+                "若需手写 ``board_snapshot.self_user_uid``，请编辑下方「主配置 overlay」JSON。"
             ),
             wraplength=720,
         ).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 6))
@@ -208,19 +220,8 @@ class BotConfigPanel:
         )
         snap_box.columnconfigure(1, weight=1)
 
-        ttk.Label(snap_box, text="己方 UID").grid(row=2, column=0, sticky="w", pady=2)
-        ttk.Entry(snap_box, textvariable=self.self_user_uid_var, width=28).grid(
-            row=2, column=1, sticky="w", pady=2,
-        )
-        ttk.Label(snap_box, text="名称关键字").grid(
-            row=2, column=2, sticky="w", padx=(12, 4), pady=2,
-        )
-        ttk.Entry(snap_box, textvariable=self.self_name_substring_var, width=20).grid(
-            row=2, column=3, sticky="w", pady=2,
-        )
-
         save_row = ttk.Frame(snap_box)
-        save_row.grid(row=3, column=0, columnspan=4, sticky="w", pady=(8, 0))
+        save_row.grid(row=2, column=0, columnspan=4, sticky="w", pady=(8, 0))
         ttk.Button(save_row, text="保存快照配置", command=self._save_snapshot_form).pack(
             side="left",
         )
@@ -237,6 +238,7 @@ class BotConfigPanel:
         ttk.Label(
             bar,
             text=f"覆盖文件: {CONFIG_OVERLAY_PATH.name}（合并自 runtime.json + 本文件）",
+            wraplength=320,
         ).pack(side="left")
         ttk.Checkbutton(
             bar, text="编辑合法后自动保存",
@@ -253,7 +255,11 @@ class BotConfigPanel:
         ).pack(side="left", padx=(10, 0))
 
         self.config_json_text = ScrolledText(
-            box, wrap="word", font=("Consolas", 10), height=14, width=92,
+            box,
+            wrap="word",
+            font=("Consolas", 10),
+            height=_JSON_EDIT_HEIGHT,
+            width=_JSON_EDIT_COL_WIDTH,
         )
         self.config_json_text.pack(fill="both", expand=True, pady=(8, 0))
         self._refresh_config_json_editor_from_model()
@@ -270,7 +276,9 @@ class BotConfigPanel:
         box.pack(fill="both", expand=True, pady=(0, 8))
         bar = ttk.Frame(box)
         bar.pack(fill="x")
-        ttk.Label(bar, textvariable=self.map_overlay_path_var).pack(side="left")
+        ttk.Label(
+            bar, textvariable=self.map_overlay_path_var, wraplength=300,
+        ).pack(side="left")
         ttk.Checkbutton(
             bar, text="编辑合法后自动保存",
             variable=self.map_overlay_auto_apply_var,
@@ -286,7 +294,11 @@ class BotConfigPanel:
         ).pack(side="left", padx=(10, 0))
 
         self.map_overlay_text = ScrolledText(
-            box, wrap="word", font=("Consolas", 10), height=12, width=92,
+            box,
+            wrap="word",
+            font=("Consolas", 10),
+            height=_JSON_EDIT_HEIGHT,
+            width=_JSON_EDIT_COL_WIDTH,
         )
         self.map_overlay_text.pack(fill="both", expand=True, pady=(8, 0))
         self.map_overlay_text.bind(
@@ -350,9 +362,6 @@ class BotConfigPanel:
         name = item.get("name", map_key)
         self.map_var.set(f"{map_key}. {name}" if map_key else "")
         self._load_map_pricing_fields(map_key)
-        bs = self.config.get("board_snapshot") if isinstance(self.config.get("board_snapshot"), dict) else {}
-        self.self_user_uid_var.set(str(bs.get("self_user_uid", "")))
-        self.self_name_substring_var.set(str(bs.get("self_name_substring", "")))
         self._refresh_map_overlay_editor_from_disk()
 
     # ── 出价参数：保存 ─────────────────────────────────────────────────────
@@ -407,30 +416,13 @@ class BotConfigPanel:
     def _save_snapshot_form(self) -> None:
         try:
             path_snap = "data/board_snapshot.json"
-            uid = str(self.self_user_uid_var.get()).strip()
-            name_sub = str(self.self_name_substring_var.get()).strip()
-            if "BIDKING_SELF_USER_UID" in os.environ:
-                uid = os.environ["BIDKING_SELF_USER_UID"].strip()
-            if "BIDKING_SELF_NAME_SUBSTRING" in os.environ:
-                name_sub = os.environ["BIDKING_SELF_NAME_SUBSTRING"].strip()
-            if not uid and not name_sub:
-                raise ValueError("「己方 UID」与「名称关键字」须至少填写一项")
 
             bs_overlay = self.overlay.setdefault("board_snapshot", {})
             bs_overlay.setdefault("enabled", True)
             bs_overlay.setdefault("write_mode", "both")
             bs_overlay.setdefault("schema_version_min", 1)
             bs_overlay["path"] = path_snap.replace("\\", "/")
-            if "BIDKING_SELF_USER_UID" not in os.environ:
-                bs_overlay["self_user_uid"] = str(self.self_user_uid_var.get()).strip()
-            else:
-                bs_overlay.pop("self_user_uid", None)
-            if "BIDKING_SELF_NAME_SUBSTRING" not in os.environ:
-                bs_overlay["self_name_substring"] = str(
-                    self.self_name_substring_var.get(),
-                ).strip()
-            else:
-                bs_overlay.pop("self_name_substring", None)
+            bs_overlay.pop("self_name_substring", None)
 
             _save_json(CONFIG_OVERLAY_PATH, self.overlay)
             self._rebuild_merged_config()

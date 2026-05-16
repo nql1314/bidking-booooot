@@ -30,12 +30,9 @@ def load_client_settings_beside_snapshot(snapshot_path: Optional[str]) -> Dict[s
 
 
 def sanitize_snapshot_self_identity(raw: Dict[str, Any]) -> Dict[str, Any]:
-    """仅保留可写入 ``board_snapshot`` 根级的己方标识字段。"""
+    """仅保留可写入 ``board_snapshot`` 根级的己方 UID 字段。"""
     uid = str(raw.get("self_user_uid") or "").strip()
-    hint = str(raw.get("self_name_substring") or "").strip()
     out: Dict[str, Any] = {}
     if uid:
         out["self_user_uid"] = uid
-    if hint:
-        out["self_name_substring"] = hint
     return out

@@ -9,12 +9,15 @@
 ``points_ceiling``。
 
 当本地配置（``configs/runtime.json`` 与 ``configs/config.json`` 深合并）中
-``board_snapshot.self_user_uid`` **或** 根级/配置里的 ``self_name_substring``（不区分大小写子串匹配 ``players.*.name``）
-能唯一确定己方玩家，且其 ``hero_cid`` 为 204（Ahmad），且对局 ``map_id`` 属
+``board_snapshot.self_user_uid`` **出现在本局** ``players`` 中时直接使用；否则由进程内跨对局
+UID 推断（``inferred_self_user_uid``，见 :mod:`bidking.pricing._self_uid_inference`）；唯一推断结果可写回
+``configs/config.json`` 的 ``board_snapshot.self_user_uid``（可用环境变量
+``BIDKING_DISABLE_SELF_UID_CONFIG_PERSIST=1`` 关闭写盘，单测默认启用）。
 快递站系列（档键 ``210``，与 ``automation.maps`` 中「快递盲盒堆」一致）时，上述三字段与
 ``pricing.ahmad_points`` 一致（由 ``raw_pricing.event_stats`` 多候选取 max）；其余地图仍走通用画板
 空置主价；``pricing.generic_points*`` 仅在启用 Ahmad 主价时写入供 UI 对照。
-``pricing.ahmad_points_detail`` 含各候选分解。
+``pricing.ahmad_points_detail`` 含各候选分解。可选 ``board_snapshot.ahmad_abde_scale``（或运行时配置同名字段）：
+对 Ahmad 候选 A/B/D 的 base 与候选 E 的 q123 格均价乘该系数，并写入 ``pricing.ahmad_abde_scale``。
 
 当 ``raw_pricing.event_stats`` 提供 ``q4_grid_min`` / ``q5_grid_min`` / ``q6_grid_min`` 时，
 对 ``max(0, 最少格 - 已确认该档占位格)`` 按 CSV 单档 ``q4``/``q5``/``q6`` 格均价计入总价，
@@ -238,7 +241,7 @@ def _pricing_work_board_snapshot(board_snapshot: Dict[str, Any], items: Dict[str
 
 
 def _local_board_snapshot_branch() -> Dict[str, Any]:
-    """``config.json`` 覆盖后的 ``board_snapshot`` 段（含 ``self_user_uid`` / ``self_name_substring``）。"""
+    """``config.json`` 覆盖后的 ``board_snapshot`` 段（含 ``self_user_uid``）。"""
     try:
         from ..config.runtime import load_runtime
 
@@ -249,19 +252,49 @@ def _local_board_snapshot_branch() -> Dict[str, Any]:
         return {}
 
 
+def _resolve_ahmad_abde_scale(
+    board_snapshot: Dict[str, Any],
+    *,
+    board_snapshot_config: Optional[Dict[str, Any]] = None,
+) -> float:
+    """与己方身份字段一致：快照根键 ``ahmad_abde_scale`` 优先，否则 ``board_snapshot_config`` / 运行时 ``board_snapshot`` 段。"""
+    branch = (
+        board_snapshot_config
+        if board_snapshot_config is not None
+        else _local_board_snapshot_branch()
+    )
+    for d in (board_snapshot, branch):
+        if not isinstance(d, dict) or "ahmad_abde_scale" not in d:
+            continue
+        v = d.get("ahmad_abde_scale")
+        try:
+            k = float(v)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(k) and k >= 0:
+            return k
+    return 1.0
+
+
 def _self_player_hero_cid(
     board_snapshot: Dict[str, Any],
     *,
     board_snapshot_config: Optional[Dict[str, Any]] = None,
 ) -> Optional[int]:
-    """用 ``self_user_uid`` 或 ``self_name_substring`` 在 ``game_state.players`` 中解析己方 ``hero_cid``。
+    """用 ``self_user_uid``、``inferred_self_user_uid`` 或 ``board_snapshot_config`` 在 ``players`` 中解析己方 ``hero_cid``。
 
-    身份字段来源（后者覆盖前者中为空的一项）：快照根键 ``self_user_*``、再 ``board_snapshot_config``、再运行时
-    ``load_runtime().raw["board_snapshot"]``（与 :func:`bidking.pricing.snapshot_players.board_snapshot_self_identity` 顺序一致）。
+    身份字段来源：快照根键 ``self_user_uid``、再 ``board_snapshot_config``、再运行时
+    ``load_runtime().raw["board_snapshot"]``；以上皆空时使用
+    :func:`bidking.pricing._self_uid_inference.apply_self_uid_inference_to_board_snapshot`
+    写入的 ``inferred_self_user_uid``。
 
-    ``self_name_substring``：对 ``name`` 做不区分大小写的子串匹配；**仅当恰好一名玩家**匹配时采纳，否则忽略（避免歧义）。
-    仍仅 ``len(players)==1`` 时回落到唯一玩家。
+    ``len(players)==1`` 时回落到唯一玩家。
     """
+    from ..pricing._self_uid_inference import (
+        apply_self_uid_inference_to_board_snapshot,
+        resolve_effective_self_user_uid,
+    )
+
     gs = board_snapshot.get("game_state")
     if not isinstance(gs, dict):
         return None
@@ -273,27 +306,16 @@ def _self_player_hero_cid(
         if board_snapshot_config is not None
         else _local_board_snapshot_branch()
     )
-    self_uid = (
-        str(board_snapshot.get("self_user_uid") or "").strip()
-        or str(branch.get("self_user_uid") or "").strip()
+    cfg_u = str(branch.get("self_user_uid") or "").strip()
+    apply_self_uid_inference_to_board_snapshot(
+        board_snapshot, config_self_user_uid=cfg_u
     )
-    name_hint = (
-        str(board_snapshot.get("self_name_substring") or "").strip()
-        or str(branch.get("self_name_substring") or "").strip()
+    self_uid = resolve_effective_self_user_uid(
+        board_snapshot, config_self_user_uid=cfg_u
     )
     pdata: Any = None
     if self_uid and self_uid in players:
         pdata = players.get(self_uid)
-    if pdata is None and name_hint:
-        hint_l = name_hint.lower()
-        matches = [
-            row
-            for row in players.values()
-            if isinstance(row, dict)
-            and hint_l in str(row.get("name") or "").lower()
-        ]
-        if len(matches) == 1:
-            pdata = matches[0]
     if pdata is None and len(players) == 1:
         pdata = next(iter(players.values()))
     if not isinstance(pdata, dict):
@@ -311,14 +333,18 @@ def _ahmad_pricing_detail_from_raw_pricing(
     items_total: Optional[float] = None,
     vacant_adj: Optional[int] = None,
     board_items_total: Optional[float] = None,
+    ahmad_abde_scale: float = 1.0,
 ) -> Dict[str, Any]:
     """Ahmad 估价算法（点数口径）及候选分解，由 ``raw_pricing`` 实现，多候选取最大值。
 
     返回 dict：``ahmad_points``、``candidates``（每项含 ``id``/``label``/``points`` 及算式用中间量）、``winner``。
 
+    ``ahmad_abde_scale``：对候选 A/B/D 的 **base** 部分与候选 E 中 **q123 格均价**（空置项乘子）统一乘该系数；
+    紫/金/红边际溢价等仍按原 CSV 口径。缺省或非有限/负数时按 ``1.0``。
+
     ``items_total`` / ``vacant_adj`` / ``board_items_total``：可选；候选 E 仅在
     ``items_total``、``vacant_adj`` 与 ``board_items_total`` 均给出且 ``board_items_total != 0`` 时加入
-    ``items_total + vacant_adj × q123 格均价``（``q123`` 取自 CSV 格均价键 ``\"q1+q2+q3+q4\"``）。
+    ``items_total + vacant_adj × q123 格均价``（``q123`` 取自 CSV 格均价键 ``\"q1+q2+q3\"``）。
 
     **候选 A — CSV 边际定价**（当 CSV 含 ``"all"`` 质量组时）：
 
@@ -365,6 +391,13 @@ def _ahmad_pricing_detail_from_raw_pricing(
     st = raw.get("event_stats")
     if not isinstance(st, dict):
         return empty
+
+    try:
+        k_abde = float(ahmad_abde_scale)
+    except (TypeError, ValueError):
+        k_abde = 1.0
+    if not math.isfinite(k_abde) or k_abde < 0:
+        k_abde = 1.0
 
     def _ni(key: str) -> Optional[int]:
         v = st.get(key)
@@ -427,7 +460,7 @@ def _ahmad_pricing_detail_from_raw_pricing(
     q123_per_item = _csv_f(csv_per_item, "q1+q2+q3")
     q123_per_cell = _csv_f(csv_per_cell, "q1+q2+q3")
     if tc > 0 and q123_per_item is not None:
-        csv_base = tc * q123_per_item
+        csv_base = tc * q123_per_item * k_abde
         csv_prem = _marginal_premium(q123_per_cell) if q123_per_cell is not None else 0.0
         pts_a = int(round(csv_base + csv_prem))
         candidates_rows.append(
@@ -438,6 +471,7 @@ def _ahmad_pricing_detail_from_raw_pricing(
                 "base": float(csv_base),
                 "marginal_premium": float(csv_prem),
                 "ref_per_cell_q123": float(q123_per_cell) if q123_per_cell is not None else None,
+                "ahmad_abde_scale": float(k_abde),
             }
         )
 
@@ -453,7 +487,9 @@ def _ahmad_pricing_detail_from_raw_pricing(
         and per_item_q3 is not None
     ):
         q3_count = max(0, tc - q12_count)
-        split_base = q12_count * per_item_q12 + q3_count * per_item_q3
+        base_q12 = float(q12_count * per_item_q12 * k_abde)
+        base_q3 = float(q3_count * per_item_q3 * k_abde)
+        split_base = base_q12 + base_q3
         split_prem = _marginal_premium(per_cell_q3) if per_cell_q3 is not None else 0.0
         pts_d = int(round(split_base + split_prem))
         candidates_rows.append(
@@ -463,10 +499,11 @@ def _ahmad_pricing_detail_from_raw_pricing(
                 "points": pts_d,
                 "q12_count": int(q12_count),
                 "q3_count": int(q3_count),
-                "base_q12": float(q12_count * per_item_q12),
-                "base_q3": float(q3_count * per_item_q3),
+                "base_q12": base_q12,
+                "base_q3": base_q3,
                 "marginal_premium": float(split_prem),
                 "ref_per_cell_q3": float(per_cell_q3) if per_cell_q3 is not None else None,
+                "ahmad_abde_scale": float(k_abde),
             }
         )
 
@@ -513,16 +550,18 @@ def _ahmad_pricing_detail_from_raw_pricing(
                 }
             )
 
-    pts_b = tc * _UNIT_PTS + prem_pts
+    base_b = float(tc * _UNIT_PTS) * k_abde
+    pts_b = base_b + prem_pts
     candidates_rows.append(
         {
             "id": "classic_base_premium",
             "label": "Ahmad 经典：total_count×1000 + 紫/金/红溢价",
             "points": int(round(pts_b)),
-            "base_total_count_pts": int(tc * _UNIT_PTS),
+            "base_total_count_pts": int(round(base_b)),
             "premium_total": int(prem_pts),
             "grid_rate_used": dict(grid_rate),
             "tier_breakdown": tier_detail,
+            "ahmad_abde_scale": float(k_abde),
         }
     )
 
@@ -546,7 +585,8 @@ def _ahmad_pricing_detail_from_raw_pricing(
         and abs(float(_gate_tot)) > 1e-12
     ):
         u_early_q123 = _csv_f(csv_per_cell, "q1+q2+q3")
-        u_early_f = float(u_early_q123) if u_early_q123 is not None else 0.0
+        u_early_raw = float(u_early_q123) if u_early_q123 is not None else 0.0
+        u_early_f = u_early_raw * k_abde
         pts_e = float(items_total) + float(vacant_adj) * u_early_f
         candidates_rows.append(
             {
@@ -556,6 +596,8 @@ def _ahmad_pricing_detail_from_raw_pricing(
                 "items_total": float(items_total),
                 "vacant_adj": int(vacant_adj),
                 "u_early_q123": u_early_f,
+                "u_early_q123_raw": u_early_raw,
+                "ahmad_abde_scale": float(k_abde),
             }
         )
 
@@ -841,8 +883,7 @@ def build_snapshot_pricing_dict(
     snapshot_path_hint: Optional[str] = None,
     board_snapshot_config: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """
-    组装 ``board_snapshot.json`` 的 ``pricing`` 字段。
+    """组装 ``board_snapshot.json`` 的 ``pricing`` 字段。
 
     从 ``board_snapshot`` 合并后的有效物品表（``game_state.items`` + ``grid_overlay``）
     计算 ``total``（不做外部覆盖）。
@@ -852,8 +893,20 @@ def build_snapshot_pricing_dict(
 
     ``board_snapshot_config``：可选，形状同应用配置里的 ``board_snapshot`` 段；省略时从
     本地 ``configs``（runtime + config 深合并）读取。用于判定己方 ``hero_cid``（Ahmad 主价等），
-    支持 ``self_user_uid`` 与 ``self_name_substring``（与策略面板一致）。
+    支持 ``self_user_uid`` 与跨对局 ``inferred_self_user_uid``（与策略面板 / 推断模块一致）。
+    可选 ``ahmad_abde_scale``（非负有限数，缺省 ``1.0``）：见 :func:`_ahmad_pricing_detail_from_raw_pricing`。
     """
+    from ..pricing._self_uid_inference import apply_self_uid_inference_to_board_snapshot
+
+    branch_bs = (
+        board_snapshot_config
+        if board_snapshot_config is not None
+        else _local_board_snapshot_branch()
+    )
+    self_uid_infer_detail = apply_self_uid_inference_to_board_snapshot(
+        board_snapshot,
+        config_self_user_uid=str(branch_bs.get("self_user_uid") or "").strip(),
+    )
     game_state_json = board_snapshot.get("game_state") or {}
     skill_logs = list(board_snapshot.get("skill_logs") or [])
     map_id = int(board_snapshot.get("map_id") or (game_state_json.get("map_id") or 0))
@@ -951,11 +1004,13 @@ def build_snapshot_pricing_dict(
         pts_floor = vacant_pts_base + float(vacant_adj) * float(u_orange)
         pts_ceiling = vacant_pts_base + float(vacant_adj) * float(u_early)
 
+    ahmad_abde_scale = _resolve_ahmad_abde_scale(snap_full, board_snapshot_config=board_snapshot_config)
     ahmad_detail = _ahmad_pricing_detail_from_raw_pricing(
         raw,
         items_total=float(vacant_pts_base),
         vacant_adj=int(vacant_adj),
         board_items_total=float(total_f),
+        ahmad_abde_scale=float(ahmad_abde_scale),
     )
     ahmad_points = int(ahmad_detail.get("ahmad_points") or 0)
 
@@ -995,7 +1050,9 @@ def build_snapshot_pricing_dict(
         "early_points_blended_with_random_avg": bool(early_pts_blended_with_random_avg),
         "ahmad_points": ahmad_points,
         "ahmad_points_detail": ahmad_detail,
+        "ahmad_abde_scale": float(ahmad_abde_scale),
         "ahmad_pricing_active": bool(ahmad_pricing_active),
+        "self_uid_inference": dict(self_uid_infer_detail),
     }
     if ahmad_pricing_active:
         pricing["generic_points"] = generic_pts

@@ -3,10 +3,9 @@
 默认读取 ``configs/runtime.json`` 为基底，再与 ``configs/config.json`` **深合并**
 （后者覆盖前者）。显式传入 ``path`` 时仅加载该文件（供测试或单文件模式）。
 
-合并后会对 ``board_snapshot`` 应用环境变量（若设置则覆盖 JSON，便于不把 UID/名称提交进仓库或打进包内）：
+合并后会对 ``board_snapshot`` 应用环境变量（若设置则覆盖 JSON，便于不把 UID 提交进仓库或打进包内）：
 
 - ``BIDKING_SELF_USER_UID`` → ``board_snapshot.self_user_uid``
-- ``BIDKING_SELF_NAME_SUBSTRING`` → ``board_snapshot.self_name_substring``
 
 仅当对应变量**出现在** ``os.environ`` 中时才覆盖（含空字符串）。
 """
@@ -90,8 +89,6 @@ def apply_board_snapshot_env_overrides(cfg: Dict[str, Any]) -> None:
         cfg["board_snapshot"] = bs
     if "BIDKING_SELF_USER_UID" in os.environ:
         bs["self_user_uid"] = os.environ["BIDKING_SELF_USER_UID"].strip()
-    if "BIDKING_SELF_NAME_SUBSTRING" in os.environ:
-        bs["self_name_substring"] = os.environ["BIDKING_SELF_NAME_SUBSTRING"].strip()
 
 
 def load_runtime(path: Optional[Path | str] = None) -> RuntimeConfig:
