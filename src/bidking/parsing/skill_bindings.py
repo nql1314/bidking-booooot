@@ -72,9 +72,22 @@ _RAW_MAP_AUCTION_SKILL_FLOAT: Tuple[Tuple3F, ...] = (
 # 英雄携带技能（param_07=0）：_skill_export_part_hero_skills — 艾哈迈德等
 # ---------------------------------------------------------------------------
 
-_RAW_HERO_SKILL_INT: Tuple[Tuple3I, ...] = (("q12_count", 1002044, "HitItemIndex"),)
+#: 维克托 ``SkillCid=100209``：紫+金+红（品质 4/5/6）**合并件数**在 ``event_stats`` 中的专用键。
+#: 与 ``q4_count`` / ``q5_count`` / ``q6_count``（分档件数）不同源，勿混用或相加对比。
+VIKTOR_COMBINED_HIGH_TIER_ITEM_COUNT_KEY: str = "viktor_q456_item_count"
 
-_RAW_HERO_SKILL_FLOAT: Tuple[Tuple3F, ...] = (("q3_grid_avg", 1002043, "AllHitItemAvgBoxIndex"),)
+_RAW_HERO_SKILL_INT: Tuple[Tuple3I, ...] = (
+    ("total_count", 100204, "HitItemIndex"),
+    (VIKTOR_COMBINED_HIGH_TIER_ITEM_COUNT_KEY, 100209, "HitItemIndex"),
+    ("q12_count", 1002044, "HitItemIndex"),
+)
+
+# param_16 [3000] → AllHitItemAvgBoxIndex；param_09 品质档与 event_stats 前缀一致
+_RAW_HERO_SKILL_FLOAT: Tuple[Tuple3F, ...] = (
+    ("q5_grid_avg", 1002041, "AllHitItemAvgBoxIndex"),
+    ("q4_grid_avg", 1002042, "AllHitItemAvgBoxIndex"),
+    ("q3_grid_avg", 1002043, "AllHitItemAvgBoxIndex"),
+)
 
 # ---------------------------------------------------------------------------
 # 道具工具：技能行上以 SkillCid 直读（与 ItemCid 直读并存，见 skill_event_stats 写入顺序）
@@ -127,6 +140,11 @@ _RAW_ITEM_TOOL_ITEM_FLOAT: Tuple[Tuple3F, ...] = (
 
 RAW_PRICING_DIRECT_SKILL_INT_BINDINGS: Tuple[Tuple3I, ...] = (
     _RAW_MAP_AUCTION_SKILL_INT + _RAW_HERO_SKILL_INT + _RAW_ITEM_TOOL_SKILL_ROW_INT
+)
+
+# 须在 ``ItemSkillLog`` 整型直读之后应用（可与 ItemCid 100122 的 ``q12_price_total`` 同键，玛丽亚在场时覆盖）。
+RAW_PRICING_INT_AFTER_ITEM_LOG: Tuple[Tuple3I, ...] = (
+    ("q12_price_total", 10010801, "HitItemTotalPrice"),
 )
 RAW_PRICING_DIRECT_SKILL_FLOAT_BINDINGS: Tuple[Tuple3F, ...] = (
     _RAW_MAP_AUCTION_SKILL_FLOAT + _RAW_HERO_SKILL_FLOAT + _RAW_ITEM_TOOL_SKILL_ROW_FLOAT

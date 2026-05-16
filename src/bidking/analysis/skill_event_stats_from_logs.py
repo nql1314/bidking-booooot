@@ -7,6 +7,7 @@
 - **属性 ↔ 技能溯源**（:data:`EVENT_STATS_ATTRIBUTE_SOURCES`）：说明每个 ``event_stats`` 键可由哪些
   ``SkillCid`` / ``ItemCid`` 与日志字段提供；同一键可对应**多条**来源（多技能或地图+英雄+道具先后覆盖同一合并键）。
 - **解析**：从合并后的 ``skill_entries`` 直读整数字段、浮点字段、地图价绑定，以及从轮廓类技能的 ``HitBoxList`` 汇总件数/占格。
+  其中部分英雄键与道具 ``ItemSkillLog`` 同键（如 ``q12_price_total``），须在道具整型直读之后按 ``RAW_PRICING_INT_AFTER_ITEM_LOG`` 再覆盖。
 
 守恒推算、分档零一致性、CSV 组合下界等**推理**仍在 :mod:`bidking.analysis.raw_pricing`。
 """
@@ -23,6 +24,8 @@ from ..parsing.skill_bindings import (
     RAW_PRICING_DIRECT_ITEM_INT_BINDINGS,
     RAW_PRICING_DIRECT_SKILL_FLOAT_BINDINGS,
     RAW_PRICING_DIRECT_SKILL_INT_BINDINGS,
+    RAW_PRICING_INT_AFTER_ITEM_LOG,
+    VIKTOR_COMBINED_HIGH_TIER_ITEM_COUNT_KEY,
 )
 
 
@@ -35,6 +38,8 @@ def _collect_attribute_sources() -> Dict[str, Tuple[str, ...]]:
 
     for key, cid, field in RAW_PRICING_DIRECT_SKILL_INT_BINDINGS:
         add(key, f"SkillCid={cid} {field} (Map/Hero 合并键)")
+    for key, cid, field in RAW_PRICING_INT_AFTER_ITEM_LOG:
+        add(key, f"SkillCid={cid} {field}（ItemSkillLog 整型直读之后覆盖）")
     for key, cid, field in RAW_PRICING_DIRECT_SKILL_FLOAT_BINDINGS:
         add(key, f"SkillCid={cid} {field} (Map/Hero 合并键)")
     for key, cid, field in RAW_PRICING_DIRECT_ITEM_INT_BINDINGS:
@@ -42,11 +47,19 @@ def _collect_attribute_sources() -> Dict[str, Tuple[str, ...]]:
     for key, cid, field in RAW_PRICING_DIRECT_ITEM_FLOAT_BINDINGS:
         add(key, f"ItemSkillLog ItemCid={cid} {field}")
     for hero_cid, canon in HERO_SKILL_CID_MERGE_INTO_MAP.items():
-        for key, cid, _f in RAW_PRICING_DIRECT_SKILL_INT_BINDINGS + RAW_PRICING_DIRECT_SKILL_FLOAT_BINDINGS:
+        for key, cid, _f in (
+            RAW_PRICING_DIRECT_SKILL_INT_BINDINGS
+            + RAW_PRICING_DIRECT_SKILL_FLOAT_BINDINGS
+            + RAW_PRICING_INT_AFTER_ITEM_LOG
+        ):
             if cid == canon:
                 add(key, f"HeroSkillLog {hero_cid} 并入规范键 {canon}")
     for item_cid, canon in ITEM_SKILL_CANONICAL_SKILL_CID.items():
-        for key, c2, _f in RAW_PRICING_DIRECT_SKILL_INT_BINDINGS + RAW_PRICING_DIRECT_SKILL_FLOAT_BINDINGS:
+        for key, c2, _f in (
+            RAW_PRICING_DIRECT_SKILL_INT_BINDINGS
+            + RAW_PRICING_DIRECT_SKILL_FLOAT_BINDINGS
+            + RAW_PRICING_INT_AFTER_ITEM_LOG
+        ):
             if c2 == canon:
                 add(key, f"ItemSkillLog ItemCid={item_cid} 并入规范键 {canon}")
     for q in range(1, 7):
@@ -272,7 +285,10 @@ def _write_skill_int_fields_from_logs(
 ) -> None:
     """地图/英雄/道具技能行合并键上的整型直读（绑表见 ``RAW_PRICING_DIRECT_SKILL_INT_BINDINGS``）。"""
     for key, cid, field in RAW_PRICING_DIRECT_SKILL_INT_BINDINGS:
-        direct[key] = safe_int_field(skill_entries.get(cid), field)
+        ent = skill_entries.get(cid)
+        if not isinstance(ent, dict):
+            continue
+        direct[key] = safe_int_field(ent, field)
 
 
 def _write_skill_float_fields_from_logs(
@@ -280,7 +296,12 @@ def _write_skill_float_fields_from_logs(
 ) -> None:
     """同上，浮点直读（``RAW_PRICING_DIRECT_SKILL_FLOAT_BINDINGS``）。"""
     for key, cid, field in RAW_PRICING_DIRECT_SKILL_FLOAT_BINDINGS:
-        direct[key] = safe_float_field(skill_entries.get(cid), field)
+        ent = skill_entries.get(cid)
+        if not isinstance(ent, dict):
+            continue
+        v = safe_float_field(ent, field)
+        if v is not None:
+            direct[key] = v
 
 
 def _write_item_int_fields_from_logs(
@@ -298,7 +319,20 @@ def _write_item_float_fields_from_logs(
 ) -> None:
     """``ItemSkillLog`` 浮点直读（``RAW_PRICING_DIRECT_ITEM_FLOAT_BINDINGS``）。"""
     for key, cid, field in RAW_PRICING_DIRECT_ITEM_FLOAT_BINDINGS:
-        direct[key] = item_skill_float_if_logged(skill_entries, cid, field)
+        v = item_skill_float_if_logged(skill_entries, cid, field)
+        if v is not None:
+            direct[key] = v
+
+
+def _write_skill_int_after_item_log(
+    skill_entries: Dict[int, dict], direct: Dict[str, Any]
+) -> None:
+    """``HeroSkillLog`` 等同键须在道具 ``ItemSkillLog`` 整型直读之后写入（见 ``RAW_PRICING_INT_AFTER_ITEM_LOG``）。"""
+    for key, cid, field in RAW_PRICING_INT_AFTER_ITEM_LOG:
+        ent = skill_entries.get(cid)
+        if not isinstance(ent, dict):
+            continue
+        direct[key] = safe_int_field(ent, field)
 
 
 def parse_skill_entries_to_event_stats_direct(
@@ -348,12 +382,14 @@ def parse_skill_entries_to_event_stats_direct(
         "q6_grid_min": None,
         "q6_price_avg": None,
         "q6_price_total": None,
+        VIKTOR_COMBINED_HIGH_TIER_ITEM_COUNT_KEY: None,
     }
 
     _write_skill_int_fields_from_logs(skill_entries, direct)
     _write_skill_float_fields_from_logs(skill_entries, direct)
     _write_item_int_fields_from_logs(skill_entries, direct)
     _write_item_float_fields_from_logs(skill_entries, direct)
+    _write_skill_int_after_item_log(skill_entries, direct)
 
     apply_outline_hitbox_to_event_stats(skill_entries, direct)
     return direct
