@@ -8,7 +8,7 @@
 
 | 层次 | 模块 | 做什么 |
 |------|------|--------|
-| 编译期 | `skill_bindings` | 从每行 `SkillExportRow` 推导「哪个键、用哪个日志 ID、读哪个字段」 |
+| 编译期 | `skill_bindings` | 维护**显式**绑定字面量（元组/字典），与 `skill_export_generated` 对齐；历史上部分行可由 `param_16` 推导生成，但以仓库内快照为准 |
 | 合并日志 | `skill_event_stats_from_logs.merge_latest_skill_entries` | `HeroSkillLog` / `MapSkillLog` / `ItemSkillLog` → `Dict[int, dict]`，键为 `SkillCid` 或 `ItemCid` |
 | 直读标量 | `parse_skill_entries_to_event_stats_direct` | 按绑定表从 `skill_entries` 填 `event_stats`（含轮廓补全） |
 | 推理 | `raw_pricing.build_raw_pricing_dict` | 分档互推、随机均价下界、零一致性等（**不在** `skill_bindings` 内） |
@@ -33,7 +33,7 @@
 
 ## 3. `param_16` 能力码与直读绑定（核心规则）
 
-下列逻辑与源码一一对应（道具行的 `2000` 分支**不含** `9000` 判断，与地图侧略有差别）。
+下列表格说明 **`param_16` / `param_09` 与 `event_stats` 键**的经典对应关系，便于对照技能表与生成脚本；**运行期**以 `skill_bindings.py` 中的 **`RAW_PRICING_DIRECT_*` 显式元组**为准（地图竞拍价位等固定 `SkillCid` 行见 **§5.1**）。若生成流程与下表不一致，以仓库内绑定快照优先。
 
 ### 3.1 地图/英雄/通用行（`param_07 ∈ {0,1,2}`）→ `SkillCid` 直读
 
@@ -85,13 +85,14 @@
 
 ## 5. 非 `param_16` 推导的静态表
 
-### 5.1 地图日志价直读（固定 `SkillCid`）
+### 5.1 地图竞拍侧价位直读（并入 `RAW_PRICING_DIRECT_SKILL_*`）
 
-- **`SKILL_LOG_PRICE_AVG_BINDINGS`**：`Tuple3P = (skill_cid, 日志字段, event_stats 键)`  
-  - 例：`(200036, "AllHitItemAvgPrice", "q4_price_avg")` 等。
-- **`SKILL_LOG_PRICE_TOTAL_BINDINGS`**：如 `(503/504/505, "HitItemTotalPrice", "q4/q5/q6_price_total")`。
+紫 / 金 / 红 **档内均价**与**总价**写在 **`_RAW_MAP_AUCTION_SKILL_FLOAT`** / **`_RAW_MAP_AUCTION_SKILL_INT`** 中，与其余地图整型、浮点直读相同，使用统一三元组 `(event_stats 键, SkillCid, 日志字段)`，由 `parse_skill_entries_to_event_stats_direct` 中的 **`_write_skill_float_fields_from_logs`** / **`_write_skill_int_fields_from_logs`** 写入：
 
-在 `parse_skill_entries_to_event_stats_direct` 里通过 `read_skill_log_direct_prices` 写入，与「整型直读绑定」并行存在；同一总价键可能既来自地图 `SkillCid` 又来自道具 `ItemCid` 覆盖策略（见解析模块实现）。
+- **均价**：`SkillCid` **200036 / 200037 / 200038** → 字段 **`AllHitItemAvgPrice`** → `q4_price_avg` / `q5_price_avg` / `q6_price_avg`
+- **总价**：`SkillCid` **503 / 504 / 505** → 字段 **`HitItemTotalPrice`** → `q4_price_total` / `q5_price_total` / `q6_price_total`
+
+已**不再**使用单独的 `SKILL_LOG_PRICE_AVG_BINDINGS` / `SKILL_LOG_PRICE_TOTAL_BINDINGS` 或 `read_skill_log_direct_prices`。同一总价键仍可能先由地图 `SkillCid` 写入、再被道具 `ItemCid` 直读覆盖（先 `_write_skill_*`，后 `_write_item_*`，道具侧在值非 `None` 时覆盖）。
 
 ### 5.2 英雄 / 地图强制品质 / 轮廓
 
@@ -101,8 +102,8 @@
 
 ### 5.3 道具 → 规范地图 `SkillCid`（鉴影类）
 
-- **`ITEM_SKILL_CANONICAL_SKILL_CID`**：与 `constants.ITEM_TOOLS` 首元一致，避免循环 import 在模块内复制一份。  
-- 含义：`ItemSkillLog` 合并时除写入 `out[item_cid]` 外，还可把同一条 entry 复制到 `out[canon_skill_cid]`，使地图侧绑定能读到鉴影道具日志（见 `merge_latest_skill_entries`）。
+- **`ITEM_SKILL_CANONICAL_SKILL_CID`**：鉴影等道具的 `ItemCid →` 规范 **`SkillCid`**；与 **`ITEM_TOOLS`** 首元同源（均由 `skill_bindings` 生成，`constants` 再导出 `ITEM_TOOLS` / `SKILL_TO_CATEGORY`）。  
+- 含义：`ItemSkillLog` 合并时除写入 `out[item_cid]` 外，还可把同一条 entry 复制到 `out[canon_skill_cid]`，使按 `SkillCid` 索引的绑定能读到鉴影道具日志（见 `merge_latest_skill_entries`）。
 
 ### 5.4 竞拍「随机 n 件轮廓」均价技能 ID
 
@@ -110,12 +111,9 @@
 - 导出为 **`MAP_SKILL_RANDOM3_AVG_PRICE`** 等四个常量；若缺任一组会在 **import 时 `RuntimeError`**。
 - 这些技能参与 **`raw_pricing`** 里 `random_avg_price_min` 的推理（`AllHitItemAvgPrice` × `HitItemIndex`），**不是** `RAW_PRICING_DIRECT_*` 三元组的一部分。
 
-### 5.5 从去重后的整型表反查「代表技能」
+### 5.5 从绑定表反查 `SkillCid`
 
-- **`_skill_cid_for_int_stat(stat_key)`**：在 `RAW_PRICING_DIRECT_SKILL_INT_BINDINGS` 里按键查找，供：
-  - **`MAP_SKILL_TOTAL_HIDDEN_CELLS`**：`total_grid_count` 对应 `SkillCid`
-  - **`MAP_SKILL_TOTAL_GOLD_COUNT`**：`q5_count` 对应 `SkillCid`  
-  若键不存在则 **抛 `KeyError`**（表结构变更时需同步技能表或绑定逻辑）。
+单测或工具若需从某个 **`event_stats` 键**反查「代表 `SkillCid`」可在 **`RAW_PRICING_DIRECT_SKILL_INT_BINDINGS`** / **`RAW_PRICING_DIRECT_SKILL_FLOAT_BINDINGS`** 中按键名扫描三元组。仓库**不再**单独导出 `MAP_SKILL_TOTAL_HIDDEN_CELLS`、`MAP_SKILL_TOTAL_GOLD_COUNT` 等别名。
 
 ---
 
@@ -130,7 +128,7 @@
 ## 7. 与日志合并、解析的顺序要点
 
 1. **`merge_latest_skill_entries`**：后出现的日志块覆盖先出现的；同一列表内靠后的条目覆盖靠前的。道具条目总是写入 **`out[ItemCid]`**；若存在规范键则再写 **`out[canon]`**。
-2. **`parse_skill_entries_to_event_stats_direct`**：先 `read_skill_log_direct_prices`，再按 `RAW_PRICING_DIRECT_SKILL_*` / `ITEM_*` 循环填充；道具整型在值非 `None` 时 **覆盖** 已有键。
+2. **`parse_skill_entries_to_event_stats_direct`**：先构造 `direct` 初值（含价位键，默认 `None`），再依次 **`_write_skill_int_fields_from_logs`** → **`_write_skill_float_fields_from_logs`** → **`_write_item_int_fields_from_logs`** → **`_write_item_float_fields_from_logs`**；地图与英雄侧价位与其它字段同一套 `RAW_PRICING_DIRECT_SKILL_*`；道具整型在值非 `None` 时 **覆盖** 已有键。
 3. **`EVENT_STATS_ATTRIBUTE_SOURCES`**（`skill_event_stats_from_logs`）：由上述绑定表 **自动生成** 人类可读溯源说明，便于排查「某个 `event_stats` 键可能来自哪里」。
 
 ---

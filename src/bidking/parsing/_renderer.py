@@ -22,6 +22,7 @@ from .constants import (
     SEP,
     THIN,
     fmt_categories,
+    fmt_categories_any,
     fmt_price,
     fmt_shape,
 )
@@ -52,6 +53,7 @@ def fmt_item_line(
         k.excluded_categories, k.excluded_qualities,
         map_category_weights=map_category_weights,
         map_id=map_id,
+        categories_any=k.categories_any if k.categories_any else None,
     )
 
     info_parts = []
@@ -63,6 +65,8 @@ def fmt_item_line(
         info_parts.append(f"品质:{k.quality}")
     if k.categories:
         info_parts.append(f"[{fmt_categories(k.categories)}]")
+    if k.categories_any:
+        info_parts.append(f"({fmt_categories_any(k.categories_any)})")
     left = "  ".join(info_parts)
 
     if k.price is not None and k.item_cid:
@@ -111,6 +115,7 @@ def calc_total_price(
             k.excluded_categories, k.excluded_qualities,
             map_category_weights=map_category_weights,
             map_id=state.map_id,
+            categories_any=k.categories_any if k.categories_any else None,
         )
         if best is None:
             continue

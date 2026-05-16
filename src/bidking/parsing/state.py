@@ -38,6 +38,8 @@ class ItemKnowledge:
       shape               - 来自 ItemSlotType（英雄/地图技能揭示）
       quality             - 来自 ItemQuility（英雄/地图技能揭示）
       categories          - 来自 ItemType（道具/地图技能揭示），可多个
+      categories_any      - 英雄技能揭示的类别 OR：物品真实类别属于该集合之一；
+                            多次命中同一 UID 时各次 OR 集合求交（收紧）；与 ``categories``（AND）同时生效
       item_cid            - 精确物品 ID（地图技能 200021 或游戏结束揭示）
       price               - 精确价格（地图技能 200021 揭示）
       excluded_categories - 负向约束：确定该物品不属于这些类别
@@ -53,6 +55,7 @@ class ItemKnowledge:
     shape: Optional[int] = None
     quality: Optional[int] = None
     categories: Set[int] = field(default_factory=set)
+    categories_any: Set[int] = field(default_factory=set)
     item_cid: Optional[int] = None
     price: Optional[int] = None
     # 手动候选确认：仅作为 UI 推断锚点，不覆盖日志真实字段

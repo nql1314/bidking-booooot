@@ -145,6 +145,7 @@ def weighted_cell_equiv_for_unknown_contour_item(
     except (TypeError, ValueError):
         item_cid_i = None
     categories = _int_set_from_snapshot_field(it.get("categories"))
+    categories_any = _int_set_from_snapshot_field(it.get("categories_any"))
     excl_q = _int_set_from_snapshot_field(it.get("excluded_qualities"))
     excl_c = _int_set_from_snapshot_field(it.get("excluded_categories"))
     best, count, unique, est, _ql = item_db.query_item(
@@ -159,6 +160,7 @@ def weighted_cell_equiv_for_unknown_contour_item(
         max_shape_wh=None,
         map_category_weights=None,
         map_id=map_id_normalized,
+        categories_any=categories_any if categories_any else None,
     )
     if best is None or count == 0:
         return None

@@ -6,6 +6,10 @@
 **不再**根据 ``param_*`` 推导绑定；更新 ``Skill_export.csv`` 并重新生成
 ``skill_export_generated`` 后，若技能行增减或语义变化，须同步更新本文件中的字面量
 （可用旧版推导逻辑或测试对比重新导出快照）。
+
+:data:`HERO_SKILL_CATEGORY_TAGS_OR` 为英雄 ``SkillCid`` → 揭示物品类别 OR 集合的**显式快照**
+（原由 ``param_07=0`` + ``param_09`` 纯类别列表推导）；供日志 ``HeroSkillLog`` 写入
+``ItemKnowledge.categories_any``；与鉴影 ``SKILL_TO_CATEGORY`` 并存。
 """
 
 from __future__ import annotations
@@ -33,7 +37,6 @@ _ITEM_SKILL_CANONICAL_SKILL_CID: Dict[int, int] = {
 
 Tuple3I = Tuple[str, int, str]
 Tuple3F = Tuple[str, int, str]
-Tuple3P = Tuple[int, str, str]
 
 # ---------------------------------------------------------------------------
 # 地图竞拍信息（param_07=1）：_skill_export_part_map_auction_board
@@ -49,6 +52,9 @@ _RAW_MAP_AUCTION_SKILL_INT: Tuple[Tuple3I, ...] = (
     ("q4_count", 200018, "HitItemIndex"),
     ("q5_count", 200019, "HitItemIndex"),
     ("q6_count", 200020, "HitItemIndex"),
+    ("q4_price_total", 503, "HitItemTotalPrice"),
+    ("q5_price_total", 504, "HitItemTotalPrice"),
+    ("q6_price_total", 505, "HitItemTotalPrice"),
 )
 
 # _registry_map_avg_cell_scan_lines
@@ -57,6 +63,9 @@ _RAW_MAP_AUCTION_SKILL_FLOAT: Tuple[Tuple3F, ...] = (
     ("total_grid_avg", 200014, "AllHitItemAvgBoxIndex"),
     ("q5_grid_avg", 200015, "AllHitItemAvgBoxIndex"),
     ("q6_grid_avg", 200016, "AllHitItemAvgBoxIndex"),
+    ("q4_price_avg", 200036, "AllHitItemAvgPrice"),
+    ("q5_price_avg", 200037, "AllHitItemAvgPrice"),
+    ("q6_price_avg", 200038, "AllHitItemAvgPrice"),
 )
 
 # ---------------------------------------------------------------------------
@@ -125,18 +134,6 @@ RAW_PRICING_DIRECT_SKILL_FLOAT_BINDINGS: Tuple[Tuple3F, ...] = (
 RAW_PRICING_DIRECT_ITEM_INT_BINDINGS: Tuple[Tuple3I, ...] = _RAW_ITEM_TOOL_ITEM_INT
 RAW_PRICING_DIRECT_ITEM_FLOAT_BINDINGS: Tuple[Tuple3F, ...] = _RAW_ITEM_TOOL_ITEM_FLOAT
 
-SKILL_LOG_PRICE_AVG_BINDINGS: Tuple[Tuple3P, ...] = (
-    (200036, "AllHitItemAvgPrice", "q4_price_avg"),
-    (200037, "AllHitItemAvgPrice", "q5_price_avg"),
-    (200038, "AllHitItemAvgPrice", "q6_price_avg"),
-)
-
-SKILL_LOG_PRICE_TOTAL_BINDINGS: Tuple[Tuple3P, ...] = (
-    (503, "HitItemTotalPrice", "q4_price_total"),
-    (504, "HitItemTotalPrice", "q5_price_total"),
-    (505, "HitItemTotalPrice", "q6_price_total")
-)
-
 OUTLINE_SKILL_QUALITY: Dict[int, int] = {
     200001: 4,
     200002: 5,
@@ -161,6 +158,44 @@ HERO_SKILL_QUALITY: Dict[int, int] = {
 }
 
 HERO_SKILL_CID_MERGE_INTO_MAP: Dict[int, int] = {}
+
+#: 英雄 ``SkillCid`` → 日志 ``HitBoxList`` 命中物品的类别 OR 集合（与 ``ItemKnowledge.categories_any`` 对齐）。
+HERO_SKILL_CATEGORY_TAGS_OR: Dict[int, frozenset[int]] = {
+    100101: frozenset({106}),
+    100102: frozenset({105}),
+    100105: frozenset({103}),
+    100106: frozenset({103, 107}),
+    100109: frozenset({102}),
+    100201: frozenset({104}),
+    100202: frozenset({101, 107}),
+    100203: frozenset({109}),
+    100205: frozenset({104, 108}),
+    100206: frozenset({110}),
+    100207: frozenset({106}),
+    1001011: frozenset({106}),
+    1001012: frozenset({106}),
+    1001013: frozenset({106}),
+    1001014: frozenset({106}),
+    1001061: frozenset({103, 107}),
+    1001091: frozenset({102}),
+    1001092: frozenset({102}),
+    1001093: frozenset({102}),
+    1001094: frozenset({102}),
+    1001101: frozenset({105}),
+    1002021: frozenset({101, 107}),
+    1002022: frozenset({101, 107}),
+    1002023: frozenset({101, 107}),
+    1002024: frozenset({101, 107}),
+    1002061: frozenset({110}),
+    1002062: frozenset({110}),
+    1002063: frozenset({110}),
+    1002064: frozenset({110}),
+    1002065: frozenset({110}),
+    10002031: frozenset({106}),
+    10002071: frozenset({106}),
+    10002072: frozenset({106}),
+    10002073: frozenset({106}),
+}
 
 ITEM_SKILL_CANONICAL_SKILL_CID: Dict[int, int] = dict(_ITEM_SKILL_CANONICAL_SKILL_CID)
 

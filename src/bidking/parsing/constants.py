@@ -93,6 +93,7 @@ CATEGORY_NAMES: Dict[int, str] = {
 # ─── 自 skill_bindings 再导出（供 ``raw_pricing`` 等 ``from .constants import *``）────────
 from .skill_bindings import (  # noqa: E402
     HERO_SKILL_CID_MERGE_INTO_MAP,
+    HERO_SKILL_CATEGORY_TAGS_OR,
     HERO_SKILL_QUALITY,
     ITEM_SKILL_CANONICAL_SKILL_CID,
     ITEM_SKILL_DESC,
@@ -105,8 +106,6 @@ from .skill_bindings import (  # noqa: E402
     RAW_PRICING_DIRECT_ITEM_INT_BINDINGS,
     RAW_PRICING_DIRECT_SKILL_FLOAT_BINDINGS,
     RAW_PRICING_DIRECT_SKILL_INT_BINDINGS,
-    SKILL_LOG_PRICE_AVG_BINDINGS,
-    SKILL_LOG_PRICE_TOTAL_BINDINGS,
     SKILL_TO_CATEGORY,
 )
 
@@ -128,6 +127,13 @@ def fmt_shape(slot_type: int) -> str:
 def fmt_categories(cats: Set[int]) -> str:
     """将类别 tag 集合转为中文名字符串，如 {101, 103} → '家具物品/时尚潮流'。"""
     return "/".join(CATEGORY_NAMES.get(c, str(c)) for c in sorted(cats))
+
+
+def fmt_categories_any(cats: Set[int]) -> str:
+    """英雄技能 OR 类别集合：``101|107`` 形式（中文名以 ``|`` 分隔）。"""
+    if not cats:
+        return ""
+    return "|".join(CATEGORY_NAMES.get(c, str(c)) for c in sorted(cats))
 
 
 def fmt_price(v: int) -> str:
