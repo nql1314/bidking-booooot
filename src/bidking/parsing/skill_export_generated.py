@@ -507,7 +507,7 @@ def _registry_hero_sofia_skills() -> Dict[int, SkillExportRow]:
 
 
 def _registry_hero_maria_skills() -> Dict[int, SkillExportRow]:
-    """玛丽亚（hero_skill_108）：多档总价与分档品质揭示。
+    """玛丽亚（hero_skill_108）：Q123 总价 ``q123_price_total``（``100108``/``HitItemTotalPrice``）与揭示扫描 ``q123_count``（``10010801``/``HitBoxList``）。
 
     具体 skill_id：100108, 10010801。
     """

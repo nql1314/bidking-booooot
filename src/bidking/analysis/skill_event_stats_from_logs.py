@@ -7,7 +7,7 @@
 - **属性 ↔ 技能溯源**（:data:`EVENT_STATS_ATTRIBUTE_SOURCES`）：说明每个 ``event_stats`` 键可由哪些
   ``SkillCid`` / ``ItemCid`` 与日志字段提供；同一键可对应**多条**来源（多技能或地图+英雄+道具先后覆盖同一合并键）。
 - **解析**：从合并后的 ``skill_entries`` 直读整数字段、浮点字段、地图价绑定，以及从轮廓类技能的 ``HitBoxList`` 汇总件数/占格。
-  其中部分英雄键与道具 ``ItemSkillLog`` 同键（如 ``q12_price_total``），须在道具整型直读之后按 ``RAW_PRICING_INT_AFTER_ITEM_LOG`` 再覆盖。
+  其中部分键须在道具 ``ItemSkillLog`` 整型直读之后再写入；玛丽亚 Q123 总价使用独立键 ``q123_price_total``（见 ``_apply_maria_hero_skill_logs``）。
 
 守恒推算、分档零一致性、CSV 组合下界等**推理**仍在 :mod:`bidking.analysis.raw_pricing`。
 """
@@ -40,6 +40,14 @@ def _collect_attribute_sources() -> Dict[str, Tuple[str, ...]]:
         add(key, f"SkillCid={cid} {field} (Map/Hero 合并键)")
     for key, cid, field in RAW_PRICING_INT_AFTER_ITEM_LOG:
         add(key, f"SkillCid={cid} {field}（ItemSkillLog 整型直读之后覆盖）")
+    add(
+        "q123_price_total",
+        "HeroSkillLog SkillCid=100108 HitItemTotalPrice（玛丽亚 Q123 总价；须含 HeroCid 以区别于 ItemCid=100108 珍品扫描）",
+    )
+    add(
+        "q123_count",
+        "HeroSkillLog SkillCid=10010801 HitBoxList 中 ItemQuility/ItemQuality∈{1,2,3} 的件数",
+    )
     for key, cid, field in RAW_PRICING_DIRECT_SKILL_FLOAT_BINDINGS:
         add(key, f"SkillCid={cid} {field} (Map/Hero 合并键)")
     for key, cid, field in RAW_PRICING_DIRECT_ITEM_INT_BINDINGS:
@@ -335,6 +343,50 @@ def _write_skill_int_after_item_log(
         direct[key] = safe_int_field(ent, field)
 
 
+def _maria_10010801_q123_hitbox_count(entry: dict) -> Optional[int]:
+    """玛丽亚揭示行 ``SkillCid=10010801``：``HitBoxList`` 中品质 1/2/3 的件数（日志字段名 ``ItemQuility`` 为常见笔误）。"""
+    boxes = entry.get("HitBoxList")
+    if boxes is None:
+        return None
+    if not isinstance(boxes, list):
+        return None
+    n = 0
+    for box in boxes:
+        if not isinstance(box, dict):
+            continue
+        if not box.get("ItemUid"):
+            continue
+        qv = box.get("ItemQuility", box.get("ItemQuality"))
+        if qv is None:
+            continue
+        try:
+            qi = int(qv)
+        except (TypeError, ValueError):
+            continue
+        if qi in (1, 2, 3):
+            n += 1
+    return n
+
+
+def _apply_maria_hero_skill_logs(
+    skill_entries: Dict[int, dict], direct: Dict[str, Any]
+) -> None:
+    """玛丽亚：``100108`` 总价在 ``HitItemTotalPrice`` → ``q123_price_total``；``10010801`` 的 Q123 件数在 ``HitBoxList`` → ``q123_count``。
+
+    合并键 ``100108`` 与道具 ``ItemCid=100108``（珍品扫描占格）同号，仅当条目含 ``HeroCid`` 时视为英雄日志再写 ``q123_price_total``。
+    """
+    ent_price = skill_entries.get(100108)
+    if isinstance(ent_price, dict) and ent_price.get("HeroCid"):
+        if ent_price.get("HitItemTotalPrice") is not None:
+            direct["q123_price_total"] = safe_int_field(ent_price, "HitItemTotalPrice")
+
+    ent_scan = skill_entries.get(10010801)
+    if isinstance(ent_scan, dict):
+        n = _maria_10010801_q123_hitbox_count(ent_scan)
+        if n is not None:
+            direct["q123_count"] = int(n)
+
+
 def parse_skill_entries_to_event_stats_direct(
     skill_entries: Dict[int, dict],
 ) -> Dict[str, Any]:
@@ -357,6 +409,8 @@ def parse_skill_entries_to_event_stats_direct(
         "q12_grid_count": None,
         "q12_grid_avg": None,
         "q12_price_total": None,
+        "q123_price_total": None,
+        "q123_count": None,
         "q3_count": None,
         "q3_grid_count": None,
         "q3_grid_avg": None,
@@ -390,6 +444,7 @@ def parse_skill_entries_to_event_stats_direct(
     _write_item_int_fields_from_logs(skill_entries, direct)
     _write_item_float_fields_from_logs(skill_entries, direct)
     _write_skill_int_after_item_log(skill_entries, direct)
+    _apply_maria_hero_skill_logs(skill_entries, direct)
 
     apply_outline_hitbox_to_event_stats(skill_entries, direct)
     return direct

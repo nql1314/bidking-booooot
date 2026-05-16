@@ -12,7 +12,7 @@
     "path": "data/board_snapshot.json",
     "write_mode": "both",
     "schema_version_min": 1,
-    "self_user_uid": ""
+    "self_user_uid": "941456831344888"
   },
   "automation": {
     "bot_runner": "fresh_bidking_bot",

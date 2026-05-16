@@ -142,10 +142,10 @@ RAW_PRICING_DIRECT_SKILL_INT_BINDINGS: Tuple[Tuple3I, ...] = (
     _RAW_MAP_AUCTION_SKILL_INT + _RAW_HERO_SKILL_INT + _RAW_ITEM_TOOL_SKILL_ROW_INT
 )
 
-# 须在 ``ItemSkillLog`` 整型直读之后应用（可与 ItemCid 100122 的 ``q12_price_total`` 同键，玛丽亚在场时覆盖）。
-RAW_PRICING_INT_AFTER_ITEM_LOG: Tuple[Tuple3I, ...] = (
-    ("q12_price_total", 10010801, "HitItemTotalPrice"),
-)
+# 须在 ``ItemSkillLog`` 整型直读之后应用的**通用**英雄整型覆盖（当前为空）。
+# 玛丽亚 ``SkillCid=100108`` → ``event_stats["q123_price_total"]``；``10010801`` → ``q123_count``（``HitBoxList``）。
+# 与道具 ``ItemCid=100108`` 同号键冲突，在 :mod:`bidking.analysis.skill_event_stats_from_logs` 中按 ``HeroCid`` 判别单独写入。
+RAW_PRICING_INT_AFTER_ITEM_LOG: Tuple[Tuple3I, ...] = ()
 RAW_PRICING_DIRECT_SKILL_FLOAT_BINDINGS: Tuple[Tuple3F, ...] = (
     _RAW_MAP_AUCTION_SKILL_FLOAT + _RAW_HERO_SKILL_FLOAT + _RAW_ITEM_TOOL_SKILL_ROW_FLOAT
 )
