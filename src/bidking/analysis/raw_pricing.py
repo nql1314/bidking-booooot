@@ -1,15 +1,10 @@
 """raw_pricing：从事件与 CSV 提取未加工全局统计。
 
-技能日志 → 数值（含「价」）的约定：
-  - 地图/英雄 **均价、金红总价**：见 :data:`bidking.parsing.constants.SKILL_LOG_PRICE_AVG_BINDINGS`、
-    :data:`SKILL_LOG_PRICE_TOTAL_BINDINGS`，由 :func:`read_skill_log_direct_prices` 统一读取。
-  - **英雄 ⇄ 地图同义**：见 :data:`HERO_SKILL_CID_MERGE_INTO_MAP`，在 ``_merge_latest_skill_entries`` 中并入规范 ``SkillCid``（地图键已存在则不覆盖）。
-  - **金/红总格反推**：:func:`_infer_q56_grid_from_total_and_q14` 在 ``total_grid_count`` 与低档 **q12+q3+q4**
-    （或等价的 ``q1+q2+q3+q4``）已知时守恒推算 q5/q6 缺失档。
-  - **消耗类道具（无规范 SkillCid）**：``ItemSkillLog`` 按 ``ItemCid`` 并入 ``skill_entries``；在第 1 段与地图/英雄
-    同源用 :func:`_item_skill_int_if_logged` / :func:`_item_skill_float_if_logged` 读入 ``event_stats``（与
-    :data:`ITEM_SKILL_EVENT_STATS` 一致）。若存在该 ``ItemCid`` 条目而某字段缺失，整数走 :func:`_safe_int_field`
-    的 **0** 语义，均格浮点缺失为 **0.0**。
+技能日志 → ``event_stats`` **标量直读与轮廓补全**见 :mod:`bidking.analysis.skill_event_stats_from_logs`
+（:func:`parse_skill_entries_to_event_stats_direct`、:data:`EVENT_STATS_ATTRIBUTE_SOURCES`）。
+
+本模块负责 **已知字段上的推理**：随机均价下界、分档 count/grid/price 互推、金红总格守恒、
+q12 汇总、分档零一致性等。
 """
 
 from __future__ import annotations
@@ -21,7 +16,20 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from ..parsing import item_db
 from ..parsing.constants import *
+from ..parsing.skill_bindings import (
+    MAP_SKILL_RANDOM12_AVG_PRICE,
+    MAP_SKILL_RANDOM3_AVG_PRICE,
+    MAP_SKILL_RANDOM6_AVG_PRICE,
+    MAP_SKILL_RANDOM9_AVG_PRICE,
+)
 from ..parsing.state import CsvItem
+from .skill_event_stats_from_logs import (
+    merge_latest_skill_entries,
+    parse_skill_entries_to_event_stats_direct,
+    read_skill_log_direct_prices,
+    safe_float_field,
+    safe_int_field,
+)
 from .map_avg_csv import (
     map_quality_csv_path_resolved,
 )
@@ -30,131 +38,8 @@ from .tier_combo_presolve import presolve_grid_sums
 
 
 
-def _merge_latest_skill_entries(skill_logs: List[dict]) -> Dict[int, dict]:
-    out: Dict[int, dict] = {}
-    for block in skill_logs or []:
-        if not isinstance(block, dict):
-            continue
-        gd = block.get("game_data") or {}
-        if not isinstance(gd, dict):
-            continue
-        for key in ("HeroSkillLog", "MapSkillLog", "ItemSkillLog"):
-            for entry in gd.get(key) or []:
-                if not isinstance(entry, dict):
-                    continue
-                try:
-                    cid = int(entry.get("SkillCid") or 0)
-                except (TypeError, ValueError):
-                    continue
-                if cid > 0:
-                    out[cid] = entry
-    # 英雄与地图同义 SkillCid：规范键尚无条目时用英雄条填充（地图优先，不覆盖已有规范键）
-    for block in skill_logs or []:
-        if not isinstance(block, dict):
-            continue
-        gd = block.get("game_data") or {}
-        if not isinstance(gd, dict):
-            continue
-        for key in ("HeroSkillLog", "MapSkillLog", "ItemSkillLog"):
-            for entry in gd.get(key) or []:
-                if not isinstance(entry, dict):
-                    continue
-                try:
-                    cid = int(entry.get("SkillCid") or 0)
-                except (TypeError, ValueError):
-                    continue
-                if cid <= 0:
-                    continue
-                canon = HERO_SKILL_CID_MERGE_INTO_MAP.get(cid)
-                if canon and canon not in out:
-                    out[canon] = entry
-    # ItemSkillLog：按道具 ItemCid 挂到与地图/英雄同义的规范 SkillCid，便于 SKILL_LOG_PRICE_* 等统一取数
-    for block in skill_logs or []:
-        if not isinstance(block, dict):
-            continue
-        gd = block.get("game_data") or {}
-        if not isinstance(gd, dict):
-            continue
-        for entry in gd.get("ItemSkillLog") or []:
-            if not isinstance(entry, dict):
-                continue
-            try:
-                item_cid = int(entry.get("ItemCid") or 0)
-            except (TypeError, ValueError):
-                continue
-            canon = ITEM_SKILL_CANONICAL_SKILL_CID.get(item_cid)
-            if canon:
-                out[canon] = entry
-            if item_cid > 0:
-                out[item_cid] = entry
-    return out
-
-
-def _item_skill_int_if_logged(
-    skill_entries: Dict[int, dict], item_cid: int, log_field: str
-) -> Optional[int]:
-    """仅当 ``skill_entries`` 含该 ``ItemCid`` 的 ``ItemSkillLog`` 条目时读整数；缺字段与 null 同 :func:`_safe_int_field` 为 0。"""
-    ent = skill_entries.get(int(item_cid))
-    if not isinstance(ent, dict):
-        return None
-    return _safe_int_field(ent, log_field)
-
-
-def _item_skill_float_if_logged(
-    skill_entries: Dict[int, dict], item_cid: int, log_field: str
-) -> Optional[float]:
-    """仅当存在该 ``ItemCid`` 条目时读浮点；缺字段或非有限数视为 0.0。"""
-    ent = skill_entries.get(int(item_cid))
-    if not isinstance(ent, dict):
-        return None
-    v = _safe_float_field(ent, log_field)
-    if v is None or v != v:
-        return 0.0
-    return float(v)
-
-
-def read_skill_log_direct_prices(skill_entries: Dict[int, dict]) -> Dict[str, Any]:
-    """从合并后的 ``skill_entries`` 读取地图日志中的紫/金/红 **均价** 与金/红 **档内总价**。
-
-    返回的键与 ``build_raw_pricing_dict`` 里 ``event_stats`` 对应字段一致；取值规则与
-    :data:`SKILL_LOG_PRICE_AVG_BINDINGS`、:data:`SKILL_LOG_PRICE_TOTAL_BINDINGS` 同步维护。
-    绿白/蓝/紫档 ``*_price_total`` 等由估价类道具 ``ItemSkillLog``（第 1 段）写入，不由轮廓 HitBox 推导。
-    """
-    out: Dict[str, Any] = {}
-    for skill_cid, field, key in SKILL_LOG_PRICE_AVG_BINDINGS:
-        out[key] = _safe_float_field(skill_entries.get(skill_cid), field)
-    for skill_cid, field, key in SKILL_LOG_PRICE_TOTAL_BINDINGS:
-        out[key] = _safe_int_field(skill_entries.get(skill_cid), field)
-    return out
-
-
-def _safe_int_field(entry: Optional[dict], *keys: str) -> Optional[int]:
-    if not isinstance(entry, dict):
-        return None
-    for k in keys:
-        v = entry.get(k)
-        if v is None:
-            return 0
-        try:
-            return int(v)
-        except (TypeError, ValueError):
-            continue
-    return None
-
-
-def _safe_float_field(entry: Optional[dict], *keys: str) -> Optional[float]:
-    if not isinstance(entry, dict):
-        return None
-    for k in keys:
-        v = entry.get(k)
-        if v is None:
-            continue
-        try:
-            return float(v)
-        except (TypeError, ValueError):
-            continue
-    return None
-
+# 兼容旧名（合并逻辑已迁至 :mod:`bidking.analysis.skill_event_stats_from_logs`）
+_merge_latest_skill_entries = merge_latest_skill_entries
 
 
 def _min_total_from_avg(avg: Optional[float]) -> Optional[int]:
@@ -447,57 +332,6 @@ def _finalize_tier_min_bounds(
 
     d[count_min_k] = cm
     d[grid_min_k] = gm
-
-
-def _shape_cell_count(slot_type: Any) -> int:
-    if slot_type is None:
-        return 0
-    try:
-        s = str(int(slot_type))
-    except (TypeError, ValueError):
-        return 0
-    if len(s) == 2:
-        return max(0, int(s[0]) * int(s[1]))
-    return max(0, int(s))
-
-
-def _aggregate_hitbox_list(boxes: List[dict]) -> Dict[str, Any]:
-    count = 0
-    total_cells = 0
-    for box in boxes or []:
-        if not isinstance(box, dict):
-            continue
-        if not box.get("ItemUid"):
-            continue
-        count += 1
-        total_cells += _shape_cell_count(box.get("ItemSlotType"))
-    avg_cells = (total_cells / count) if count else None
-    return {
-        "count": count,
-        "total_cells": total_cells,
-        "avg_cells": avg_cells,
-    }
-
-
-def _best_outline_aggregate_for_quality(
-    skill_entries: Dict[int, dict], quality: int
-) -> Optional[Dict[str, Any]]:
-    best: Optional[Dict[str, Any]] = None
-    best_n = -1
-    for cid, q in OUTLINE_SKILL_QUALITY.items():
-        if q != quality:
-            continue
-        entry = skill_entries.get(cid)
-        if not isinstance(entry, dict):
-            continue
-        boxes = entry.get("HitBoxList") or []
-        if not isinstance(boxes, list):
-            continue
-        agg = _aggregate_hitbox_list(boxes)
-        if agg["count"] > best_n:
-            best_n = agg["count"]
-            best = agg
-    return best
 
 
 def _load_map_quality_groups_from_csv(map_id: int, snapshot_path_hint: Optional[str]) -> Dict[str, Dict[str, float]]:
@@ -802,7 +636,7 @@ def build_raw_pricing_dict(
     供 :mod:`.scan_inference` 与 UI 负向合并）等。
     """
 
-    skill_entries = _merge_latest_skill_entries(list(skill_logs or []))
+    skill_entries = merge_latest_skill_entries(list(skill_logs or []))
     normalized_mid = item_db.normalize_map_id(int(map_id or 0))
     csv_groups_full = (
         _load_map_quality_groups_from_csv(normalized_mid, snapshot_path_hint)
@@ -818,20 +652,7 @@ def build_raw_pricing_dict(
         for k, v in sorted(csv_groups_full.items())
     }
 
-    # ── 1) 技能日志直接字段 ─────────────────────────────────────────────
-
-    total_count = _safe_int_field(
-        skill_entries.get(CANONICAL_SKILL_CID_TOTAL_ITEM_COUNT), "HitItemIndex"
-    )
-    q12_count = _safe_int_field(skill_entries.get(SKILL_Q12_COUNT), "HitItemIndex")
-    q4_count = _safe_int_field(skill_entries.get(MAP_SKILL_TOTAL_PURPLE_COUNT), "HitItemIndex")
-    q5_count = _safe_int_field(skill_entries.get(MAP_SKILL_TOTAL_GOLD_COUNT), "HitItemIndex")
-    q6_count = _safe_int_field(skill_entries.get(MAP_SKILL_TOTAL_RED_COUNT), "HitItemIndex")
-
-    total_grid_count = _safe_int_field(skill_entries.get(MAP_SKILL_TOTAL_HIDDEN_CELLS), "TotalHitBoxIndex")
-    ent_all_avg_grid = skill_entries.get(CANONICAL_SKILL_CID_ALL_ITEMS_AVG_GRID)
-    total_grid_avg = _safe_float_field(ent_all_avg_grid, "AllHitItemAvgBoxIndex")
-
+    # ── 1) 随机均价下界（多地图技能聚合推理）────────────────────────────
     random_avg_price_min: Optional[int] = None
     for _rnd_cid in (
         MAP_SKILL_RANDOM3_AVG_PRICE,
@@ -840,134 +661,17 @@ def build_raw_pricing_dict(
         MAP_SKILL_RANDOM12_AVG_PRICE,
     ):
         ent = skill_entries.get(_rnd_cid)
-        avg_f = _safe_float_field(ent, "AllHitItemAvgPrice") if isinstance(ent, dict) else None
-        hc = _safe_int_field(ent, "HitItemIndex") if isinstance(ent, dict) else None
+        avg_f = safe_float_field(ent, "AllHitItemAvgPrice") if isinstance(ent, dict) else None
+        hc = safe_int_field(ent, "HitItemIndex") if isinstance(ent, dict) else None
         inferred = _min_total_price_from_avg_times_hit_count(
             avg_f, hc, skill_cid=_rnd_cid
         )
         random_avg_price_min = _max_optional_int(random_avg_price_min, inferred)
 
-    q3_grid_avg = _safe_float_field(skill_entries.get(SKILL_Q3_GRID_AVG), "AllHitItemAvgBoxIndex")
+    direct = parse_skill_entries_to_event_stats_direct(skill_entries)
+    direct["random_avg_price_min"] = random_avg_price_min
 
-    q4_grid_avg = _safe_float_field(
-        skill_entries.get(CANONICAL_SKILL_CID_Q4_AVG_GRID), "AllHitItemAvgBoxIndex"
-    )
-    q4_grid_count = _safe_int_field(skill_entries.get(MAP_SKILL_TOTAL_PURPLE_CELLS), "TotalHitBoxIndex")
-
-    _price_direct = read_skill_log_direct_prices(skill_entries)
-    q4_price_avg = _price_direct.get("q4_price_avg")
-    q5_price_avg = _price_direct.get("q5_price_avg")
-    q6_price_avg = _price_direct.get("q6_price_avg")
-    q5_price_total = _price_direct.get("q5_price_total")
-    q6_price_total = _price_direct.get("q6_price_total")
-
-    q5_grid_avg = _safe_float_field(
-        skill_entries.get(CANONICAL_SKILL_CID_Q5_AVG_GRID), "AllHitItemAvgBoxIndex"
-    )
-    q5_grid_count = _safe_int_field(skill_entries.get(MAP_SKILL_TOTAL_GOLD_CELLS), "TotalHitBoxIndex")
-
-    q6_grid_avg = _safe_float_field(skill_entries.get(MAP_SKILL_AVG_RED_CELLS), "AllHitItemAvgBoxIndex")
-    q6_grid_count = _safe_int_field(skill_entries.get(MAP_SKILL_TOTAL_RED_CELLS), "TotalHitBoxIndex")
-
-    # ItemSkillLog（按 ItemCid 索引）：与上列地图/英雄字段同一阶段读入；有条目而缺字段时整数为 0、均格为 0.0
-    q12_grid_count_item = _item_skill_int_if_logged(skill_entries, 100104, "TotalHitBoxIndex")
-    q3_grid_count_item = _item_skill_int_if_logged(skill_entries, 100105, "TotalHitBoxIndex")
-    q12_grid_avg_item = _item_skill_float_if_logged(skill_entries, 100110, "AllHitItemAvgBoxIndex")
-    q3_count_item = _item_skill_int_if_logged(skill_entries, 100117, "HitItemIndex")
-    q12_price_total_item = _item_skill_int_if_logged(skill_entries, 100122, "HitItemTotalPrice")
-    q3_price_total_item = _item_skill_int_if_logged(skill_entries, 100123, "HitItemTotalPrice")
-    q4_price_total_item = _item_skill_int_if_logged(skill_entries, 100124, "HitItemTotalPrice")
-    item_100125_price_total_item = _item_skill_int_if_logged(skill_entries, 100125, "HitItemTotalPrice")
-    item_100127_price_total_item = _item_skill_int_if_logged(skill_entries, 100127, "HitItemTotalPrice")
-
-
-    direct: Dict[str, Any] = {
-        "total_count": total_count,
-        "total_grid_count": total_grid_count,
-        "total_grid_avg": total_grid_avg,
-        "random_avg_price_min": random_avg_price_min,
-        "q1_count": None,
-        "q1_grid_count": None,
-        "q1_price_total": None,
-        "q2_count": None,
-        "q2_grid_count": None,
-        "q2_price_total": None,
-        "q12_count": q12_count,
-        "q12_grid_count": q12_grid_count_item,
-        "q12_grid_avg": q12_grid_avg_item,
-        "q12_price_total": q12_price_total_item,
-        "q3_count": q3_count_item,
-        "q3_grid_count": q3_grid_count_item,
-        "q3_grid_avg": q3_grid_avg,
-        "q3_price_total": q3_price_total_item,
-        "q4_count": q4_count,
-        "q4_grid_count": q4_grid_count,
-        "q4_grid_avg": q4_grid_avg,
-        "q4_count_min": None,
-        "q4_grid_min": None,
-        "q4_price_avg": q4_price_avg,
-        "q4_price_total": q4_price_total_item,
-        "q5_count": q5_count,
-        "q5_count_min": None,
-        "q5_grid_count": q5_grid_count,
-        "q5_grid_avg": q5_grid_avg,
-        "q5_grid_min": None,
-        "q5_price_avg": q5_price_avg,
-        "q5_price_total": q5_price_total,
-        "q6_count": q6_count,
-        "q6_count_min": None,
-        "q6_grid_count": q6_grid_count,
-        "q6_grid_avg": q6_grid_avg,
-        "q6_grid_min": None,
-        "q6_price_avg": q6_price_avg,
-        "q6_price_total": q6_price_total,
-        "item_100125_price_total": item_100125_price_total_item,
-        "item_100127_price_total": item_100127_price_total_item,
-    }
-
-    # ── 2) 轮廓技能 HitBoxList 补全件数/占格（不推导价格）────────────────
-    for q in (1, 2, 3, 4, 5, 6):
-        agg = _best_outline_aggregate_for_quality(skill_entries, q)
-        if agg is None or agg["count"] <= 0:
-            continue
-        if q == 1:
-            if direct["q1_count"] in (None, 0):
-                direct["q1_count"] = int(agg["count"])
-            if not direct["q1_grid_count"] and agg["total_cells"]:
-                direct["q1_grid_count"] = int(agg["total_cells"])
-        if q == 2:
-            if direct["q2_count"] in (None, 0):
-                direct["q2_count"] = int(agg["count"])
-            if not direct["q2_grid_count"] and agg["total_cells"]:
-                direct["q2_grid_count"] = int(agg["total_cells"])
-        if q == 3:
-            if direct["q3_count"] in (None, 0):
-                direct["q3_count"] = int(agg["count"])
-            if not direct["q3_grid_count"] and agg["total_cells"]:
-                direct["q3_grid_count"] = int(agg["total_cells"])
-        if q == 4:
-            if direct["q4_count"] in (None, 0):
-                direct["q4_count"] = int(agg["count"])
-            if not direct["q4_grid_count"] and agg["total_cells"]:
-                direct["q4_grid_count"] = int(agg["total_cells"])
-            if direct["q4_grid_avg"] is None and agg["avg_cells"] is not None:
-                direct["q4_grid_avg"] = float(agg["avg_cells"])
-        if q == 5:
-            if direct["q5_count"] in (None, 0):
-                direct["q5_count"] = int(agg["count"])
-            if not direct["q5_grid_count"] and agg["total_cells"]:
-                direct["q5_grid_count"] = int(agg["total_cells"])
-            if direct["q5_grid_avg"] is None and agg["avg_cells"] is not None:
-                direct["q5_grid_avg"] = float(agg["avg_cells"])
-        if q == 6:
-            if direct["q6_count"] in (None, 0):
-                direct["q6_count"] = int(agg["count"])
-            if not direct["q6_grid_count"] and agg["total_cells"]:
-                direct["q6_grid_count"] = int(agg["total_cells"])
-            if direct["q6_grid_avg"] is None and agg["avg_cells"] is not None:
-                direct["q6_grid_avg"] = float(agg["avg_cells"])
-
-    # 全局：件数、总隐藏格、均格 与分档相同，满足 grid_count ≈ count * grid_avg，由其二可保守补第三项。
+    # ── 2) 已知字段上的推理（分档互推、CSV 组合、零一致性、q12 汇总等）──
     _infer_tier_count_grid_price(
         direct,
         count_k="total_count",
