@@ -75,6 +75,59 @@ class RawPricingBoundsTests(unittest.TestCase):
         self.assertEqual(st.get("q12_price_total"), 333)
         self.assertEqual(st.get("q5_price_total"), 555)
 
+    def test_maria_hero_skill_q123_price_and_scan_count(self) -> None:
+        logs = [
+            {
+                "game_data": {
+                    "HeroSkillLog": [
+                        {
+                            "SkillCid": 100108,
+                            "HeroCid": 108,
+                            "HitItemTotalPrice": 20631,
+                        },
+                        {
+                            "SkillCid": 10010801,
+                            "HeroCid": 108,
+                            "HitBoxList": [
+                                {"BoxId": 1, "ItemUid": "961935649932387", "ItemQuility": 1},
+                                {"BoxId": 2, "ItemUid": "961935649932403", "ItemQuility": 2},
+                                {"BoxId": 3, "ItemUid": "961935649932399", "ItemQuility": 4},
+                            ],
+                        },
+                    ]
+                }
+            }
+        ]
+        raw = build_raw_pricing_dict(map_id=0, skill_logs=logs)
+        st = raw["event_stats"]
+        self.assertEqual(st.get("q123_price_total"), 20631)
+        self.assertEqual(st.get("q123_count"), 2)
+
+    def test_item_cid_100108_outline_does_not_fake_maria_price(self) -> None:
+        """合并键 100108：道具珍品扫描与英雄玛丽亚同号，不得把道具行当玛丽亚总价写入。"""
+        logs = [
+            {
+                "game_data": {
+                    "ItemSkillLog": [
+                        {
+                            "SkillCid": 205,
+                            "ItemCid": 100108,
+                            "TotalHitBoxIndex": 9,
+                        },
+                        {
+                            "SkillCid": 501,
+                            "ItemCid": 100122,
+                            "HitItemTotalPrice": 333,
+                        },
+                    ]
+                }
+            }
+        ]
+        raw = build_raw_pricing_dict(map_id=0, skill_logs=logs)
+        st = raw["event_stats"]
+        self.assertEqual(st.get("q12_price_total"), 333)
+        self.assertEqual(st.get("q6_grid_count"), 9)
+
     def test_item_skill_desc_keys_have_event_stats_row(self) -> None:
         for k in ITEM_SKILL_DESC:
             self.assertIn(

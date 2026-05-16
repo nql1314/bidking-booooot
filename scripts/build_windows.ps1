@@ -1,5 +1,6 @@
 param(
-    [string]$VersionTag = "v1.2-RC1",
+    # 默认空：从 src/bidking/__init__.py 的 __version__ 推导标签（如 V1.2-RC → v1.2-RC）
+    [string]$VersionTag = "",
     [switch]$NoObfuscation
 )
 
@@ -21,6 +22,16 @@ $DistDir = Join-Path $RepoRoot "dist"
 $BuildDir = Join-Path $RepoRoot "build"
 $LauncherDir = Join-Path $BuildDir "launchers"
 $ObfDir = Join-Path $BuildDir "obf"
+
+if ([string]::IsNullOrWhiteSpace($VersionTag)) {
+    $SrcRoot = Join-Path $RepoRoot "src"
+    $VersionTag = (
+        & python -c "import sys; sys.path.insert(0, sys.argv[1]); import bidking; v=bidking.__version__.strip(); print('v'+v[1:] if v.startswith('V') else (v if v.startswith('v') else 'v'+v))" $SrcRoot
+    ).Trim()
+    if ([string]::IsNullOrWhiteSpace($VersionTag)) {
+        throw "VersionTag is empty and could not read bidking.__version__ (check src/bidking/__init__.py)."
+    }
+}
 
 Set-Location $RepoRoot
 

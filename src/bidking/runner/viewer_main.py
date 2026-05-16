@@ -198,7 +198,7 @@ def _show_start_page(default_log: str, csv_path: str) -> None:
     tk.Radiobutton(frame, text="艾莎", variable=board_var, value="elsa").pack(anchor="w")
     tk.Radiobutton(
         frame,
-        text="通用（完美适配：艾莎，老师，索菲，伊森，拉文， 其他角色技能未解析，基本可用）",
+        text="通用（全角色支持 通用出价算法）",
         variable=board_var,
         value="universal",
     ).pack(anchor="w")
@@ -395,7 +395,7 @@ def main(argv: list[str] | None = None) -> None:
 
     init_game_report_csv_session()
 
-    parser = argparse.ArgumentParser(description=f"BidKing 物品格局可视化 v{__version__}")
+    parser = argparse.ArgumentParser(description=f"BidKing 画板可视化 v{__version__}")
     parser.add_argument("--log", default=None, help="日志文件路径")
     parser.add_argument(
         "--csv",

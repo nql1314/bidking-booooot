@@ -3011,7 +3011,7 @@ class GridWindow:
         # 更新窗口标题、信息栏、画布
         label = self._snapshots[idx][0]
         self.root.title(
-            f"BidKing 物品格局 v{__version__}  —  对局 {self.state.uid}  {label}"
+            f"BidKing 物品画板 v{__version__}  —  对局 {self.state.uid}  {label}"
             f"{self._board_mode_title_suffix()}"
         )
         self._refresh()
