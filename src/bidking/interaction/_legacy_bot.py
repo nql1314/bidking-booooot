@@ -2,7 +2,7 @@
 """Fresh BidKing automation loop.
 
 - 整窗 / 区域 OCR 识别大厅、结束、回合等界面状态；
-- 固定流程：道具 → 截图 OCR → :func:`compute_price`（读画板快照）→ 输入出价 → 确认；
+- 固定流程：每回合先 OCR ``bid_confirm_region`` 见「出价」→ 道具 → 截图 OCR → :func:`compute_price`（读画板快照）→ 输入出价 → 确认；
 - 若 OCR 见到「对局结束」等，执行固定的局后点击链。
 """
 
@@ -309,6 +309,7 @@ def refresh_poll_loop_locals(config: dict[str, Any]) -> dict[str, Any]:
         "selected_map": resolve_automation_map_config_key(auto),
         "max_runs": int(auto.get("selected_runs") or auto.get("default_runs", 1)),
         "game_start_timeout_seconds": float(auto.get("game_start_timeout_seconds", 60.0)),
+        "map_select_no_start_esc_after": max(1, int(auto.get("map_select_no_start_esc_after", 3))),
     }
 
 
@@ -669,6 +670,60 @@ def read_bid_confirm_region_text_from_frame(
     return text, box
 
 
+def has_ingame_bid_button_label_visible(text: str) -> bool:
+    """``bid_confirm_region`` OCR：可出价且未提交时出现「出价」；排除「已出价」等。"""
+    tight = compact_text(text)
+    if not tight:
+        return False
+    if "已出价" in tight or "巳出价" in tight:
+        return False
+    if "弃权" in tight:
+        return False
+    return "出价" in tight
+
+
+def wait_for_round_bid_button_ready_ocr(config: dict[str, Any], *, round_no: int) -> None:
+    """每回合开始：轮询 :func:`read_bid_confirm_region_text_from_frame` 直至状态区出现「出价」，再进入道具/定价/输入。"""
+    if bool((config.get("safety") or {}).get("skip_round_bid_button_ocr_gate", False)):
+        log(f"round {round_no}: 已跳过出价状态区 OCR 门控（safety.skip_round_bid_button_ocr_gate）", gui_verbose_only=True)
+        return
+    cap = config.get("capture", {}) or {}
+    region = cap.get("bid_confirm_region") or DEFAULT_BID_CONFIRM_REGION
+    if not isinstance(region, dict) or not region:
+        log(f"round {round_no}: 未配置 bid_confirm_region，跳过回合出价 OCR 门控")
+        return
+    timing = config.get("timing", {}) or {}
+    max_sec = float(timing.get("round_bid_button_gate_max_seconds", 120.0))
+    step = max(0.05, float(timing.get("round_bid_button_gate_poll_seconds", 0.4)))
+    deadline = time.monotonic() + max_sec if max_sec > 0 else None
+    log(f"round {round_no}: 等待 bid_confirm 区域 OCR（须识别「出价」）…", gui_verbose_only=True)
+    attempt = 0
+    while True:
+        ensure_not_stopped()
+        attempt += 1
+        bring_window_to_front(config)
+        t_cap = time.perf_counter()
+        frame, _info = capture_window_frame(config)
+        perf_log_elapsed(f"round_bid_gate capture attempt={attempt}", t_cap)
+        text, _box = read_bid_confirm_region_text_from_frame(config, frame)
+        tight = compact_text(text)
+        if has_ingame_bid_button_label_visible(text):
+            log(
+                f"round {round_no}: bid_confirm 区域 OCR 就绪 text={tight!r}",
+                gui_verbose_only=True,
+            )
+            return
+        if deadline is not None and time.monotonic() >= deadline:
+            raise RuntimeError(
+                f"round {round_no}: 在 {max_sec:.0f}s 内 bid_confirm 区域未见「出价」OCR（末次 text={tight!r}）"
+            )
+        log(
+            f"round {round_no}: bid_confirm 尚未就绪 attempt={attempt} text={tight!r}；{step:.2f}s 后重试",
+            gui_verbose_only=True,
+        )
+        sleep_interruptible(step)
+
+
 def _observe_finalize_poll(
     label: str,
     *,
@@ -702,58 +757,6 @@ def _observe_finalize_poll(
         auction_lobby=has_auction_lobby(full_window_text),
         home_bid_button=has_home_bid_button(home_bid_text),
         has_any_signal=any_signal,
-    )
-
-
-def observe_state_round(
-    config: dict[str, Any],
-    config_path: Path,
-    label: str,
-    *,
-    auction_round_no: int | None = None,
-) -> Observation:
-    """回合开始：前窗、可配置的轮次检测等待；不做整窗 OCR（轮次已由主循环 poll/快照确定）。"""
-    t_obs = time.perf_counter()
-    bring_window_to_front(config)
-    t_cap = time.perf_counter()
-    frame, _info = capture_window_frame(config)
-    perf_log_elapsed(f"observe[{label}] capture_window_frame", t_cap)
-    runs_dir = ensure_output_dir(config, config_path)
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
-    image_path: Path | None = None
-    if bool(config.get("debug", {}).get("save_crops", True)):
-        image_path = runs_dir / f"{timestamp}_{label}_full_window.png"
-        frame.save(image_path)
-
-    timing_cfg = config.get("timing", {}) or {}
-    target_pre = max(
-        0.0,
-        float(timing_cfg.get("round_detect_wait_seconds", 0.0) or 0.0)
-        + (
-            float(timing_cfg.get("round1_extra_wait_seconds", 0.0) or 0.0)
-            if auction_round_no == 1
-            else 0.0
-        ),
-    )
-    if target_pre > 0:
-        t_pad = time.perf_counter()
-        sleep_interruptible(target_pre)
-        perf_log_elapsed(f"observe[{label}] round_detect_wait_pad", t_pad)
-    ocr_text = ""
-    if bool(config.get("debug", {}).get("save_ocr_text", True)):
-        (runs_dir / f"{timestamp}_{label}_full_window.txt").write_text(ocr_text, encoding="utf-8")
-
-    round_no = int(auction_round_no) if auction_round_no is not None else None
-    perf_log_elapsed(f"observe[{label}] 总计", t_obs)
-    return Observation(
-        capture=CaptureResult(text=ocr_text, image_path=image_path),
-        round_no=round_no,
-        end_prompt=False,
-        reward_continue=False,
-        failed_auction_settlement=False,
-        auction_lobby=False,
-        home_bid_button=False,
-        has_any_signal=False,
     )
 
 
@@ -1200,14 +1203,13 @@ def board_snapshot_file_missing(config: dict[str, Any]) -> bool:
 
 
 def game_started_from_poll(
-    bs_data: dict[str, Any] | None,
     observation: Observation,
 ) -> bool:
-    """选图后轮询：快照回合或整窗 OCR 回合任一表明已进入竞拍。"""
-    if bs_data:
-        sr = current_round_from_snapshot(bs_data)
-        if sr is not None and int(sr) >= 1:
-            return True
+    """选图后轮询：快照回合或整窗 OCR 回合任一表明已进入竞拍。
+
+    若整窗 OCR 仍识别为拍卖大厅，则不视为已开局（画板快照常为上一局残留，易与大厅同时为真）。"""
+    if observation.auction_lobby:
+        return False
     rn = observation.round_no
     return rn is not None and int(rn) >= 1
 
@@ -1365,14 +1367,15 @@ def handle_round(
     round_no: int,
 ) -> None:
     ensure_not_stopped()
+    timing_cfg = config.get("timing", {}) or {}
+    # wait_for_round_bid_button_ready_ocr(config, round_no=int(round_no))
+    if (round_no == 1):
+        sleep_interruptible(float(timing_cfg.get("round1_extra_wait_seconds", 0.0) + float(timing_cfg.get("round_detect_wait_seconds", 0.0) or 0.0)))
+    else:
+        sleep_interruptible(float(timing_cfg.get("round_detect_wait_seconds", 0.0) or 0.0))
     tool_rounds = {int(item) for item in config.get("automation", {}).get("tool_rounds", [1, 2])}
     ran_tool_this_round = int(round_no) in tool_rounds
-    observation = observe_state_round(
-        config,
-        config_path,
-        f"round{round_no}_start",
-        auction_round_no=int(round_no),
-    )
+    
     if ran_tool_this_round:
         run_tool_sequence(config)
         log(f"after tool", gui_verbose_only=True)
@@ -1393,15 +1396,10 @@ def handle_round(
         config,
         config_path,
         round_no=round_no,
-        raw_text=observation.capture.text,
+        raw_text="",
         details=details,
         final_price=price,
     )
-    if bool(config.get("debug", {}).get("print_ocr_snippet", False)):
-        log(
-            "ocr snippet: " + compact_text(observation.capture.text)[:160],
-            gui_verbose_only=True,
-        )
     input_bid(config, price, config_path=config_path)
 
 
@@ -1451,6 +1449,7 @@ def run_loop(
     await_non_lobby_after_preflight_esc = False
     await_non_lobby_stuck_polls = 0
     pending_game_start_deadline: float | None = None
+    map_select_no_start_streak = 0
     startup_warehouse_sort_done = False
     warehouse_sort_milestones_done: set[int] = set()
     completed_runs = 0
@@ -1492,6 +1491,7 @@ def run_loop(
             selected_map = lv["selected_map"]
             max_runs = lv["max_runs"]
             game_start_timeout_seconds = lv["game_start_timeout_seconds"]
+            map_select_no_start_esc_after = lv["map_select_no_start_esc_after"]
             mode_loop = str(
                 (config.get("automation") or {}).get("selected_mode", "ahmad_premium")
             ).strip().lower()
@@ -1501,41 +1501,47 @@ def run_loop(
             observation = observe_state_poll(config, config_path, "poll")
 
             bs_cfg = config.get("board_snapshot") or {}
-            bs_enabled = bool(bs_cfg.get("enabled"))
-            bs_data = None
-            snap_round: int | None = None
-            if bs_enabled:
-                bs_data = load_board_snapshot_for_loop(config)
-                snap_round = current_round_from_snapshot(bs_data) if bs_data else None
-                round_no = snap_round if snap_round is not None else observation.round_no
-            else:
-                round_no = observation.round_no
+            bs_data = load_board_snapshot_for_loop(config)
+            snap_round = current_round_from_snapshot(bs_data) if bs_data else None
+            round_no = observation.round_no
 
             if await_non_lobby_after_preflight_esc and not observation.auction_lobby:
                 await_non_lobby_after_preflight_esc = False
                 await_non_lobby_stuck_polls = 0
 
             if pending_game_start_deadline is not None:
-                if game_started_from_poll(bs_data, observation):
+                if game_started_from_poll(observation):
                     pending_game_start_deadline = None
+                    map_select_no_start_streak = 0
                 elif time.monotonic() >= pending_game_start_deadline:
-                    log(
-                        f"loop {loop_index}: 选图后 {game_start_timeout_seconds:.0f}s 内未检测到开局，"
-                        "ESC 回主页后重试"
-                    )
-                    press_escape(config)
-                    preflight_esc_before_next_map_select = False
-                    await_non_lobby_after_preflight_esc = True
-                    await_non_lobby_stuck_polls = 0
-                    pending_game_start_deadline = None
-                    last_lobby_at = 0.0
+                    map_select_no_start_streak += 1
+                    if map_select_no_start_streak >= map_select_no_start_esc_after:
+                        log(
+                            f"loop {loop_index}: 连续 {map_select_no_start_esc_after} 次选图后仍未检测到开局，"
+                            "按 ESC 回主界面后重试"
+                        )
+                        press_escape(config)
+                        preflight_esc_before_next_map_select = False
+                        await_non_lobby_after_preflight_esc = True
+                        await_non_lobby_stuck_polls = 0
+                        pending_game_start_deadline = None
+                        map_select_no_start_streak = 0
+                        last_lobby_at = 0.0
+                    else:
+                        log(
+                            f"loop {loop_index}: 选图后 {game_start_timeout_seconds:.0f}s 内未检测到开局 "
+                            f"（{map_select_no_start_streak}/{map_select_no_start_esc_after}），"
+                            "不重按 ESC，直接重试选图",
+                            gui_verbose_only=True,
+                        )
+                        pending_game_start_deadline = None
+                        last_lobby_at = 0.0
                     sleep_interruptible(poll_seconds)
                     continue
 
-            game_uid = game_uid_from_snapshot(bs_data) if bs_enabled else None
+            game_uid = game_uid_from_snapshot(bs_data)
             if (
-                bs_enabled
-                and game_uid is not None
+                game_uid is not None
                 and cached_game_uid is not None
                 and game_uid != cached_game_uid
             ):
@@ -1543,7 +1549,7 @@ def run_loop(
                     f"loop {loop_index}: 新局 game_uid {cached_game_uid!r} -> {game_uid!r}；重置回合状态"
                 )
                 handled_rounds.clear()
-            if bs_enabled and game_uid is not None:
+            if game_uid is not None:
                 cached_game_uid = game_uid
 
             log(
@@ -1574,6 +1580,7 @@ def run_loop(
 
             if observation.end_prompt:
                 pending_game_start_deadline = None
+                map_select_no_start_streak = 0
                 last_end_at, confirm_at = handle_end_transition(
                     config,
                     handled_rounds,
@@ -1594,6 +1601,7 @@ def run_loop(
 
             if observation.reward_continue:
                 pending_game_start_deadline = None
+                map_select_no_start_streak = 0
                 if time.monotonic() - last_reward_continue_at >= reward_continue_debounce:
                     run_reward_continue_transition(config)
                     last_reward_continue_at = time.monotonic()
@@ -1604,6 +1612,7 @@ def run_loop(
 
             if observation.failed_auction_settlement:
                 pending_game_start_deadline = None
+                map_select_no_start_streak = 0
                 if time.monotonic() - last_failed_auction_at >= transition_debounce:
                     run_failed_auction_settlement_transition(config)
                     preflight_esc_before_next_map_select = True
@@ -1687,7 +1696,7 @@ def run_loop(
                 continue
 
             if round_no is None:
-                if bs_enabled and not bs_data:
+                if not bs_data:
                     log(
                         f"loop {loop_index}: 尚无有效 board_snapshot 且无 OCR 回合；"
                         "可先开局，等待画板写入快照",
@@ -1739,6 +1748,7 @@ def run_loop(
             return
         except EndPromptDetected as exc:
             pending_game_start_deadline = None
+            map_select_no_start_streak = 0
             last_end_at, confirm_at = handle_end_transition(
                 config,
                 handled_rounds,

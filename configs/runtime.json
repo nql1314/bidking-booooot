@@ -66,15 +66,15 @@
     },
     "bid_button": {
       "x": 862,
-      "y": 972
+      "y": 1004
     },
     "bid_input_box": {
       "x": 1046,
       "y": 865
     },
     "bid_confirm": {
-      "x": 1057,
-      "y": 988
+      "x": 1081,
+      "y": 1002
     },
     "end_reward_click": {
       "origin": "left_bottom",
