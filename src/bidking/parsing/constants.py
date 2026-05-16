@@ -107,6 +107,7 @@ from .skill_bindings import (  # noqa: E402
     RAW_PRICING_DIRECT_SKILL_FLOAT_BINDINGS,
     RAW_PRICING_DIRECT_SKILL_INT_BINDINGS,
     SKILL_TO_CATEGORY,
+    VIKTOR_COMBINED_HIGH_TIER_ITEM_COUNT_KEY,
 )
 
 # ─── 输出分隔符 ────────────────────────────────────────────────────────────
