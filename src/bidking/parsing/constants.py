@@ -79,25 +79,6 @@ HERO_ID: Dict[int, str] = {
     301: "拉文",
 }
 
-# ─── 道具映射 ──────────────────────────────────────────────────────────────
-
-# 道具 ItemCid → (触发技能 SkillCid, 道具中文名, 揭示的类别 tag)
-ITEM_TOOLS: Dict[int, Tuple[int, str, int]] = {
-    100151: (2001, "家具物品鉴影", 101),
-    100152: (2002, "医疗药品鉴影", 102),
-    100153: (2003, "时尚潮流鉴影", 103),
-    100154: (2004, "兵装军火鉴影", 104),
-    100155: (2005, "珠宝矿藏鉴影", 105),
-    100156: (2006, "文物古董鉴影", 106),
-    100157: (2007, "数码娱乐鉴影", 107),
-    100158: (2008, "能源交通鉴影", 108),
-    100159: (2009, "食饮珍馐鉴影", 109),
-    100160: (2010, "书画古籍鉴影", 110),
-}
-
-# 技能 SkillCid → 揭示的类别 tag（由 ITEM_TOOLS 反向推导）
-SKILL_TO_CATEGORY: Dict[int, int] = {v[0]: v[2] for v in ITEM_TOOLS.values()}
-
 # ─── 类别映射 ──────────────────────────────────────────────────────────────
 
 # 类别 tag → 中文名
@@ -116,6 +97,7 @@ from .skill_bindings import (  # noqa: E402
     ITEM_SKILL_CANONICAL_SKILL_CID,
     ITEM_SKILL_DESC,
     ITEM_SKILL_EVENT_STATS,
+    ITEM_TOOLS,
     MAP_SKILL_DESC,
     MAP_SKILL_FORCE_QUALITY,
     OUTLINE_SKILL_QUALITY,
@@ -125,6 +107,7 @@ from .skill_bindings import (  # noqa: E402
     RAW_PRICING_DIRECT_SKILL_INT_BINDINGS,
     SKILL_LOG_PRICE_AVG_BINDINGS,
     SKILL_LOG_PRICE_TOTAL_BINDINGS,
+    SKILL_TO_CATEGORY,
 )
 
 # ─── 输出分隔符 ────────────────────────────────────────────────────────────
