@@ -1,5 +1,5 @@
 param(
-    [string]$VersionTag = "v1.16",
+    [string]$VersionTag = "v1.2-RC1",
     [switch]$NoObfuscation
 )
 

@@ -141,6 +141,7 @@ def _show_start_page(default_log: str, csv_path: str) -> None:
 
     launch_tab = ttk.Frame(notebook)
     config_tab = ttk.Frame(notebook)
+    sponsor_tab = ttk.Frame(notebook)
     notebook.add(launch_tab, text="启动看板")
     notebook.add(config_tab, text="策略配置")
 
@@ -191,8 +192,8 @@ def _show_start_page(default_log: str, csv_path: str) -> None:
 
     tk.Button(path_row, text="浏览…", command=browse_log).pack(side="left", padx=(6, 0))
 
-    tk.Radiobutton(frame, text="回放", variable=mode_var, value="replay").pack(anchor="w")
-    tk.Radiobutton(frame, text="实时 tail", variable=mode_var, value="tail").pack(anchor="w")
+    tk.Radiobutton(frame, text="实时画板", variable=mode_var, value="tail").pack(anchor="w")
+    tk.Radiobutton(frame, text="回放(需要有历史对局才能回放)", variable=mode_var, value="replay").pack(anchor="w")
     tk.Label(frame, text="看板角色").pack(anchor="w", pady=(8, 0))
     tk.Radiobutton(frame, text="艾莎", variable=board_var, value="elsa").pack(anchor="w")
     tk.Radiobutton(
@@ -290,7 +291,7 @@ def _show_start_page(default_log: str, csv_path: str) -> None:
     # 请先在「策略配置」里核对出价参数、棋盘快照与主配置 JSON；仅在确实需要自动出价时再点。
     tk.Button(
         bottom,
-        text="启动 Bot 总控（暂时不要使用 等我修复 现在会封号）",
+        text="启动Bot总控（先启动bot总控 再启动画板 需要同时运行)",
         command=lambda: _launch_bot_runner(root),
         bg="#664422",
         fg="#ffe8c8",
@@ -300,9 +301,36 @@ def _show_start_page(default_log: str, csv_path: str) -> None:
         padx=10,
         pady=4,
         cursor="hand2",
-    ).pack(side="left")
+    ).pack(fill="x", anchor="w")
 
-    tk.Button(bottom, text="启动", command=start).pack(side="right")
+    start_block = tk.Frame(bottom)
+    start_block.pack(fill="x", pady=(12, 0))
+
+    tk.Button(
+        start_block,
+        text="启动",
+        command=start,
+        bg="#2a5a8a",
+        fg="#ffffff",
+        activebackground="#3a6a9a",
+        activeforeground="#ffffff",
+        font=("微软雅黑", 15, "bold"),
+        relief="flat",
+        padx=20,
+        pady=14,
+        cursor="hand2",
+    ).pack(fill="x")
+
+    _hint_bg = str(bottom.cget("bg"))
+    tk.Label(
+        start_block,
+        text="(首次启动或者游戏更新后需要使用群文件的FuckingBidKingByEax程序进入对应设置栏进行初始化)",
+        bg=_hint_bg,
+        fg="#5a5a6a",
+        font=("微软雅黑", 14),
+        wraplength=640,
+        justify="left",
+    ).pack(fill="x", anchor="w", padx=4, pady=(6, 0))
 
     # ── 策略配置 tab ─────────────────────────────────────────────────────
     try:
@@ -316,6 +344,22 @@ def _show_start_page(default_log: str, csv_path: str) -> None:
             foreground="#aa3333",
             padding=20,
         ).pack(fill="both", expand=True)
+
+    # ── 赞助标签（Notebook 第三页，在「策略配置」右侧）────────────────────
+    try:
+        from ..ui.grid._sponsor_column import populate_sponsor_notebook_tab
+
+        setattr(root, "_bidking_sponsor_photo", populate_sponsor_notebook_tab(sponsor_tab))
+    except Exception as exc:  # noqa: BLE001
+        ttk.Label(
+            sponsor_tab,
+            text=f"赞助栏加载失败：{exc}",
+            foreground="#aa3333",
+            padding=20,
+        ).pack(fill="both", expand=True)
+        setattr(root, "_bidking_sponsor_photo", None)
+
+    notebook.add(sponsor_tab, text="赞助栏")
 
     root.mainloop()
 

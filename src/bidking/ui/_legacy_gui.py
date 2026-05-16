@@ -174,8 +174,9 @@ class BidKingApp:
         tip_box.pack(fill="x", pady=(0, 8))
         ttk.Label(
             tip_box,
-            text="游戏分辨率 1920×1080（请与游戏窗口一致后再启动自动化）。",
-            foreground="#2a5a8a",
+            text="游戏分辨率 1920×1080（请与游戏窗口一致后再启动自动化）\n\
+             合理使用 切勿长时间挂机 风险自负",
+            foreground="#c02020",
             font=("", 10, "bold"),
             wraplength=480,
         ).pack(anchor="w", pady=(0, 4))

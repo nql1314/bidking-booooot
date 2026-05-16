@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
-"""画板右侧赞助栏：赞赏码以 JPEG 的 base64 内嵌，运行时解码后由 Pillow 缩放渲染。"""
+"""启动页 Notebook「赞助」标签：赞赏码以 JPEG 的 base64 内嵌，运行时解码后由 Pillow 缩放渲染。"""
 
 from __future__ import annotations
 
 import base64
 from io import BytesIO
-from typing import Any, Optional, Tuple
+from typing import Any, Optional
 
 import tkinter as tk
 
@@ -16,43 +16,46 @@ SPONSOR_QR_JPEG_B64 = \
 '''
 
 
-def build_sponsor_column(
-    body_row: tk.Misc,
+def populate_sponsor_notebook_tab(
+    tab: tk.Misc,
     *,
-    max_display: int = 200,
-) -> Tuple[tk.Frame, Optional[Any]]:
-    """在 ``body_row`` 右侧放置赞助栏；返回 ``(frame, photo_ref)``，须将 ``photo_ref`` 存于窗口对象以防 GC。"""
-    col = tk.Frame(body_row, bg="#1e1e32", padx=10, pady=10)
-    col.pack(side="right", fill="y", anchor="ne")
+    max_display: int = 280,
+) -> Optional[Any]:
+    """在 ``viewer_main`` 启动页 Notebook 的赞助标签内填充说明与赞赏码。
+
+    返回的 ``PhotoImage`` 须由调用方保存在窗口存活期内的属性上，避免被 GC。
+    """
+    wrap = tk.Frame(tab, bg="#f4f6fa")
+    wrap.pack(fill="both", expand=True, padx=16, pady=16)
 
     tk.Label(
-        col,
-        text="赞助栏",
-        bg="#1e1e32",
-        fg="#e8d080",
-        font=("微软雅黑", 11, "bold"),
-    ).pack(anchor="w", pady=(0, 6))
-
-    tk.Label(
-        col,
+        wrap,
         text="本项目永久免费 也欢迎赞助支持",
-        bg="#1e1e32",
-        fg="#c8c8dd",
-        font=("微软雅黑", 9),
-        wraplength=max_display + 40,
-        justify="left",
+        bg="#f4f6fa",
+        fg="#2a4a7a",
+        font=("微软雅黑", 12, "bold"),
     ).pack(anchor="w", pady=(0, 8))
 
+    tk.Label(
+        wrap,
+        text="赞助作者一波token钱 或 赠送一杯咖啡",
+        bg="#f4f6fa",
+        fg="#3a4a5a",
+        font=("微软雅黑", 10),
+        wraplength=max(280, max_display),
+        justify="left",
+    ).pack(anchor="w", pady=(0, 16))
+
     photo: Optional[Any] = None
-    img_lbl = tk.Label(col, bg="#1e1e32")
+    img_lbl = tk.Label(wrap, bg="#f4f6fa")
     try:
         from PIL import Image, ImageTk
     except ImportError:
         img_lbl.config(
             text="（未安装 Pillow，无法显示赞赏码）",
             fg="#888899",
-            font=("微软雅黑", 8),
-            wraplength=max_display + 40,
+            font=("微软雅黑", 9),
+            wraplength=max_display,
         )
     else:
         raw = base64.b64decode(SPONSOR_QR_JPEG_B64)
@@ -62,7 +65,7 @@ def build_sponsor_column(
         if m > max_display:
             s = max_display / m
             im = im.resize((max(1, int(w * s)), max(1, int(h * s))), Image.Resampling.LANCZOS)
-        photo = ImageTk.PhotoImage(im, master=body_row)
+        photo = ImageTk.PhotoImage(im, master=tab)
         img_lbl.config(image=photo)
-    img_lbl.pack(anchor="center")
-    return col, photo
+    img_lbl.pack(anchor="nw")
+    return photo
