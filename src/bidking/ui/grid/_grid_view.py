@@ -2539,19 +2539,9 @@ class GridWindow:
         self._build_info_bar()
         self._build_vacant_estimate_bar()
         self._build_legend()
-
-        self._mid_row = tk.Frame(self.root, bg="#1a1a2e")
-        self._mid_row.pack(fill="both", expand=True, padx=8, pady=(4, 8))
-        self._center_column = tk.Frame(self._mid_row, bg="#1a1a2e")
-        self._center_column.pack(side="left", fill="both", expand=True)
-
         self._build_canvas()
         if self._snapshots:
             self._build_nav_bar()
-
-        from ._sponsor_column import build_sponsor_column
-
-        _, self._sponsor_qr_photo = build_sponsor_column(self._mid_row)
 
         self.root.bind(
             "<Control-Shift-V>", lambda _e: self._on_expand_log_items_into_vacant()
@@ -2947,8 +2937,8 @@ class GridWindow:
 
     def _build_nav_bar(self) -> None:
         """快照导航栏：上一步 / 当前位置 / 下一步（仅快照模式显示）。"""
-        bar = tk.Frame(self._center_column, bg="#161625", pady=6)
-        bar.pack(fill="x", padx=0)
+        bar = tk.Frame(self.root, bg="#161625", pady=6)
+        bar.pack(fill="x", padx=8)
 
         btn_cfg = dict(
             font=("微软雅黑", 9, "bold"),
@@ -3039,8 +3029,8 @@ class GridWindow:
         self._snap_goto(self._snap_idx + 1)
 
     def _build_canvas(self) -> None:
-        outer = tk.Frame(self._center_column, bg="#1a1a2e")
-        outer.pack(fill="both", expand=True, anchor="w")
+        outer = tk.Frame(self.root, bg="#1a1a2e")
+        outer.pack(fill="both", expand=True, anchor="w", padx=8, pady=(4, 8))
 
         cw = GRID_COLS * CELL_W + 1
         ch = GRID_ROWS * CELL_H + 1
