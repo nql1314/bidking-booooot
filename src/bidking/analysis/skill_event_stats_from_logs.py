@@ -25,6 +25,7 @@ from ..parsing.skill_bindings import (
     RAW_PRICING_DIRECT_SKILL_INT_BINDINGS,
     SKILL_LOG_PRICE_AVG_BINDINGS,
     SKILL_LOG_PRICE_TOTAL_BINDINGS,
+    SKILL_LOG_PRICE_TOTAL_PLACEHOLDER_SKILL_CIDS,
 )
 
 
@@ -182,7 +183,12 @@ def read_skill_log_direct_prices(skill_entries: Dict[int, dict]) -> Dict[str, An
     for skill_cid, field, key in SKILL_LOG_PRICE_AVG_BINDINGS:
         out[key] = safe_float_field(skill_entries.get(skill_cid), field)
     for skill_cid, field, key in SKILL_LOG_PRICE_TOTAL_BINDINGS:
-        out[key] = safe_int_field(skill_entries.get(skill_cid), field)
+        v = safe_int_field(skill_entries.get(skill_cid), field)
+        if skill_cid in SKILL_LOG_PRICE_TOTAL_PLACEHOLDER_SKILL_CIDS:
+            if v is not None and out.get(key) is None:
+                out[key] = v
+        else:
+            out[key] = v
     return out
 
 
@@ -283,6 +289,40 @@ def apply_outline_hitbox_to_event_stats(
                 direct["q6_grid_avg"] = float(agg["avg_cells"])
 
 
+def _write_skill_int_fields_from_logs(
+    skill_entries: Dict[int, dict], direct: Dict[str, Any]
+) -> None:
+    """地图/英雄/道具技能行合并键上的整型直读（绑表见 ``RAW_PRICING_DIRECT_SKILL_INT_BINDINGS``）。"""
+    for key, cid, field in RAW_PRICING_DIRECT_SKILL_INT_BINDINGS:
+        direct[key] = safe_int_field(skill_entries.get(cid), field)
+
+
+def _write_skill_float_fields_from_logs(
+    skill_entries: Dict[int, dict], direct: Dict[str, Any]
+) -> None:
+    """同上，浮点直读（``RAW_PRICING_DIRECT_SKILL_FLOAT_BINDINGS``）。"""
+    for key, cid, field in RAW_PRICING_DIRECT_SKILL_FLOAT_BINDINGS:
+        direct[key] = safe_float_field(skill_entries.get(cid), field)
+
+
+def _write_item_int_fields_from_logs(
+    skill_entries: Dict[int, dict], direct: Dict[str, Any]
+) -> None:
+    """``ItemSkillLog`` 整型直读（``RAW_PRICING_DIRECT_ITEM_INT_BINDINGS``）。"""
+    for key, cid, field in RAW_PRICING_DIRECT_ITEM_INT_BINDINGS:
+        v = item_skill_int_if_logged(skill_entries, cid, field)
+        if v is not None:
+            direct[key] = v
+
+
+def _write_item_float_fields_from_logs(
+    skill_entries: Dict[int, dict], direct: Dict[str, Any]
+) -> None:
+    """``ItemSkillLog`` 浮点直读（``RAW_PRICING_DIRECT_ITEM_FLOAT_BINDINGS``）。"""
+    for key, cid, field in RAW_PRICING_DIRECT_ITEM_FLOAT_BINDINGS:
+        direct[key] = item_skill_float_if_logged(skill_entries, cid, field)
+
+
 def parse_skill_entries_to_event_stats_direct(
     skill_entries: Dict[int, dict],
 ) -> Dict[str, Any]:
@@ -333,16 +373,10 @@ def parse_skill_entries_to_event_stats_direct(
         "q6_price_total": _price_direct.get("q6_price_total"),
     }
 
-    for _key, _cid, _field in RAW_PRICING_DIRECT_SKILL_INT_BINDINGS:
-        direct[_key] = safe_int_field(skill_entries.get(_cid), _field)
-    for _key, _cid, _field in RAW_PRICING_DIRECT_SKILL_FLOAT_BINDINGS:
-        direct[_key] = safe_float_field(skill_entries.get(_cid), _field)
-    for _key, _cid, _field in RAW_PRICING_DIRECT_ITEM_INT_BINDINGS:
-        v = item_skill_int_if_logged(skill_entries, _cid, _field)
-        if v is not None:
-            direct[_key] = v
-    for _key, _cid, _field in RAW_PRICING_DIRECT_ITEM_FLOAT_BINDINGS:
-        direct[_key] = item_skill_float_if_logged(skill_entries, _cid, _field)
+    _write_skill_int_fields_from_logs(skill_entries, direct)
+    _write_skill_float_fields_from_logs(skill_entries, direct)
+    _write_item_int_fields_from_logs(skill_entries, direct)
+    _write_item_float_fields_from_logs(skill_entries, direct)
 
     apply_outline_hitbox_to_event_stats(skill_entries, direct)
     return direct
