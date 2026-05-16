@@ -23,7 +23,7 @@ from bidking.analysis.scan_inference import (
     possible_qualities_from_scan_history,
     vacant_early_unit_from_exclusions,
 )
-from bidking.parsing.constants import MAP_SKILL_TOTAL_HIDDEN_CELLS
+from bidking.parsing.skill_bindings import MAP_SKILL_TOTAL_HIDDEN_CELLS
 
 
 class BoardPricingTests(unittest.TestCase):
