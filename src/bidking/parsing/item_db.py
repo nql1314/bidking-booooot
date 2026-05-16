@@ -467,6 +467,7 @@ def filter_csv_candidates_for_query(
     excluded_categories: Optional[Set[int]] = None,
     excluded_qualities: Optional[Set[int]] = None,
     max_shape_wh: Optional[Tuple[int, int]] = None,
+    categories_any: Optional[Set[int]] = None,
 ) -> List[CsvItem]:
     """
     与 :func:`query_item` 相同的过滤顺序，返回候选列表（不计算期望价）。
@@ -501,6 +502,12 @@ def filter_csv_candidates_for_query(
         if with_cat:
             candidates = with_cat
 
+    if categories_any:
+        ca = set(categories_any)
+        with_any = [i for i in candidates if ca.intersection(i.category_tags)]
+        if with_any:
+            candidates = with_any
+
     if excluded_categories:
         candidates = [
             i for i in candidates
@@ -522,6 +529,7 @@ def query_item(
     max_shape_wh: Optional[Tuple[int, int]] = None,
     map_category_weights: Optional[Dict[int, float]] = None,
     map_id: Optional[int] = None,
+    categories_any: Optional[Set[int]] = None,
 ) -> Tuple[Optional[CsvItem], int, bool, Optional[float], str]:
     """
     根据已知约束查询物品候选，返回最佳匹配及统计信息。
@@ -529,7 +537,8 @@ def query_item(
     Args:
         shape               : ItemSlotType，如 11=1×1（None=未知）
         quality             : 品质 1~6（None=未知）
-        categories          : 已知类别 tag 集合（空=未知）
+        categories          : 已知类别 tag 集合（空=未知）；CSV 上须**同时**含于 ``category_tags``（AND）
+        categories_any      : 英雄技能 OR 类别约束（空=忽略）；候选须与集合**至少有一个** tag 相交
         item_cid            : 精确 ItemCid（None=未知）
         csv_index           : load_csv() 返回的 ID 索引
         csv_items           : load_csv() 返回的全量列表
@@ -552,9 +561,10 @@ def query_item(
         2. 按 shape 过滤（正向）；shape=None 且 max_shape_wh 非空时按最大允许尺寸过滤
         3. 按 quality 过滤（正向）
         4. 按 excluded_qualities 过滤（负向，排除确认不是的品质）
-        5. 按 categories 过滤（正向，必须含全部已知类别）
-        6. 按 excluded_categories 过滤（负向，排除含有已确认不属于类别的候选）
-        7. 若类别正向过滤后为空，保留 shape+quality 结果（容错）
+        5. 按 categories 过滤（正向，必须含全部已知类别 tag）
+        6. 按 categories_any 过滤（正向 OR：``category_tags`` 与集合有交集）
+        7. 按 excluded_categories 过滤（负向，排除含有已确认不属于类别的候选）
+        8. 若类别正向过滤后为空，保留 shape+quality 结果（容错）
 
     估算规则（多候选时）：按 drop_table_weights.csv 中的掉落权重计算期望价。
     """
@@ -571,6 +581,7 @@ def query_item(
         excluded_categories=excluded_categories,
         excluded_qualities=excluded_qualities,
         max_shape_wh=max_shape_wh,
+        categories_any=categories_any,
     )
 
     if not candidates:

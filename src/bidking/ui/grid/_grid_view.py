@@ -54,6 +54,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 from ... import __version__
 from ...parsing.constants import (
     CATEGORY_NAMES,
+    fmt_categories_any,
     fmt_shape,
 )
 from ...parsing.handlers import handle_s2c33, handle_s2c37, handle_s2c39, handle_s2c45
@@ -968,6 +969,7 @@ class GridWindow:
             max_shape_wh=max_shape,
             map_category_weights=self._map_category_weights,
             map_id=self.state.map_id,
+            categories_any=k.categories_any if k.categories_any else None,
         )
 
     def _valid_manual_confirm_item(
@@ -1032,6 +1034,11 @@ class GridWindow:
             ]
             if with_cat:
                 candidates = with_cat
+        if k.categories_any:
+            ca = set(k.categories_any)
+            with_any = [i for i in candidates if ca.intersection(i.category_tags)]
+            if with_any:
+                candidates = with_any
         if k.excluded_categories:
             candidates = [
                 i
@@ -1080,6 +1087,11 @@ class GridWindow:
             ]
             if with_cat:
                 candidates = with_cat
+        if k.categories_any:
+            ca = set(k.categories_any)
+            with_any = [i for i in candidates if ca.intersection(i.category_tags)]
+            if with_any:
+                candidates = with_any
         if k.excluded_categories:
             candidates = [
                 i
@@ -3395,6 +3407,10 @@ class GridWindow:
         type_text = ""
         if uid in self._phantom_items:
             type_text = "手动"
+        elif k.categories_any:
+            type_text = "|".join(
+                _CAT_SHORT.get(c, str(c)) for c in sorted(k.categories_any)
+            )
         elif k.categories:
             type_text = "/".join(
                 _CAT_SHORT.get(c, str(c)) for c in sorted(k.categories)
@@ -3994,6 +4010,8 @@ class GridWindow:
                 CATEGORY_NAMES.get(c, str(c)) for c in sorted(k.categories)
             )
             hdr_parts.append(f"类别: {cats}")
+        if k.categories_any:
+            hdr_parts.append(f"类别(或): {fmt_categories_any(k.categories_any)}")
         if k.item_cid:
             hdr_parts.append(f"CID: {k.item_cid}")
         hdr_text = "    |    ".join(hdr_parts) if hdr_parts else "（属性未知）"

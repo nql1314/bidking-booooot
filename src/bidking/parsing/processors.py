@@ -19,6 +19,7 @@ from .constants import (
     MAP_SKILL_FORCE_QUALITY,
     SKILL_TO_CATEGORY,
 )
+from .skill_bindings import HERO_SKILL_CATEGORY_TAGS_OR
 from .state import GameState
 
 
@@ -61,7 +62,12 @@ def process_hero_skill_log(
         if cr != target_cast_round:
             continue
         skill_cid = entry.get('SkillCid', 0)
-        quality = HERO_SKILL_QUALITY.get(skill_cid)
+        try:
+            sid = int(skill_cid)
+        except (TypeError, ValueError):
+            sid = 0
+        quality = HERO_SKILL_QUALITY.get(sid)
+        tags_or = HERO_SKILL_CATEGORY_TAGS_OR.get(sid)
         revealed_uids = []
         for box in entry.get('HitBoxList', []):
             uid = box.get('ItemUid', '')
@@ -71,6 +77,11 @@ def process_hero_skill_log(
             k.update_from_box(box)
             if quality is not None:
                 k.quality = quality
+            if tags_or:
+                if not k.categories_any:
+                    k.categories_any = set(tags_or)
+                else:
+                    k.categories_any &= set(tags_or)
             revealed_uids.append(uid)
         # 全量品质扫描负向约束：
         # 英雄技能扫描全场该品质的物品，未命中的物品必然不是该品质
@@ -79,7 +90,7 @@ def process_hero_skill_log(
 
         ev = {
             'type': 'hero_skill',
-            'skill_cid': skill_cid,
+            'skill_cid': sid,
             'quality': quality,
             'cast_round': cr,
             'uids': revealed_uids,

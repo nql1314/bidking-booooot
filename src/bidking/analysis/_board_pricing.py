@@ -616,6 +616,7 @@ def _item_value(
 
     sh = _pricing_shape_int_for_csv(it)
     cats = _int_set_from_field(it.get("categories"))
+    cats_any = _int_set_from_field(it.get("categories_any"))
     excl_q = _int_set_from_field(it.get("excluded_qualities"))
     excl_c = _int_set_from_field(it.get("excluded_categories"))
 
@@ -631,6 +632,7 @@ def _item_value(
         max_shape_wh=None,
         map_category_weights=map_category_weights if map_category_weights else None,
         map_id=map_id_normalized,
+        categories_any=cats_any if cats_any else None,
     )
     if best is None or count == 0:
         return 0.0
@@ -650,6 +652,10 @@ def _item_value(
             wc = [i for i in cand if all(c in i.category_tags for c in cats)]
             if wc:
                 cand = wc
+        if cats_any:
+            wa = [i for i in cand if cats_any.intersection(i.category_tags)]
+            if wa:
+                cand = wa
         if excl_c:
             cand = [i for i in cand if not any(c in excl_c for c in i.category_tags)]
         w_est = _weighted_est_price(cand, map_category_weights or None, map_id_normalized)
@@ -710,6 +716,7 @@ def _sum_known_contour_weighted_price_and_geo_cells(
             continue
 
         cats = _int_set_from_field(it.get("categories"))
+        cats_any = _int_set_from_field(it.get("categories_any"))
         excl_q = _int_set_from_field(it.get("excluded_qualities"))
         excl_c = _int_set_from_field(it.get("excluded_categories"))
 
@@ -727,6 +734,7 @@ def _sum_known_contour_weighted_price_and_geo_cells(
             max_shape_wh=None,
             map_category_weights=weights if weights else None,
             map_id=mid_n,
+            categories_any=cats_any if cats_any else None,
         )
         if best is None or count == 0 or unique:
             continue
@@ -744,6 +752,10 @@ def _sum_known_contour_weighted_price_and_geo_cells(
                 wc = [i for i in cand if all(c in i.category_tags for c in cats)]
                 if wc:
                     cand = wc
+            if cats_any:
+                wa = [i for i in cand if cats_any.intersection(i.category_tags)]
+                if wa:
+                    cand = wa
             if excl_c:
                 cand = [i for i in cand if not any(c in excl_c for c in i.category_tags)]
             w_est = _weighted_est_price(cand, weights if weights else None, mid_n)

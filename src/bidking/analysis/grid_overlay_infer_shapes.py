@@ -350,6 +350,7 @@ def compute_grid_overlay_infer_shapes(
             excluded_categories=k.excluded_categories if k.excluded_categories else None,
             excluded_qualities=k.excluded_qualities if k.excluded_qualities else None,
             max_shape_wh=None,
+            categories_any=k.categories_any if k.categories_any else None,
         )
         if not filt:
             continue

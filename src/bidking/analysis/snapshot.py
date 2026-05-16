@@ -34,6 +34,7 @@ def item_knowledge_to_json(k: ItemKnowledge) -> Dict[str, Any]:
         "shape": k.shape,
         "quality": k.quality,
         "categories": sorted(k.categories),
+        "categories_any": sorted(k.categories_any),
         "item_cid": k.item_cid,
         "price": k.price,
         "manual_confirm_item_id": k.manual_confirm_item_id,
@@ -49,6 +50,7 @@ def item_knowledge_from_json(d: Dict[str, Any]) -> ItemKnowledge:
     k.shape = d.get("shape")
     k.quality = d.get("quality")
     k.categories = set(int(x) for x in (d.get("categories") or []))
+    k.categories_any = set(int(x) for x in (d.get("categories_any") or []))
     k.item_cid = d.get("item_cid")
     k.price = d.get("price")
     k.manual_confirm_item_id = d.get("manual_confirm_item_id")

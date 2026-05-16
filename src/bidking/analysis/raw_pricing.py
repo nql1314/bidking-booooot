@@ -26,7 +26,6 @@ from ..parsing.state import CsvItem
 from .skill_event_stats_from_logs import (
     merge_latest_skill_entries,
     parse_skill_entries_to_event_stats_direct,
-    read_skill_log_direct_prices,
     safe_float_field,
     safe_int_field,
 )

@@ -23,8 +23,6 @@ from ..parsing.skill_bindings import (
     RAW_PRICING_DIRECT_ITEM_INT_BINDINGS,
     RAW_PRICING_DIRECT_SKILL_FLOAT_BINDINGS,
     RAW_PRICING_DIRECT_SKILL_INT_BINDINGS,
-    SKILL_LOG_PRICE_AVG_BINDINGS,
-    SKILL_LOG_PRICE_TOTAL_BINDINGS,
 )
 
 
@@ -43,10 +41,6 @@ def _collect_attribute_sources() -> Dict[str, Tuple[str, ...]]:
         add(key, f"ItemSkillLog ItemCid={cid} {field}")
     for key, cid, field in RAW_PRICING_DIRECT_ITEM_FLOAT_BINDINGS:
         add(key, f"ItemSkillLog ItemCid={cid} {field}")
-    for skill_cid, field, key in SKILL_LOG_PRICE_AVG_BINDINGS:
-        add(key, f"SkillCid={skill_cid} {field} (均价)")
-    for skill_cid, field, key in SKILL_LOG_PRICE_TOTAL_BINDINGS:
-        add(key, f"SkillCid={skill_cid} {field} (总价)")
     for hero_cid, canon in HERO_SKILL_CID_MERGE_INTO_MAP.items():
         for key, cid, _f in RAW_PRICING_DIRECT_SKILL_INT_BINDINGS + RAW_PRICING_DIRECT_SKILL_FLOAT_BINDINGS:
             if cid == canon:
@@ -174,16 +168,6 @@ def item_skill_float_if_logged(
     if v is None or v != v:
         return 0.0
     return float(v)
-
-
-def read_skill_log_direct_prices(skill_entries: Dict[int, dict]) -> Dict[str, Any]:
-    """紫/金/红均价与金/红档内总价（地图日志字段直读）。"""
-    out: Dict[str, Any] = {}
-    for skill_cid, field, key in SKILL_LOG_PRICE_AVG_BINDINGS:
-        out[key] = safe_float_field(skill_entries.get(skill_cid), field)
-    for skill_cid, field, key in SKILL_LOG_PRICE_TOTAL_BINDINGS:
-        out[key] = safe_int_field(skill_entries.get(skill_cid), field)
-    return out
 
 
 def _shape_cell_count(slot_type: Any) -> int:
@@ -324,7 +308,6 @@ def parse_skill_entries_to_event_stats_direct(
 
     不含 ``random_avg_price_min``（由 :mod:`bidking.analysis.raw_pricing` 推理写入）。
     """
-    _price_direct = read_skill_log_direct_prices(skill_entries)
     direct: Dict[str, Any] = {
         "total_count": None,
         "total_grid_count": None,
@@ -349,22 +332,22 @@ def parse_skill_entries_to_event_stats_direct(
         "q4_grid_avg": None,
         "q4_count_min": None,
         "q4_grid_min": None,
-        "q4_price_avg": _price_direct.get("q4_price_avg"),
-        "q4_price_total": _price_direct.get("q4_price_total"),
+        "q4_price_avg": None,
+        "q4_price_total": None,
         "q5_count": None,
         "q5_count_min": None,
         "q5_grid_count": None,
         "q5_grid_avg": None,
         "q5_grid_min": None,
-        "q5_price_avg": _price_direct.get("q5_price_avg"),
-        "q5_price_total": _price_direct.get("q5_price_total"),
+        "q5_price_avg": None,
+        "q5_price_total": None,
         "q6_count": None,
         "q6_count_min": None,
         "q6_grid_count": None,
         "q6_grid_avg": None,
         "q6_grid_min": None,
-        "q6_price_avg": _price_direct.get("q6_price_avg"),
-        "q6_price_total": _price_direct.get("q6_price_total"),
+        "q6_price_avg": None,
+        "q6_price_total": None,
     }
 
     _write_skill_int_fields_from_logs(skill_entries, direct)
