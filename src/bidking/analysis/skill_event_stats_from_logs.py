@@ -25,7 +25,6 @@ from ..parsing.skill_bindings import (
     RAW_PRICING_DIRECT_SKILL_INT_BINDINGS,
     SKILL_LOG_PRICE_AVG_BINDINGS,
     SKILL_LOG_PRICE_TOTAL_BINDINGS,
-    SKILL_LOG_PRICE_TOTAL_PLACEHOLDER_SKILL_CIDS,
 )
 
 
@@ -183,12 +182,7 @@ def read_skill_log_direct_prices(skill_entries: Dict[int, dict]) -> Dict[str, An
     for skill_cid, field, key in SKILL_LOG_PRICE_AVG_BINDINGS:
         out[key] = safe_float_field(skill_entries.get(skill_cid), field)
     for skill_cid, field, key in SKILL_LOG_PRICE_TOTAL_BINDINGS:
-        v = safe_int_field(skill_entries.get(skill_cid), field)
-        if skill_cid in SKILL_LOG_PRICE_TOTAL_PLACEHOLDER_SKILL_CIDS:
-            if v is not None and out.get(key) is None:
-                out[key] = v
-        else:
-            out[key] = v
+        out[key] = safe_int_field(skill_entries.get(skill_cid), field)
     return out
 
 

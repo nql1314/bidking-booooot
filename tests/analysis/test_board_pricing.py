@@ -23,9 +23,6 @@ from bidking.analysis.scan_inference import (
     possible_qualities_from_scan_history,
     vacant_early_unit_from_exclusions,
 )
-from bidking.parsing.skill_bindings import MAP_SKILL_TOTAL_HIDDEN_CELLS
-
-
 class BoardPricingTests(unittest.TestCase):
     def tearDown(self) -> None:
         set_map_quality_csv_override(None)
@@ -281,7 +278,7 @@ class BoardPricingTests(unittest.TestCase):
             {
                 "game_data": {
                     "MapSkillLog": [
-                        {"SkillCid": MAP_SKILL_TOTAL_HIDDEN_CELLS, "TotalHitBoxIndex": 42},
+                        {"SkillCid": 200009, "TotalHitBoxIndex": 42},
                     ]
                 }
             }
@@ -716,7 +713,7 @@ class BoardPricingTests(unittest.TestCase):
             {
                 "game_data": {
                     "MapSkillLog": [
-                        {"SkillCid": MAP_SKILL_TOTAL_HIDDEN_CELLS, "TotalHitBoxIndex": 61},
+                        {"SkillCid": 200009, "TotalHitBoxIndex": 61},
                     ]
                 }
             }
@@ -755,7 +752,7 @@ class BoardPricingTests(unittest.TestCase):
             {
                 "game_data": {
                     "MapSkillLog": [
-                        {"SkillCid": MAP_SKILL_TOTAL_HIDDEN_CELLS, "TotalHitBoxIndex": 61},
+                        {"SkillCid": 200009, "TotalHitBoxIndex": 61},
                     ]
                 }
             }
@@ -1128,9 +1125,17 @@ class BoardPricingTests(unittest.TestCase):
             },
             {
                 "game_data": {
-                    "MapSkillLog": [
-                        {"SkillCid": 990003, "HitItemTotalPrice": 298},
-                        {"SkillCid": 990004, "HitItemTotalPrice": 457},
+                    "ItemSkillLog": [
+                        {
+                            "SkillCid": 504,
+                            "ItemCid": 100125,
+                            "HitItemTotalPrice": 298,
+                        },
+                        {
+                            "SkillCid": 505,
+                            "ItemCid": 100126,
+                            "HitItemTotalPrice": 457,
+                        },
                     ]
                 }
             },

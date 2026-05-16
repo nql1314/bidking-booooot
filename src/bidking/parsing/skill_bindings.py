@@ -134,12 +134,8 @@ SKILL_LOG_PRICE_AVG_BINDINGS: Tuple[Tuple3P, ...] = (
 SKILL_LOG_PRICE_TOTAL_BINDINGS: Tuple[Tuple3P, ...] = (
     (503, "HitItemTotalPrice", "q4_price_total"),
     (504, "HitItemTotalPrice", "q5_price_total"),
-    (505, "HitItemTotalPrice", "q6_price_total"),
-    (990003, "HitItemTotalPrice", "q5_price_total"),
-    (990004, "HitItemTotalPrice", "q6_price_total"),
+    (505, "HitItemTotalPrice", "q6_price_total")
 )
-
-SKILL_LOG_PRICE_TOTAL_PLACEHOLDER_SKILL_CIDS: frozenset[int] = frozenset({990003, 990004})
 
 OUTLINE_SKILL_QUALITY: Dict[int, int] = {
     200001: 4,
@@ -358,8 +354,6 @@ MAP_SKILL_RANDOM3_AVG_PRICE: int = 200031
 MAP_SKILL_RANDOM6_AVG_PRICE: int = 200032
 MAP_SKILL_RANDOM9_AVG_PRICE: int = 200033
 MAP_SKILL_RANDOM12_AVG_PRICE: int = 200034
-MAP_SKILL_TOTAL_HIDDEN_CELLS: int = 200009
-MAP_SKILL_TOTAL_GOLD_COUNT: int = 200019
 
 
 def validate_skill_registry_vs_csv(csv_path: str) -> List[str]:
