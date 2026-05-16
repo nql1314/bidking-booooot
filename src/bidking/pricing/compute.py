@@ -27,6 +27,7 @@ def compute_price(
     round_no: int,
     board_snapshot: dict[str, Any] | None = None,
     price_config: dict[str, Any] | None = None,
+    strategy_role: str | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """
     读快照 ``pricing`` → ``compute_role_base``（艾莎在 ``compute_base_bid_points`` 内含空置红择优）→
@@ -35,6 +36,10 @@ def compute_price(
 
     当传入或从磁盘启用的画板快照中含有效 ``map_id`` 时，``pricing.maps`` 覆盖层按该局地图档键
     加载（与 grid_view / 日志对局一致）；否则仍按 ``automation.selected_map`` 等解析。
+
+    ``strategy_role``：若给出 ``aisha`` / ``ahmad`` / ``universal``，则跳过
+    :func:`resolve_strategy_role`（供 grid_view 等按快照内 ``pricing.ahmad_pricing_active``
+    与当前局英雄/地图决策，而不依赖 bot 的 ``selected_mode``）。
     """
     bs = board_snapshot
     cfg_for_paths: dict[str, Any] | None = None
@@ -68,7 +73,13 @@ def compute_price(
     snap_round = current_round_from_snapshot(bs) if isinstance(bs, dict) else None
     effective_round = int(snap_round) if snap_round is not None else int(round_no)
 
-    role = resolve_strategy_role(effective_config, bs)
+    if strategy_role is not None:
+        r = str(strategy_role).strip().lower()
+        role = r if r in ("aisha", "ahmad", "universal") else resolve_strategy_role(
+            effective_config, bs
+        )
+    else:
+        role = resolve_strategy_role(effective_config, bs)
     fallback = parse_int_config((effective_config.get("pricing") or {}).get("fallback_bid_price"), 22223)
 
     payload: dict[str, Any] = {

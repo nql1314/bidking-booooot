@@ -37,6 +37,22 @@ def resolve_strategy_role(config: dict[str, Any], board_snapshot: dict[str, Any]
     return "ahmad"
 
 
+def resolve_strategy_role_from_board_snapshot(
+    board_snapshot: dict[str, Any] | None,
+) -> str:
+    """由画板快照决定基底策略角色（不读 ``automation.selected_mode``）。
+
+    与 ``build_snapshot_pricing_dict`` 中 ``ahmad_pricing_active`` 一致：己方 Ahmad（204）
+    且地图属快递站系列时为 ``ahmad``（基底可优先 ``ahmad_points``），否则 ``aisha``。
+    """
+    if not isinstance(board_snapshot, dict):
+        return "aisha"
+    pr = board_snapshot.get("pricing")
+    if isinstance(pr, dict) and bool(pr.get("ahmad_pricing_active")):
+        return "ahmad"
+    return "aisha"
+
+
 def compute_role_base(
     role: str,
     pricing: dict[str, Any],

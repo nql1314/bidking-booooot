@@ -79,6 +79,7 @@ from ...config.runtime import (
     load_runtime,
 )
 from ...pricing.compute import compute_price
+from ...pricing.strategies import resolve_strategy_role_from_board_snapshot
 from ._grid_overlay_payload import (
     build_grid_overlay_export_dict,
     max_anchor_box_id_from_overlay_ui,
@@ -2312,7 +2313,9 @@ class GridWindow:
             return "推荐出价\n（尚未算出：配置加载或定价链路异常）"
         lines: List[str] = [
             "推荐出价",
-            "由 ``bidking.pricing.compute_price`` 基于当前画板快照（含 pricing）与合并后的 runtime/config 计算。",
+            "由 ``bidking.pricing.compute_price`` 基于当前画板快照（含 pricing）与合并后的 runtime/config 计算；"
+            "Grid 内基底策略按快照 ``pricing.ahmad_pricing_active``（己方 Ahmad + 快递站图）"
+            "在 ahmad / aisha 间切换，不读 bot 的 ``automation.selected_mode``。",
         ]
         pr = det.get("pricing_reason")
         if pr is not None and str(pr).strip():
@@ -2397,6 +2400,9 @@ class GridWindow:
             self._est_label_aisha.config(text="仓位估价  —")
 
         board_for_compute = {**base, "pricing": p}
+        grid_strategy_role = resolve_strategy_role_from_board_snapshot(
+            board_for_compute
+        )
         rnd = int(self.state.current_round or 1)
         mid_raw = int(self.state.map_id or 0)
         map_sig = map_bundle_key_for_automation(mid_raw) if mid_raw > 0 else ""
@@ -2408,6 +2414,7 @@ class GridWindow:
             p.get("vacant"),
             p.get("points_floor"),
             p.get("points_ceiling"),
+            grid_strategy_role,
         )
         if self._header_compute_sig != sig:
             try:
@@ -2420,6 +2427,7 @@ class GridWindow:
                     config_path=cfg_path,
                     round_no=rnd,
                     board_snapshot=board_for_compute,
+                    strategy_role=grid_strategy_role,
                 )
                 self._last_compute_price = int(c_price)
                 self._last_compute_payload = c_det

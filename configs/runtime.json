@@ -205,5 +205,13 @@
       "440": 10000,
       "450": 25000
     }
+  },  "debug": {
+    "save_crops": false,
+    "save_ocr_text": false,
+    "print_ocr_snippet": true,
+    "save_round_debug": false,
+    "print_round_debug": false,
+    "gui_verbose": false,
+    "runs_dir": "runs"
   }
 }
