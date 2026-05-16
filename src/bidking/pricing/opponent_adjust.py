@@ -104,7 +104,7 @@ def _secret_auction_prev_round_rank_detail(
     if not isinstance(players, dict) or not players:
         return {"skip": "no_players"}
     ref_r = max(1, int(round_no) - 1)
-    self_uid, name_hint = board_snapshot_self_identity(config, board_snapshot)
+    self_uid, _ = board_snapshot_self_identity(config, board_snapshot)
     my_rank: int | None = None
     opp_ranks: list[int] = []
     for p_uid, pdata in players.items():
@@ -114,10 +114,6 @@ def _secret_auction_prev_round_rank_detail(
         if rk is None:
             continue
         is_self = bool(self_uid and str(p_uid) == self_uid)
-        if not is_self and name_hint:
-            pname = str(pdata.get("name") or "")
-            if name_hint in pname:
-                is_self = True
         if is_self:
             my_rank = int(rk)
         else:
@@ -222,7 +218,6 @@ def opponent_last_bid_default_from_snapshot(
         players,
         grid_round,
         self_user_uid=str(bs_cfg.get("self_user_uid") or ""),
-        self_name_substring=str(bs_cfg.get("self_name_substring") or ""),
         board_snapshot=board_snapshot,
     )
 
@@ -277,7 +272,7 @@ def _round3_protect_decision(
     if not isinstance(players, dict) or not players:
         detail["reasons"].append("missing_players")
         return detail
-    self_uid, self_name = board_snapshot_self_identity(config, board_snapshot)
+    self_uid, _ = board_snapshot_self_identity(config, board_snapshot)
     round2_prices: list[int] = []
     my_round2_price: int | None = None
     low_bids = 0
@@ -292,13 +287,7 @@ def _round3_protect_decision(
         round2_prices.append(p2i)
         if float(p2i) < abandon_threshold:
             low_bids += 1
-        is_self = False
-        if self_uid and str(p_uid) == self_uid:
-            is_self = True
-        else:
-            pname = str(pdata.get("name") or "")
-            if self_name and self_name in pname:
-                is_self = True
+        is_self = bool(self_uid and str(p_uid) == self_uid)
         if is_self:
             my_round2_price = p2i
 

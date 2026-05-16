@@ -24,6 +24,27 @@ from bidking.analysis.scan_inference import (
     vacant_early_unit_from_exclusions,
 )
 class BoardPricingTests(unittest.TestCase):
+    def setUp(self) -> None:
+        import os
+
+        from bidking.pricing._self_uid_inference import reset_self_uid_inference_state
+
+        reset_self_uid_inference_state()
+        self._prev_persist_disable = os.environ.get(
+            "BIDKING_DISABLE_SELF_UID_CONFIG_PERSIST"
+        )
+        os.environ["BIDKING_DISABLE_SELF_UID_CONFIG_PERSIST"] = "1"
+
+    def tearDown(self) -> None:
+        import os
+
+        if self._prev_persist_disable is None:
+            os.environ.pop("BIDKING_DISABLE_SELF_UID_CONFIG_PERSIST", None)
+        else:
+            os.environ["BIDKING_DISABLE_SELF_UID_CONFIG_PERSIST"] = (
+                self._prev_persist_disable
+            )
+
     def tearDown(self) -> None:
         set_map_quality_csv_override(None)
 
@@ -973,20 +994,10 @@ class BoardPricingTests(unittest.TestCase):
         detail = p.get("ahmad_points_detail")
         self.assertIsInstance(detail, dict)
         self.assertEqual(detail.get("ahmad_points"), 25000)
-    def test_ahmad_hero_resolve_self_by_name_substring(self) -> None:
-        """仅配 ``self_name_substring`` 且唯一匹配玩家名时，与 ``self_user_uid`` 一样可启用 Ahmad 主价。"""
-        gs = {
-            "uid": "u1",
-            "map_id": 2102,
-            "current_round": 5,
-            "players": {
-                "431695757047642": {"name": "YTZZZ", "hero_cid": 209},
-                "941456831344888": {"name": "AIR1314", "hero_cid": 204},
-            },
-            "items": {},
-            "displayed_event_uids": [],
-            "scan_history": [],
-        }
+
+    def test_ahmad_hero_resolve_self_by_cross_game_uid_inference(self) -> None:
+        """跨对局 UID 交集唯一时，无显式 ``self_user_uid`` 也可启用 Ahmad 主价。"""
+        shared = "941456831344888"
         raw = {
             "csv_quality_groups_avg_per_cell": {"q5": 1.0, "q5+q6": 1.0, "q6": 1.0},
             "event_stats": {
@@ -995,6 +1006,85 @@ class BoardPricingTests(unittest.TestCase):
                 "q5_grid_min": None,
                 "q6_grid_min": None,
             },
+        }
+        gs1 = {
+            "uid": "game_one",
+            "map_id": 2102,
+            "current_round": 5,
+            "players": {
+                shared: {"name": "me", "hero_cid": 204},
+                "431695757047642": {"name": "opp", "hero_cid": 209},
+            },
+            "items": {},
+            "displayed_event_uids": [],
+            "scan_history": [],
+        }
+        snap1 = {
+            "game_state": gs1,
+            "skill_logs": [],
+            "map_id": 2102,
+            "current_round": 5,
+            "raw_pricing": raw,
+        }
+        p1 = bp.build_snapshot_pricing_dict(
+            snap1,
+            snapshot_path_hint=None,
+            board_snapshot_config={"self_user_uid": ""},
+        )
+        self.assertFalse(p1.get("ahmad_pricing_active"))
+
+        gs2 = {
+            "uid": "game_two",
+            "map_id": 2102,
+            "current_round": 5,
+            "players": {
+                shared: {"name": "me", "hero_cid": 204},
+                "777777777777777": {"name": "newopp", "hero_cid": 209},
+            },
+            "items": {},
+            "displayed_event_uids": [],
+            "scan_history": [],
+        }
+        snap2 = {
+            "game_state": gs2,
+            "skill_logs": [],
+            "map_id": 2102,
+            "current_round": 5,
+            "raw_pricing": raw,
+        }
+        p2 = bp.build_snapshot_pricing_dict(
+            snap2,
+            snapshot_path_hint=None,
+            board_snapshot_config={"self_user_uid": ""},
+        )
+        self.assertTrue(p2.get("ahmad_pricing_active"))
+        self.assertEqual(p2.get("points"), p2.get("ahmad_points"))
+        inf = p2.get("self_uid_inference") or {}
+        self.assertEqual(inf.get("inferred_self_user_uid"), shared)
+
+    def test_configured_self_uid_in_players_uses_config_no_inference(self) -> None:
+        """配置 UID 在本局 players 中：走 configured_in_players，首局即可 Ahmad。"""
+        me = "358372071974712"
+        raw = {
+            "csv_quality_groups_avg_per_cell": {"q5": 1.0, "q5+q6": 1.0, "q6": 1.0},
+            "event_stats": {
+                "total_count": 20,
+                "q4_grid_min": 5,
+                "q5_grid_min": None,
+                "q6_grid_min": None,
+            },
+        }
+        gs = {
+            "uid": "g_one",
+            "map_id": 2102,
+            "current_round": 5,
+            "players": {
+                me: {"name": "a", "hero_cid": 204},
+                "999": {"name": "b", "hero_cid": 209},
+            },
+            "items": {},
+            "displayed_event_uids": [],
+            "scan_history": [],
         }
         snap = {
             "game_state": gs,
@@ -1006,18 +1096,17 @@ class BoardPricingTests(unittest.TestCase):
         p = bp.build_snapshot_pricing_dict(
             snap,
             snapshot_path_hint=None,
-            board_snapshot_config={
-                "self_user_uid": "",
-                "self_name_substring": "AIR1314",
-            },
+            board_snapshot_config={"self_user_uid": me},
         )
         self.assertTrue(p.get("ahmad_pricing_active"))
-        self.assertEqual(p.get("points"), p.get("ahmad_points"))
+        inf = p.get("self_uid_inference") or {}
+        self.assertEqual(inf.get("identity_mode"), "configured_in_players")
+        self.assertEqual(inf.get("resolved_self_user_uid"), me)
 
-    def test_self_name_substring_ambiguous_skips_match(self) -> None:
-        """两名玩家 ``name`` 均含同一子串时不靠名称推断，Ahmad 主价不启用。"""
+    def test_first_game_two_players_no_inference_ahmad_inactive(self) -> None:
+        """首局两玩家且无显式 UID：无法唯一推断己方，Ahmad 主价不启用。"""
         gs = {
-            "uid": "u1",
+            "uid": "u_only_one_game",
             "map_id": 2102,
             "current_round": 5,
             "players": {
@@ -1042,7 +1131,7 @@ class BoardPricingTests(unittest.TestCase):
         p = bp.build_snapshot_pricing_dict(
             snap,
             snapshot_path_hint=None,
-            board_snapshot_config={"self_name_substring": "_x"},
+            board_snapshot_config={"self_user_uid": ""},
         )
         self.assertFalse(p.get("ahmad_pricing_active"))
         self.assertTrue(bp.map_bundle_is_express_station_series(2101))
@@ -1228,6 +1317,86 @@ class BoardPricingTests(unittest.TestCase):
             p.get("est_orange"),
             int(round(t - kcw + float(vac + kg) * 111.0)),
         )
+
+
+class SelfUidInferencePersistTests(unittest.TestCase):
+    """单独验证推断 UID 写回 ``config.json`` overlay（不继承 BoardPricingTests 的禁用写盘）。"""
+
+    def setUp(self) -> None:
+        import os
+
+        from bidking.pricing._self_uid_inference import reset_self_uid_inference_state
+
+        reset_self_uid_inference_state()
+        self._prev = os.environ.get("BIDKING_DISABLE_SELF_UID_CONFIG_PERSIST")
+        os.environ.pop("BIDKING_DISABLE_SELF_UID_CONFIG_PERSIST", None)
+
+    def tearDown(self) -> None:
+        import os
+
+        from bidking.pricing._self_uid_inference import reset_self_uid_inference_state
+
+        reset_self_uid_inference_state()
+        if self._prev is None:
+            os.environ.pop("BIDKING_DISABLE_SELF_UID_CONFIG_PERSIST", None)
+        else:
+            os.environ["BIDKING_DISABLE_SELF_UID_CONFIG_PERSIST"] = self._prev
+
+    def test_inferred_uid_written_to_config_overlay(self) -> None:
+        import json
+        import os
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+
+        import bidking.config.paths as paths_mod
+
+        from bidking.analysis import _board_pricing as bp
+
+        if "BIDKING_SELF_USER_UID" in os.environ:
+            self.skipTest("skip when env forces uid")
+
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "config.json"
+            p.write_text(
+                json.dumps({"board_snapshot": {"enabled": True}}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            with patch.object(paths_mod, "config_overlay_path", return_value=p.resolve()):
+                uid = "501112223334455"
+                raw = {
+                    "csv_quality_groups_avg_per_cell": {
+                        "q5": 1.0,
+                        "q5+q6": 1.0,
+                        "q6": 1.0,
+                    },
+                    "event_stats": {"total_count": 20},
+                }
+                gs = {
+                    "uid": "solo",
+                    "map_id": 2102,
+                    "current_round": 2,
+                    "players": {uid: {"name": "solo", "hero_cid": 204}},
+                    "items": {},
+                    "displayed_event_uids": [],
+                    "scan_history": [],
+                }
+                snap = {
+                    "game_state": gs,
+                    "skill_logs": [],
+                    "map_id": 2102,
+                    "current_round": 2,
+                    "raw_pricing": raw,
+                }
+                bp.build_snapshot_pricing_dict(
+                    snap,
+                    board_snapshot_config={"self_user_uid": ""},
+                )
+                data = json.loads(p.read_text(encoding="utf-8"))
+                self.assertEqual(
+                    (data.get("board_snapshot") or {}).get("self_user_uid"),
+                    uid,
+                )
 
 
 if __name__ == "__main__":

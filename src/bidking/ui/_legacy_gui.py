@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """Bot 自动化总控 GUI（``BidKingApp``）。
 
-只保留启动 bot 必须的「选图 / 重复轮数 / 自动化脚本 / 道具回合 / 启动停止」
+只保留启动 bot 必须的「选图 / 局数（次数×循环）与循环间休息 / 自动化脚本 / 道具回合 / 启动停止」
 表单 + 运行日志。
 
 出价参数、棋盘快照（self_user_uid 等）与主配置 / 地图 JSON 编辑器已迁移到
 ``bidking.runner.viewer_main`` 启动页的「策略配置」标签页（``BotConfigPanel``）。
 bot 总控窗口本身**不再**编辑或写出这些字段，仅在点「开启」前从磁盘
-``configs/`` 读取已保存的值；若 ``board_snapshot.self_user_uid`` /
-``self_name_substring`` 都为空（且未通过环境变量提供），会提示用户先去
-grid_view 启动页的「策略配置」里填写。
+``configs/`` 读取已保存的值；若 ``board_snapshot.self_user_uid`` 为空，可依赖
+进程内跨对局 UID 推断（见 ``bidking.pricing._self_uid_inference``）。
 """
 from __future__ import annotations
 
@@ -41,6 +40,36 @@ BOT_RUNNER_LABEL_TO_KEY = {
     "通用角色（全角色）": "fresh_aisha_bot",
 }
 BOT_RUNNER_COMBO_VALUES = tuple(BOT_RUNNER_LABEL_TO_KEY.keys())
+
+
+def _parse_positive_int(text: object, *, default: int = 1) -> int:
+    s = str(text).strip()
+    if s.isdigit() and int(s) > 0:
+        return int(s)
+    return default
+
+
+def _parse_nonnegative_minutes(text: object, *, default: float = 1.0) -> float:
+    s = str(text).strip().replace(",", ".")
+    if not s:
+        return default
+    try:
+        v = float(s)
+    except ValueError:
+        return default
+    return max(0.0, v)
+
+
+def _format_minutes_for_entry(value: object) -> str:
+    try:
+        x = float(value)
+    except (TypeError, ValueError):
+        x = 1.0
+    if x < 0:
+        x = 0.0
+    if x == int(x):
+        return str(int(x))
+    return format(x, "g")
 
 
 def _bot_runner_label_from_config(cfg: dict) -> str:
@@ -85,10 +114,10 @@ class BidKingApp:
         self.root = root
         if isinstance(self.root, tk.Toplevel):
             self.root.title(f"竞拍之王助手 — Bot 总控 v{__version__}")
-            self.root.geometry("520x700")
+            self.root.geometry("640x720")
         else:
             self.root.title(f"竞拍之王助手 v{__version__}")
-            self.root.geometry("520x640")
+            self.root.geometry("640x660")
         self.root.minsize(300, 520)
 
         self.worker: threading.Thread | None = None
@@ -103,6 +132,8 @@ class BidKingApp:
 
         self.map_var = tk.StringVar()
         self.runs_var = tk.StringVar()
+        self.cycles_var = tk.StringVar()
+        self.rest_minutes_var = tk.StringVar()
         self.tool_round_vars: dict[int, tk.BooleanVar] = {}
         self.bot_runner_var = tk.StringVar(value=BOT_RUNNER_COMBO_VALUES[0])
 
@@ -158,7 +189,7 @@ class BidKingApp:
             wraplength=480,
         ).pack(anchor="w")
 
-        settings_box = ttk.LabelFrame(main, text="1. 选图与重复轮数", padding=10)
+        settings_box = ttk.LabelFrame(main, text="1. 选图与局数（次数×循环）", padding=10)
         settings_box.pack(fill="x", pady=(0, 8))
 
         ttk.Label(settings_box, text="地图").grid(row=0, column=0, sticky="w", pady=4)
@@ -169,10 +200,22 @@ class BidKingApp:
         self.map_combo.grid(row=0, column=1, sticky="w", pady=4)
         self.map_combo.bind("<<ComboboxSelected>>", self._on_map_combo_selected)
 
-        ttk.Label(settings_box, text="重复次数").grid(row=1, column=0, sticky="w", pady=4)
-        ttk.Entry(settings_box, textvariable=self.runs_var, width=10).grid(
-            row=1, column=1, sticky="w", pady=4,
+        run_row = ttk.Frame(settings_box)
+        run_row.grid(row=1, column=0, columnspan=3, sticky="w", pady=4)
+        ttk.Label(run_row, text="次数").pack(side="left")
+        ttk.Entry(run_row, textvariable=self.runs_var, width=6).pack(side="left", padx=(4, 0))
+        ttk.Label(run_row, text="×").pack(side="left", padx=(6, 6))
+        ttk.Label(run_row, text="循环").pack(side="left")
+        ttk.Entry(run_row, textvariable=self.cycles_var, width=5).pack(side="left", padx=(4, 0))
+        ttk.Label(run_row, text="休息").pack(side="left", padx=(10, 0))
+        ttk.Entry(run_row, textvariable=self.rest_minutes_var, width=6).pack(side="left", padx=(4, 0))
+        ttk.Label(run_row, text="分钟").pack(side="left", padx=(4, 0))
+        self.executed_runs_label = ttk.Label(
+            run_row,
+            text="（已执行 0 次）",
+            foreground="#555555",
         )
+        self.executed_runs_label.pack(side="left", padx=(14, 0))
 
         ttk.Label(settings_box, text="自动化脚本").grid(row=2, column=0, sticky="w", pady=4)
         self.bot_runner_combo = ttk.Combobox(
@@ -246,38 +289,16 @@ class BidKingApp:
         name = item.get("name", map_key)
         self.map_var.set(f"{map_key}. {name}" if map_key else "")
         self.runs_var.set(str(auto.get("selected_runs") or auto.get("default_runs", 1)))
+        self.cycles_var.set(str(_parse_positive_int(auto.get("run_cycles", 1), default=1)))
+        self.rest_minutes_var.set(_format_minutes_for_entry(auto.get("cycle_rest_minutes", 1.0)))
         tool_rounds = {int(r) for r in auto.get("tool_rounds", [1, 2])}
         for round_no, var in self.tool_round_vars.items():
             var.set(round_no in tool_rounds)
         self.bot_runner_var.set(_bot_runner_label_from_config(self.config))
 
     def _validate_disk_board_snapshot(self) -> None:
-        """检查磁盘上的 ``board_snapshot`` 至少能识别己方。
-
-        ``self_user_uid`` 或 ``self_name_substring`` 必须有一个非空（或通过
-        ``BIDKING_SELF_USER_UID`` / ``BIDKING_SELF_NAME_SUBSTRING`` 环境变量
-        提供）；都没有则拒绝启动并指向 grid_view 的「策略配置」标签页。
-        """
+        """检查磁盘上的 ``board_snapshot`` 路径等；己方 UID 可留空以使用跨对局推断。"""
         self.reload_config_sources()
-        bs = self.config.get("board_snapshot") if isinstance(
-            self.config.get("board_snapshot"), dict,
-        ) else {}
-        uid = str(
-            bs.get("self_user_uid")
-            or os.environ.get("BIDKING_SELF_USER_UID")
-            or "",
-        ).strip()
-        name_sub = str(
-            bs.get("self_name_substring")
-            or os.environ.get("BIDKING_SELF_NAME_SUBSTRING")
-            or "",
-        ).strip()
-        if not uid and not name_sub:
-            raise ValueError(
-                "未配置 board_snapshot.self_user_uid 或 self_name_substring。\n"
-                "请在 grid_view 启动页的「策略配置」标签页里填写「己方 UID」"
-                "或「名称关键字」并保存后再启动。",
-            )
 
     def apply_form_to_config(self) -> None:
         """把「自动化」页的表单写入 overlay 并落盘。
@@ -287,11 +308,9 @@ class BidKingApp:
         """
         self._validate_disk_board_snapshot()
 
-        runs_value = (
-            int(self.runs_var.get())
-            if self.runs_var.get().isdigit() and int(self.runs_var.get()) > 0
-            else 1
-        )
+        runs_value = _parse_positive_int(self.runs_var.get(), default=1)
+        cycles_value = _parse_positive_int(self.cycles_var.get(), default=1)
+        rest_minutes_value = _parse_nonnegative_minutes(self.rest_minutes_var.get(), default=1.0)
         selected_map = self.selected_map_key() or self.effective_map_key()
         if not selected_map:
             selected_map = resolve_automation_map_config_key(
@@ -318,6 +337,8 @@ class BidKingApp:
         self.config["automation"]["selected_mode"] = selected_mode
         self.config["automation"]["selected_map"] = selected_map
         self.config["automation"]["selected_runs"] = runs_value
+        self.config["automation"]["run_cycles"] = cycles_value
+        self.config["automation"]["cycle_rest_minutes"] = rest_minutes_value
         self.config["automation"]["tool_rounds"] = selected_tool_rounds
         self.config.setdefault("advisor", {})["role"] = advisor_role
 
@@ -326,6 +347,8 @@ class BidKingApp:
         self.overlay["automation"]["selected_mode"] = selected_mode
         self.overlay["automation"]["selected_map"] = selected_map
         self.overlay["automation"]["selected_runs"] = runs_value
+        self.overlay["automation"]["run_cycles"] = cycles_value
+        self.overlay["automation"]["cycle_rest_minutes"] = rest_minutes_value
         self.overlay["automation"]["tool_rounds"] = selected_tool_rounds
         self.overlay.setdefault("advisor", {})["role"] = advisor_role
 
@@ -344,6 +367,20 @@ class BidKingApp:
 
         self.root.after(0, _write)
 
+    def _run_progress_sink(self, completed: int, _max_runs: int) -> None:
+        """由 bot 线程调用，在主线程刷新「已执行」标签。"""
+
+        def _apply() -> None:
+            try:
+                self.executed_runs_label.configure(text=f"（已执行 {completed} 次）")
+            except tk.TclError:
+                pass
+
+        try:
+            self.root.after(0, _apply)
+        except tk.TclError:
+            pass
+
     def start_bot(self) -> None:
         if self.worker and self.worker.is_alive():
             messagebox.showinfo("提示", "脚本已经在运行中")
@@ -359,6 +396,12 @@ class BidKingApp:
         self.start_btn.state(["disabled"])
         self.stop_btn.state(["!disabled"])
         self.append_log("GUI start: bot thread launching")
+        try:
+            self.executed_runs_label.configure(text="（已执行 0 次）")
+        except tk.TclError:
+            pass
+
+        sink = self._run_progress_sink
 
         def runner():
             try:
@@ -368,9 +411,9 @@ class BidKingApp:
                 if rk == "fresh_aisha_bot":
                     from ..interaction._legacy_bot import run_aisha_loop
 
-                    run_aisha_loop(CONFIG_OVERLAY_PATH)
+                    run_aisha_loop(CONFIG_OVERLAY_PATH, progress_sink=sink)
                 else:
-                    bot.run_loop(CONFIG_OVERLAY_PATH)
+                    bot.run_loop(CONFIG_OVERLAY_PATH, progress_sink=sink)
             except bot.StopRequested:
                 self.append_log("GUI stop: stopped")
             except Exception:  # noqa: BLE001
@@ -387,6 +430,10 @@ class BidKingApp:
         self.append_log("GUI stop: requested")
 
     def on_worker_done(self) -> None:
+        try:
+            self.executed_runs_label.configure(text="（已执行 0 次）")
+        except tk.TclError:
+            pass
         self.start_btn.state(["!disabled"])
         self.stop_btn.state(["disabled"])
 

@@ -62,16 +62,48 @@ class ConfigTests(unittest.TestCase):
         )
 
     def test_board_snapshot_env_overrides(self) -> None:
-        cfg: dict = {"board_snapshot": {"self_user_uid": "old", "self_name_substring": "nm"}}
+        cfg: dict = {"board_snapshot": {"self_user_uid": "old"}}
         with patch.dict(
             os.environ,
-            {"BIDKING_SELF_USER_UID": "from_env", "BIDKING_SELF_NAME_SUBSTRING": ""},
+            {"BIDKING_SELF_USER_UID": "from_env"},
             clear=False,
         ):
             apply_board_snapshot_env_overrides(cfg)
         bs = cfg["board_snapshot"]
         self.assertEqual(bs["self_user_uid"], "from_env")
-        self.assertEqual(bs["self_name_substring"], "")
+
+    def test_refresh_poll_loop_locals_run_schedule(self) -> None:
+        from bidking.interaction._legacy_bot import refresh_poll_loop_locals
+
+        cfg = {
+            "automation": {
+                "selected_runs": 3,
+                "run_cycles": 4,
+                "cycle_rest_minutes": 0.5,
+                "maps": {},
+            },
+            "timing": {},
+            "safety": {},
+        }
+        lv = refresh_poll_loop_locals(cfg)
+        self.assertEqual(lv["runs_per_cycle"], 3)
+        self.assertEqual(lv["run_cycles"], 4)
+        self.assertEqual(lv["max_runs"], 12)
+        self.assertEqual(lv["cycle_rest_minutes"], 0.5)
+
+    def test_refresh_poll_loop_locals_schedule_defaults(self) -> None:
+        from bidking.interaction._legacy_bot import refresh_poll_loop_locals
+
+        cfg = {
+            "automation": {"selected_runs": 5, "maps": {}},
+            "timing": {},
+            "safety": {},
+        }
+        lv = refresh_poll_loop_locals(cfg)
+        self.assertEqual(lv["runs_per_cycle"], 5)
+        self.assertEqual(lv["run_cycles"], 1)
+        self.assertEqual(lv["max_runs"], 5)
+        self.assertEqual(lv["cycle_rest_minutes"], 1.0)
 
 
 if __name__ == "__main__":

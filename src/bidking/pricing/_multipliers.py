@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .snapshot_players import board_snapshot_self_identity
+
 _ROUND5_SKIP_RATIO_OPPONENT_HERO_CIDS = frozenset({103, 107})
 
 ROUND_RULES = {
@@ -27,9 +29,7 @@ def _opponents_have_hero_cids(
     config: dict[str, Any],
     hero_cids: frozenset[int],
 ) -> bool:
-    bs_cfg = config.get("board_snapshot") or {}
-    self_uid = str(bs_cfg.get("self_user_uid") or "").strip()
-    name_hint = str(bs_cfg.get("self_name_substring") or "").strip()
+    self_uid, _ = board_snapshot_self_identity(config, board_snapshot)
     players = (board_snapshot.get("game_state") or {}).get("players") or {}
     if not isinstance(players, dict):
         return False
@@ -37,9 +37,6 @@ def _opponents_have_hero_cids(
         if not isinstance(pdata, dict):
             continue
         if self_uid and str(p_uid) == self_uid:
-            continue
-        pname = str(pdata.get("name") or "")
-        if name_hint and name_hint in pname:
             continue
         try:
             hc = int(pdata.get("hero_cid") or 0)
