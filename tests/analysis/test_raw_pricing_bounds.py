@@ -22,10 +22,7 @@ from bidking.analysis.raw_pricing import (
     event_stats_q12_q3_q4_grids_all_known,
 )
 from bidking.parsing.constants import ITEM_SKILL_DESC, ITEM_SKILL_EVENT_STATS
-from bidking.parsing.skill_bindings import (
-    MAP_SKILL_RANDOM3_AVG_PRICE,
-    MAP_SKILL_TOTAL_GOLD_COUNT,
-)
+from bidking.parsing.skill_bindings import MAP_SKILL_RANDOM3_AVG_PRICE
 
 
 class RawPricingBoundsTests(unittest.TestCase):
@@ -142,7 +139,7 @@ class RawPricingBoundsTests(unittest.TestCase):
             {
                 "game_data": {
                     "MapSkillLog": [
-                        {"SkillCid": MAP_SKILL_TOTAL_GOLD_COUNT, "HitItemIndex": 0},
+                        {"SkillCid": 200019, "HitItemIndex": 0},
                     ]
                 }
             }
@@ -155,7 +152,7 @@ class RawPricingBoundsTests(unittest.TestCase):
             {
                 "game_data": {
                     "MapSkillLog": [
-                        {"SkillCid": MAP_SKILL_TOTAL_GOLD_COUNT, "HitItemIndex": 2},
+                        {"SkillCid": 200019, "HitItemIndex": 2},
                     ]
                 }
             }
