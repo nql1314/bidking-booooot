@@ -10,12 +10,13 @@
 
 from __future__ import annotations
 
+import ast
 import csv
 from typing import Dict, List, Tuple
 
 from .skill_export_generated import SKILL_EXPORT_BY_ID
 
-# 与 :data:`bidking.parsing.constants.ITEM_TOOLS` 首元一致（避免 constants ↔ skill_bindings 循环导入）
+# ItemCid → 日志合并用规范 SkillCid（鉴影等）；与 ``ITEM_TOOLS`` 首元一致，见文件末尾由表生成
 _ITEM_SKILL_CANONICAL_SKILL_CID: Dict[int, int] = {
     100151: 2001,
     100152: 2002,
@@ -27,6 +28,7 @@ _ITEM_SKILL_CANONICAL_SKILL_CID: Dict[int, int] = {
     100158: 2008,
     100159: 2009,
     100160: 2010,
+    100174: 801,
 }
 
 Tuple3I = Tuple[str, int, str]
@@ -67,17 +69,14 @@ _RAW_HERO_SKILL_FLOAT: Tuple[Tuple3F, ...] = (("q3_grid_avg", 1002043, "AllHitIt
 
 # ---------------------------------------------------------------------------
 # 道具工具：技能行上以 SkillCid 直读（与 ItemCid 直读并存，见 skill_event_stats 写入顺序）
-# _skill_export_part_item_hidden_cell_scan / hit_count_scan
+# _skill_export_part_item_hidden_cell_scan / hit_count_scan 默认不需要设置 除非遇到特殊的手动填
 # ---------------------------------------------------------------------------
 
 _RAW_ITEM_TOOL_SKILL_ROW_INT: Tuple[Tuple3I, ...] = (
-    ("q12_grid_count", 201, "TotalHitBoxIndex"),
-    ("q3_grid_count", 202, "TotalHitBoxIndex"),
-    ("q2_count", 401, "HitItemIndex"),
-    ("q3_count", 402, "HitItemIndex"),
 )
 
-_RAW_ITEM_TOOL_SKILL_ROW_FLOAT: Tuple[Tuple3F, ...] = (("q12_grid_avg", 301, "AllHitItemAvgBoxIndex"),)
+_RAW_ITEM_TOOL_SKILL_ROW_FLOAT: Tuple[Tuple3F, ...] = (
+)
 
 # ---------------------------------------------------------------------------
 # 道具工具：ItemSkillLog 以 ItemCid 直读 — _skill_export_part_item_* 并集
@@ -104,7 +103,14 @@ _RAW_ITEM_TOOL_ITEM_INT: Tuple[Tuple3I, ...] = (
     ("q6_price_total", 100126, "HitItemTotalPrice"),
 )
 
-_RAW_ITEM_TOOL_ITEM_FLOAT: Tuple[Tuple3F, ...] = ()
+_RAW_ITEM_TOOL_ITEM_FLOAT: Tuple[Tuple3F, ...] = (
+    ("total_grid_avg", 100109, "AllHitItemAvgBoxIndex"),
+    ("q12_grid_avg", 100110, "AllHitItemAvgBoxIndex"),
+    ("q3_grid_avg", 100111, "AllHitItemAvgBoxIndex"),
+    ("q4_grid_avg", 100112, "AllHitItemAvgBoxIndex"),
+    ("q5_grid_avg", 100113, "AllHitItemAvgBoxIndex"),
+    ("q6_grid_avg", 100114, "AllHitItemAvgBoxIndex"),
+)
 
 # ---------------------------------------------------------------------------
 # 汇总：对外常量（顺序为 地图 int → 英雄 int → 道具技能行 int，与旧合并顺序一致）
@@ -252,12 +258,12 @@ ITEM_SKILL_EVENT_STATS: Dict[int, Tuple[str, ...]] = {
     100106: ("q4_grid_count",),
     100107: ("q5_grid_count",),
     100108: ("q6_grid_count",),
-    100109: (),
-    100110: (),
-    100111: (),
-    100112: (),
-    100113: (),
-    100114: (),
+    100109: ("total_grid_avg",),
+    100110: ("q12_grid_avg",),
+    100111: ("q3_grid_avg",),
+    100112: ("q4_grid_avg",),
+    100113: ("q5_grid_avg",),
+    100114: ("q6_grid_avg",),
     100115: ("total_count",),
     100116: ("q2_count",),
     100117: ("q3_count",),
@@ -309,6 +315,44 @@ ITEM_SKILL_EVENT_STATS: Dict[int, Tuple[str, ...]] = {
     100173: (),
     100174: (),
 }
+
+
+def _first_category_tag_from_skill_export(skill_id: int) -> int | None:
+    """从技能表 ``param_09``（如 ``'[101]'``）取首个类别 tag，供鉴影负向 scan。"""
+    row = SKILL_EXPORT_BY_ID.get(int(skill_id))
+    if row is None:
+        return None
+    raw = (row.param_09 or "").strip()
+    if not raw:
+        return None
+    try:
+        val = ast.literal_eval(raw)
+    except (ValueError, SyntaxError):
+        return None
+    if isinstance(val, (list, tuple)) and val:
+        try:
+            return int(val[0])
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _build_item_tools_for_category_scan() -> Dict[int, Tuple[int, str, int]]:
+    """ItemCid → (SkillCid, 中文名, 类别 tag)；与 :mod:`.processors` 负向 ``record_scan('category', ...)`` 对齐。"""
+    out: Dict[int, Tuple[int, str, int]] = {}
+    for item_cid, skill_cid in _ITEM_SKILL_CANONICAL_SKILL_CID.items():
+        tag = _first_category_tag_from_skill_export(skill_cid)
+        if tag is None:
+            continue
+        name_zh = ITEM_SKILL_DESC.get(int(item_cid), "")
+        out[int(item_cid)] = (int(skill_cid), name_zh, int(tag))
+    return out
+
+
+#: 鉴影类道具（仅含在 ``_ITEM_SKILL_CANONICAL_SKILL_CID`` 且技能表 ``param_09`` 可解析出 tag 的项）
+ITEM_TOOLS: Dict[int, Tuple[int, str, int]] = _build_item_tools_for_category_scan()
+#: ``SkillCid`` → 揭示的类别 tag（由 ``ITEM_TOOLS`` 反向索引）
+SKILL_TO_CATEGORY: Dict[int, int] = {t[0]: t[2] for t in ITEM_TOOLS.values()}
 
 MAP_SKILL_RANDOM3_AVG_PRICE: int = 200031
 MAP_SKILL_RANDOM6_AVG_PRICE: int = 200032
