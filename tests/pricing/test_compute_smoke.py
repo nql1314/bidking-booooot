@@ -121,6 +121,42 @@ class TestPricingComputeSmoke(unittest.TestCase):
         self.assertEqual(det.get("role"), "universal")
         self.assertGreater(p, 1000)
 
+    def test_strategy_role_override_uses_aisha_despite_ahmad_premium(self) -> None:
+        """显式 strategy_role=aisha 时基底走 points，不受 automation 里 ahmad_premium 影响。"""
+        cfg: dict = {
+            "board_snapshot": {"enabled": False},
+            "pricing": {"fallback_bid_price": 11111},
+            "automation": {"selected_mode": "ahmad_premium"},
+        }
+        snap = {
+            "schema_version": 2,
+            "game_state": {"players": {}},
+            "pricing": {
+                "total": 1000.0,
+                "points": 50000,
+                "points_floor": 40000,
+                "points_ceiling": 90000,
+                "vacant": 8,
+                "ahmad_pricing_active": False,
+                "ahmad_points": 100,
+            },
+        }
+        p, det = compute_price(
+            cfg,
+            config_path=Path(__file__).resolve(),
+            round_no=4,
+            board_snapshot=snap,
+            price_config={},
+            strategy_role="aisha",
+        )
+        self.assertFalse(det.get("fallback"))
+        self.assertEqual(det.get("role"), "aisha")
+        self.assertEqual(
+            (det.get("board_snapshot_bid") or {}).get("bid_points_source"),
+            "snapshot_pricing.points",
+        )
+        self.assertGreater(p, 1000)
+
 
 if __name__ == "__main__":
     unittest.main()
