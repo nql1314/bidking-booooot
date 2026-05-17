@@ -92,13 +92,6 @@ def infer_vacant_has_red_from_opponent_history(
         "current_round": int(current_round),
         "points_floor_ref": int(points_floor),
     }
-    red_items_all = _count_quality_items_all(board_snapshot, 6)
-    detail["red_quality_item_count_on_board"] = red_items_all
-    if red_items_all > 0:
-        detail["decision_rule"] = "existing_red_quality_in_items_assume_no_red_in_vacant"
-        detail["has_red_inferred"] = False
-        return False, detail
-
     vac = int(vacant_used)
     if vac <= 4:
         detail["decision_rule"] = "vac_le_4_ignore_red"

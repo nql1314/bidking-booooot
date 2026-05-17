@@ -1,6 +1,6 @@
 # Release Notes（相对 Git 标签 `v1.18`）
 
-本文对比仓库标签 **`v1.18`** 与当前主线，侧重**用户可见功能**与**配置/部署**，不涉及实现与源码细节。
+本文对比仓库标签 `**v1.18**` 与当前主线，侧重**用户可见功能**与**配置/部署**，不涉及实现与源码细节。
 
 ---
 
@@ -14,7 +14,7 @@
 
 ### 2. 己方身份与隐秘拍卖相关逻辑
 
-- **`self_name_substring`（显示名子串）已废弃**：对手价、名次、保护价等逻辑**仅以 UID 识别己方**，不再用名称子串匹配，避免改名或显示名不一致导致误判。
+- `**self_name_substring`（显示名子串）已废弃**：对手价、名次、保护价等逻辑**仅以 UID 识别己方**，不再用名称子串匹配，避免改名或显示名不一致导致误判。
 - **己方 UID 可跨局推断**：在多局快照中维护候选 UID，与配置中的 UID 共同解析；在条件满足时可将推断结果写回 `configs/config.json` 中的 `board_snapshot.self_user_uid`（可通过环境变量关闭写盘，见下文配置说明）。
 - **环境变量仍推荐用于敏感信息**：`BIDKING_SELF_USER_UID` 等可覆盖/参与解析，避免把账号写进仓库或共享配置。
 
@@ -35,7 +35,7 @@
 
 ### 5. Windows 打包脚本（给发布者）
 
-- **`scripts/build_windows.ps1`**：版本号参数可留空，脚本会从 `bidking.__version__` 自动推导标签，减少手工改版本字符串的步骤。
+- `**scripts/build_windows.ps1`**：版本号参数可留空，脚本会从 `bidking.__version__` 自动推导标签，减少手工改版本字符串的步骤。
 
 ---
 
@@ -43,51 +43,57 @@
 
 ### 合并与加载关系
 
-- 仍为 **`configs/runtime.json` 基底** + **`configs/config.json` 深合并** + **按地图 `configs/pricing.maps/<档>.json`** 的层次；本版主要变化在**键位位置**与**新增 automation 字段**。
+- 仍为 `**configs/runtime.json` 基底** + `**configs/config.json` 深合并** + **按地图 `configs/pricing.maps/<档>.json`** 的层次；本版主要变化在**键位位置**与**新增 automation 字段**。
 
 ### `configs/config.json`（本机覆盖）变化要点
 
-| 主题 | 说明 |
-|------|------|
-| **`debug` 段** | 已从本文件**迁出**，请到 **`configs/runtime.json`** 的 `debug` 中维护。 |
-| **`board_snapshot`** | **`self_name_substring` 废弃**；以 **`self_user_uid`**（及推断/环境变量）为准。保存「快照配置」时可能会**清理** overlay 中的 `self_name_substring`。 |
-| **`automation`** | 新增 **`run_cycles`**（循环遍数）、**`cycle_rest_minutes`**（循环间休息分钟）；示例中的 **`selected_runs`** 等仅为示例值，部署时请按自己账号修改。 |
-| **`warehouse_auto_sort`** | 覆盖层里可只保留 **`enabled`**；具体等待秒数以 **`runtime.json`** 为准。 |
-| **`timing`** | 示例中 **`round_detect_wait_seconds`**、**`round1_extra_wait_seconds`** 等与 v1.18 不同，请按本机实测调整。 |
+
+| 主题                        | 说明                                                                                                                  |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `**debug` 段**             | 已从本文件**迁出**，请到 `**configs/runtime.json`** 的 `debug` 中维护。                                                            |
+| `**board_snapshot**`      | `**self_name_substring` 废弃**；以 `**self_user_uid`**（及推断/环境变量）为准。保存「快照配置」时可能会**清理** overlay 中的 `self_name_substring`。 |
+| `**automation`**          | 新增 `**run_cycles**`（循环遍数）、`**cycle_rest_minutes**`（循环间休息分钟）；示例中的 `**selected_runs**` 等仅为示例值，部署时请按自己账号修改。            |
+| `**warehouse_auto_sort**` | 覆盖层里可只保留 `**enabled**`；具体等待秒数以 `**runtime.json**` 为准。                                                               |
+| `**timing**`              | 示例中 `**round_detect_wait_seconds**`、`**round1_extra_wait_seconds**` 等与 v1.18 不同，请按本机实测调整。                           |
+
 
 ### `configs/runtime.json`
 
-| 主题 | 说明 |
-|------|------|
-| **`debug`** | 新增/迁入整块 **`debug`**（截图、OCR 片段、回合调试、GUI 冗长日志、`runs_dir` 等）。 |
-| **`clicks`** | 出价按钮、确认按钮等**屏幕坐标**有更新；分辨率或 UI 改版后请用外部校准工具重新标定。 |
-| **`automation.warehouse_auto_sort`** | 进入仓库与点击整理后的等待秒数默认改为更短（示例为 3s），可按稳定性调大。 |
+
+| 主题                                   | 说明                                                         |
+| ------------------------------------ | ---------------------------------------------------------- |
+| `**debug**`                          | 新增/迁入整块 `**debug**`（截图、OCR 片段、回合调试、GUI 冗长日志、`runs_dir` 等）。 |
+| `**clicks**`                         | 出价按钮、确认按钮等**屏幕坐标**有更新；分辨率或 UI 改版后请用外部校准工具重新标定。             |
+| `**automation.warehouse_auto_sort`** | 进入仓库与点击整理后的等待秒数默认改为更短（示例为 3s），可按稳定性调大。                     |
+
 
 ### 地图价与示例数值
 
-- 示例 **`configs/pricing.maps/210.json`** 中 **`fallback_bid_price`** 有调整；**仅为示例**，上线请按自己的经济模型核对。
+- 示例 `**configs/pricing.maps/210.json**` 中 `**fallback_bid_price**` 有调整；**仅为示例**，上线请按自己的经济模型核对。
 
 ### 数据文件
 
-- **`data/Skill_export.csv`**：随版本更新，用于与当前游戏技能表对齐。
-- **`data/skill_parsing_report.csv`**：可选生成的「技能 ↔ 解析键」对照产物，便于排查漏绑、多绑。
+- `**data/Skill_export.csv`**：随版本更新，用于与当前游戏技能表对齐。
+- `**data/skill_parsing_report.csv**`：可选生成的「技能 ↔ 解析键」对照产物，便于排查漏绑、多绑。
 
 ### 环境变量
 
-| 变量 | 作用（用户视角） |
-|------|------------------|
-| **`BIDKING_SELF_USER_UID`** | 显式提供己方 UID，参与解析与定价。 |
-| **`BIDKING_DISABLE_SELF_UID_CONFIG_PERSIST`** | 需要关闭「推断 UID 写回 `config.json`」时使用（例如自动化/CI）。 |
+
+| 变量                                            | 作用（用户视角）                                    |
+| --------------------------------------------- | ------------------------------------------- |
+| `**BIDKING_SELF_USER_UID**`                   | 显式提供己方 UID，参与解析与定价。                         |
+| `**BIDKING_DISABLE_SELF_UID_CONFIG_PERSIST**` | 需要关闭「推断 UID 写回 `config.json`」时使用（例如自动化/CI）。 |
+
 
 ---
 
 ## 三、升级与迁移检查清单
 
-1. 将本地 **`debug`** 从 `config.json` 挪到 **`runtime.json`**（若曾在 overlay 里维护过 `debug`）。
-2. 若曾依赖 **`self_name_substring`**：改为保证 **`self_user_uid`** 正确，或依赖推断 + **`BIDKING_SELF_USER_UID`**。
-3. 重新核对 **`runtime.json`** 里出价相关 **点击坐标** 与 **仓库整理等待**。
-4. 长挂机用户：按需设置 **`run_cycles` / `cycle_rest_minutes`**。
-5. 合并上游 **`Skill_export.csv`** 后，若维护自定义技能表，建议按文档流程重新生成/校验绑定与报表。
+1. 将本地 `**debug**` 从 `config.json` 挪到 `**runtime.json**`（若曾在 overlay 里维护过 `debug`）。
+2. 若曾依赖 `**self_name_substring**`：改为保证 `**self_user_uid**` 正确，或依赖推断 + `**BIDKING_SELF_USER_UID**`。
+3. 重新核对 `**runtime.json**` 里出价相关 **点击坐标** 与 **仓库整理等待**。
+4. 长挂机用户：按需设置 `**run_cycles` / `cycle_rest_minutes`**。
+5. 合并上游 `**Skill_export.csv**` 后，若维护自定义技能表，建议按文档流程重新生成/校验绑定与报表。
 
 ---
 

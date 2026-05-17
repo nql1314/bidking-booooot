@@ -844,6 +844,98 @@ class BoardPricingTests(unittest.TestCase):
         self.assertIn("est_red", p)
         self.assertEqual(p["vacant"], 3)
 
+    def test_generic_points_track_red_estimate_when_q5_grid_count_known(self) -> None:
+        """低档总格齐备且仅公开 ``q5_grid_count`` 时，空置主价按红格单价（余量必为红）。"""
+        gs = {
+            "uid": "u1",
+            "map_id": 0,
+            "current_round": 5,
+            "players": {},
+            "items": {
+                "a": {
+                    "uid": "a",
+                    "box_id": 3,
+                    "box_id_confirmed": True,
+                    "shape": 11,
+                    "quality": 1,
+                    "categories": [],
+                    "item_cid": None,
+                    "price": None,
+                    "manual_confirm_item_id": None,
+                    "excluded_categories": [],
+                    "excluded_qualities": [],
+                }
+            },
+            "displayed_event_uids": [],
+            "scan_history": [],
+        }
+        snap = {"game_state": gs, "skill_logs": [], "map_id": 0, "current_round": 5}
+        csv = {
+            "q4": 10.0,
+            "q5": 1000.0,
+            "q6": 100.0,
+            "q5+q6": 550.0,
+            "all": 1.0,
+        }
+        ev = {
+            "q12_grid_count": 1,
+            "q3_grid_count": 1,
+            "q4_grid_count": 1,
+            "q5_grid_count": 10,
+        }
+        raw = {"csv_quality_groups_avg_per_cell": csv, "event_stats": ev}
+        p = bp.build_snapshot_pricing_dict({**snap, "raw_pricing": raw}, snapshot_path_hint=None)
+        self.assertFalse(p.get("ahmad_pricing_active"))
+        self.assertEqual(p.get("points"), p.get("est_red"))
+        self.assertEqual(p.get("points_floor"), p.get("est_red"))
+        self.assertEqual(p.get("points_ceiling"), p.get("est_red"))
+
+    def test_generic_points_track_orange_when_q6_grid_count_known_only(self) -> None:
+        """低档总格齐备且仅公开 ``q6_grid_count`` 时，主价三字段均按金单价（余量必为金）。"""
+        gs = {
+            "uid": "u1",
+            "map_id": 0,
+            "current_round": 5,
+            "players": {},
+            "items": {
+                "a": {
+                    "uid": "a",
+                    "box_id": 3,
+                    "box_id_confirmed": True,
+                    "shape": 11,
+                    "quality": 1,
+                    "categories": [],
+                    "item_cid": None,
+                    "price": None,
+                    "manual_confirm_item_id": None,
+                    "excluded_categories": [],
+                    "excluded_qualities": [],
+                }
+            },
+            "displayed_event_uids": [],
+            "scan_history": [],
+        }
+        snap = {"game_state": gs, "skill_logs": [], "map_id": 0, "current_round": 5}
+        csv = {
+            "q4": 10.0,
+            "q5": 1000.0,
+            "q6": 100.0,
+            "q5+q6": 550.0,
+            "all": 1.0,
+        }
+        ev = {
+            "q12_grid_count": 1,
+            "q3_grid_count": 1,
+            "q4_grid_count": 1,
+            "q6_grid_count": 8,
+        }
+        raw = {"csv_quality_groups_avg_per_cell": csv, "event_stats": ev}
+        p = bp.build_snapshot_pricing_dict({**snap, "raw_pricing": raw}, snapshot_path_hint=None)
+        self.assertFalse(p.get("ahmad_pricing_active"))
+        self.assertEqual(p.get("points"), p.get("est_orange"))
+        self.assertEqual(p.get("points_floor"), p.get("est_orange"))
+        self.assertEqual(p.get("points_ceiling"), p.get("est_orange"))
+
     def test_tier_grid_min_adjusts_early_points(self) -> None:
         """``q*_grid_min`` 有值时：相对无 ``grid_min`` 的基准，先按档加价并减少空置乘数项格数。"""
         gs = {
