@@ -23,6 +23,10 @@ UID 推断（``inferred_self_user_uid``，见 :mod:`bidking.pricing._self_uid_in
 对 ``max(0, 最少格 - 已确认该档占位格)`` 按 CSV 单档 ``q4``/``q5``/``q6`` 格均价计入总价，
 并对空置单价项使用扣减后的有效空置格数（``pricing.vacant`` 仍为几何/有效空置原值）。
 
+当 ``event_stats`` 已给出明确的 ``q4_grid_count``（紫档总格已由公共信息划定）时，扫描推断的
+早单价可能品质集合中不再保留 q4，改用去掉 q4 后的 CSV 组合键（如 ``q5+q6``）查格均价，
+避免剩余空格再乘含紫档权重的混合单价。
+
 已知轮廓且品质未知、CSV 为多候选（权重价）的物品（含仅日志未确认的锚格）：几何占位格在边际上视同空置，参与 ``空置格 × 空置单价``；
 但 ``total`` / ``compute_items_total`` 已含该件权重价，故在 ``points`` / ``est_*`` 基底中扣除对应权重价，避免重复计价。
 """
@@ -120,6 +124,47 @@ def _event_stat_grid_min_optional(st: Any, key: str) -> Optional[int]:
     except (TypeError, ValueError):
         return None
     return n if n >= 0 else None
+
+
+def _event_stat_q4_grid_count_optional(st: Any) -> Optional[int]:
+    """``event_stats`` 中 ``q4_grid_count``：有值且非负时返回 int，否则视为紫档总格未公开。"""
+    if not isinstance(st, dict):
+        return None
+    v = st.get("q4_grid_count")
+    if v is None:
+        return None
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        return None
+    return n if n >= 0 else None
+
+
+def _vacant_early_unit_excluding_q4_when_q4_total_known(
+    *,
+    board_snapshot: Dict[str, Any],
+    csv_cells_for_est: Dict[str, float],
+    event_stats: Any,
+) -> Tuple[int, str, frozenset[int]]:
+    """
+    扫描负向约束得到 ``(u0, qg0, pq0)`` 后：若事件已公开 ``q4_grid_count``，且 ``pq0`` 仍含
+    品质 4，则从可能集合去掉 4 并按新组合键查 CSV；缺键则退回原扫描早单价。
+    """
+    u0, qg0, pq0 = _scan_inference.vacant_early_unit_from_exclusions(
+        board_snapshot=board_snapshot,
+        csv_cells_raw=csv_cells_for_est if csv_cells_for_est else None,
+        pricing={},
+    )
+    if _event_stat_q4_grid_count_optional(event_stats) is None:
+        return u0, qg0, pq0
+    if 4 not in pq0:
+        return u0, qg0, pq0
+    pq_ex = frozenset(q for q in pq0 if int(q) != 4)
+    qg = _scan_inference.csv_quality_group_from_possible_set(pq_ex)
+    if qg is None or not csv_cells_for_est or qg not in csv_cells_for_est:
+        return u0, qg0, pq0
+    u = int(round(float(csv_cells_for_est[qg])))
+    return u, str(qg), pq_ex
 
 
 def _confirmed_tier_footprint_q456(
@@ -950,13 +995,13 @@ def build_snapshot_pricing_dict(
     u_gr = int(round(float(csv_cells_for_est.get("q5+q6", 0.0))))
     u_red = int(round(float(csv_cells_for_est.get("q6", 0.0))))
 
-    u_early, qg_early, pq_early = _scan_inference.vacant_early_unit_from_exclusions(
+    st_ev = raw.get("event_stats") if isinstance(raw, dict) else None
+    u_early, qg_early, pq_early = _vacant_early_unit_excluding_q4_when_q4_total_known(
         board_snapshot=snap_full,
-        csv_cells_raw=csv_cells_for_est if csv_cells_for_est else None,
-        pricing={},
+        csv_cells_for_est=csv_cells_for_est,
+        event_stats=st_ev,
     )
 
-    st_ev = raw.get("event_stats") if isinstance(raw, dict) else None
     cq4, cq5, cq6 = _confirmed_tier_footprint_q456(snap_full)
     tier_extra_val, tier_extra_cells = _tier_min_extra_value_and_cells(
         st_ev,

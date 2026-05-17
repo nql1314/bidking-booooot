@@ -887,6 +887,49 @@ class BoardPricingTests(unittest.TestCase):
         # 少乘 2 格 u_early、多 2*q4 单价：差 = -2*1000 + 2*10 = -1980
         self.assertEqual(p1["points"], p0["points"] - 1980)
 
+    def test_early_vacant_unit_excludes_q4_when_q4_grid_count_known(self) -> None:
+        """事件给出 ``q4_grid_count`` 且扫描可能仍含紫时，早单价改查不含 q4 的 CSV 组合键。"""
+        gs = {
+            "uid": "u1",
+            "map_id": 0,
+            "current_round": 5,
+            "players": {},
+            "items": {
+                "a": {
+                    "uid": "a",
+                    "box_id": 3,
+                    "box_id_confirmed": True,
+                    "shape": 11,
+                    "quality": 1,
+                    "categories": [],
+                    "item_cid": None,
+                    "price": None,
+                    "manual_confirm_item_id": None,
+                    "excluded_categories": [],
+                    "excluded_qualities": [],
+                }
+            },
+            "displayed_event_uids": [],
+            "scan_history": [
+                {"scan_type": "quality", "value": 1, "hit_uids": ["x"]},
+                {"scan_type": "quality", "value": 2, "hit_uids": ["x"]},
+                {"scan_type": "quality", "value": 3, "hit_uids": ["x"]},
+            ],
+        }
+        raw = {
+            "csv_quality_groups_avg_per_cell": {
+                "q4+q5+q6": 12000.0,
+                "q5+q6": 3000.0,
+                "q5": 2000.0,
+                "q6": 1000.0,
+            },
+            "event_stats": {"q4_grid_count": 37},
+        }
+        snap = {"game_state": gs, "skill_logs": [], "map_id": 0, "current_round": 5, "raw_pricing": raw}
+        p = bp.build_snapshot_pricing_dict(snap, snapshot_path_hint=None)
+        self.assertEqual(p.get("early_vacant_csv_group"), "q5+q6")
+        self.assertEqual(p.get("early_vacant_unit_from_scan"), 3000)
+
     def test_tier_grid_min_no_extra_when_min_le_confirmed(self) -> None:
         """``q4_grid_min`` 不大于已确认紫格占位时，与未填 ``q4_grid_min`` 的 points 一致。"""
         gs = {
