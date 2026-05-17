@@ -25,7 +25,8 @@
     手动画框、拖调轮廓、回放翻页等本地操作只刷新界面，不落盘，避免频繁 JSON 序列化导致卡顿
 
 看板角色（board_mode）：
-  - elsa / universal / ahmad / raven：空置候选区（橘红）与顶部空置估价均由 ``grid_overlay`` 统一计算，无「第几回合起才显示」门槛。
+  - elsa / universal / ahmad / raven：空置候选区（橘红）与顶部空置计数均由 ``grid_overlay`` 统一计算，无「第几回合起才显示」门槛；
+    顶栏「仓位估价」数字取 ``pricing.points_ceiling``（缺省同 ``points``）。
   - universal：与 elsa 同套几何与空置逻辑，窗口标题缀「通用看板」便于区分。
   - ahmad：与 universal 同套几何与空置逻辑，窗口标题缀「艾哈迈德(快递站特化）」；顶栏 Ahmad 主价仍由
     日志英雄 + 地图自动判定（己方身份来自配置 ``board_snapshot.self_user_uid`` 或跨对局 UID 推断）。
@@ -242,8 +243,21 @@ def _format_ahmad_candidate_formula_line(c: Dict[str, Any]) -> str:
     return f"[{cid}] → {pts_s}"
 
 
+def _display_position_estimate_pts(p: Dict[str, Any]) -> Optional[float]:
+    """顶栏「仓位估价」展示用数值：优先 ``pricing.points_ceiling``，缺省时用 ``pricing.points``。"""
+    for key in ("points_ceiling", "points"):
+        v = p.get(key)
+        if v is None:
+            continue
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 def _generic_position_formula_line(p: Dict[str, Any]) -> str:
-    """通用画板：与 ``pricing.points`` 一致的 T+V×U（扫描早期 U 见 early_vacant_unit_from_scan）。"""
+    """通用画板：T+V×U 粗算（扫描早期 U 见 early_vacant_unit_from_scan）；顶栏数字见 ``pricing.points_ceiling``。"""
     try:
         t_val = float(p.get("total") or 0)
     except (TypeError, ValueError):
@@ -2181,10 +2195,13 @@ class GridWindow:
                 base_lines.extend(
                     [
                         f"第 4 回合起：下限 ≈ T + V×U_全橙 = {pf!s}；上限 ≈ T + V×U_全红 = {pc!s}。",
-                        f"第 1–3 回合：floor/ceiling 与仓位估价 points 相同（扫描推断单价）。",
+                        "第 1–3 回合：早期定价常使 floor/ceiling 与 points 相同；"
+                        "顶栏「仓位估价」数字取 points_ceiling（与 points 不同时见上沿单价）。",
                     ]
                 )
-            base_lines.append(f"当前 points = {p.get('points')!s}。")
+            base_lines.append(
+                f"当前 points = {p.get('points')!s}；points_ceiling = {p.get('points_ceiling')!s}。"
+            )
             return "\n".join(base_lines)
         else:
             return ""
@@ -2241,29 +2258,33 @@ class GridWindow:
         )
         if p.get("ahmad_pricing_active"):
             lines.append(
-                "己方 Ahmad + 快递站地图：顶栏仓位估价 points 来自 pricing.ahmad_points（非本式 T+V×U）；"
+                "己方 Ahmad + 快递站地图：顶栏仓位估价取 pricing.points_ceiling（与 ahmad_points / points 一致；非本式 T+V×U）；"
                 f"对照 generic_points = {p.get('generic_points')!s}。"
             )
         else:
             lines.append(
-                f"仓位估价 points ≈ T + V×U = {t_val:,.0f} + {v_eff} × {u_int:,.0f}（与 pricing.points 一致）。",
+                f"pricing.points 粗算 ≈ T + V×U_scan = {t_val:,.0f} + {v_eff} × {u_int:,.0f}（与 pricing.points 一致；顶栏数字用 points_ceiling）。",
             )
-        if pts is not None:
-            lines.append(f"当前 pricing.points = {pts!s}")
+        pc_disp = p.get("points_ceiling")
+        if pc_disp is not None:
+            lines.append(f"顶栏展示 pricing.points_ceiling = {pc_disp!s}")
+        elif pts is not None:
+            lines.append(f"顶栏展示（无 ceiling）pricing.points = {pts!s}")
         return "\n".join(lines)
 
     def _tooltip_text_main_points(self) -> str:
-        """pricing.points / floor / ceiling 摘要。"""
+        """顶栏仓位估价（points_ceiling）与 points / floor / ceiling 摘要。"""
         p = self._last_pricing_for_tooltips
         if not isinstance(p, dict) or not p:
             return "（估价尚未计算）"
         pts = p.get("points")
         pf, pc = p.get("points_floor"), p.get("points_ceiling")
+        pts_bar = _display_position_estimate_pts(p)
         ahmad_active = bool(p.get("ahmad_pricing_active"))
         head = (
-            "仓位估价（Ahmad 快递站：points = ahmad_points）"
+            "仓位估价（顶栏 = pricing.points_ceiling；Ahmad 快递站下与 ahmad_points 一致）"
             if ahmad_active
-            else "仓位估价（快照 pricing.points）"
+            else "仓位估价（顶栏 = pricing.points_ceiling，缺省同 points）"
         )
         lines: List[str] = [head]
         if ahmad_active:
@@ -2273,23 +2294,28 @@ class GridWindow:
                 lines.append("采纳候选算式（与 pricing.ahmad_points_detail.winner 一致）：")
                 lines.append(_format_ahmad_candidate_formula_line(wc))
                 lines.append("")
-        if pts is not None:
+        if pts_bar is not None:
             try:
-                lines.append(f"points = {int(round(float(pts))):,}")
+                lines.append(f"points_ceiling（顶栏）= {int(round(float(pts_bar))):,}")
             except (TypeError, ValueError):
-                lines.append(f"points = {pts!r}")
+                lines.append(f"points_ceiling（顶栏）= {pts_bar!r}")
             mult = _instant_win_multiplier_for_round(self.state.current_round)
             try:
-                pv = float(pts)
+                pv = float(pts_bar)
                 anti = int(round(pv / mult)) if mult > 0 else int(round(pv))
                 lines.extend(
                     [
                         "",
-                        f"防拍参考：points ÷ 第 {max(1, min(5, int(self.state.current_round or 1)))} 回合秒杀倍率 {mult:g} ≈ {anti:,}",
+                        f"防拍参考：顶栏数值 ÷ 第 {max(1, min(5, int(self.state.current_round or 1)))} 回合秒杀倍率 {mult:g} ≈ {anti:,}",
                     ]
                 )
             except (TypeError, ValueError):
                 pass
+        if pts is not None:
+            try:
+                lines.append(f"pricing.points = {int(round(float(pts))):,}")
+            except (TypeError, ValueError):
+                lines.append(f"pricing.points = {pts!r}")
         if ahmad_active:
             lines.append(
                 f"通用画板仓位估价（对照）：generic_points = {p.get('generic_points')!s}，"
@@ -2360,7 +2386,7 @@ class GridWindow:
         self._total_label.config(text=f"估算总价  ¥{total:,.0f}")
 
     def _update_vacant_estimate_bar(self) -> None:
-        """更新顶栏两行：①仓位估价 points + 推荐出价；②三档 est_* 与仓位估价区间。"""
+        """更新顶栏两行：①仓位估价（``pricing.points_ceiling``）+ 推荐出价；②三档 est_* 与仓位估价区间。"""
         if not hasattr(self, "_est_label_red"):
             return
         base = self._make_board_snapshot()
@@ -2385,17 +2411,17 @@ class GridWindow:
                     f"空置 {vac_n}格"
                 )
             )
-        pts = p.get("points")
+        pts_bar = _display_position_estimate_pts(p)
         mult = _instant_win_multiplier_for_round(self.state.current_round)
-        if pts is not None:
+        if pts_bar is not None:
             try:
-                pts_i = int(round(float(pts)))
+                pts_i = int(round(float(pts_bar)))
                 anti = int(round(pts_i / mult)) if mult > 0 else pts_i
                 self._est_label_aisha.config(
                     text=f"仓位估价  {pts_i:,}  （÷{mult:g}→{anti:,}）",
                 )
             except (TypeError, ValueError):
-                self._est_label_aisha.config(text=f"仓位估价  {pts!r}")
+                self._est_label_aisha.config(text=f"仓位估价  {pts_bar!r}")
         else:
             self._est_label_aisha.config(text="仓位估价  —")
 
@@ -2710,7 +2736,7 @@ class GridWindow:
         self.root.after_idle(_lock_info_bar_side_columns)
 
     def _build_vacant_estimate_bar(self) -> None:
-        """窗口最上方：①仓位估价、推荐出价、扫描单价；②全红/全橙/金红/区间。"""
+        """窗口最上方：①仓位估价（``points_ceiling``）、推荐出价、扫描单价；②全红/全橙/金红/区间。"""
         bar = tk.Frame(self.root, bg="#152030", pady=4)
         bar.pack(fill="x", padx=8, pady=(6, 0))
         row1 = tk.Frame(bar, bg="#152030")
