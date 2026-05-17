@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-按地图根掉落池计算：各品质（及品质组合）下的条件期望「件均价」「每格均价」。
+按地图根掉落池计算：品质 1–6 的**全部非空子集**组合下的条件期望「件均价」「每格均价」
+（共 63 组），并附加一行 ``all`` 表示整张掉落池的无条件期望。
 
 数据依赖（与 bidking.parsing.item_db 一致，默认从仓库 ``data/`` 读取）：
   - data/item_prices.csv
@@ -18,6 +19,7 @@ import argparse
 import csv
 import json
 import sys
+from itertools import combinations
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -38,30 +40,18 @@ def shape_cells(shape: int) -> int:
     return max(w * h, 1)
 
 
-QUALITY_GROUPS: dict[str, frozenset[int]] = {
-    "q1": frozenset({1}),
-    "q2": frozenset({2}),
-    "q3": frozenset({3}),
-    "q4": frozenset({4}),
-    "q5": frozenset({5}),
-    "q6": frozenset({6}),
-    "q1+q2": frozenset({1, 2}),
-    "q1+q2+q3": frozenset({1, 2, 3}),
-    "q1+q2+q3+q4": frozenset({1, 2, 3, 4}),
-    "q1+q2+q3+q4+q5": frozenset({1, 2, 3, 4, 5}),
-    "q2+q3": frozenset({2, 3}),
-    "q2+q3+q4": frozenset({2, 3, 4}),
-    "q2+q3+q4+q5": frozenset({2, 3, 4, 5}),
-    "q2+q3+q5+q6": frozenset({2, 3, 5, 6}),
-    "q2+q3+q4+q5+q6": frozenset({2, 3, 4, 5, 6}),
-    "q3+q4": frozenset({3, 4}),
-    "q3+q4+q5": frozenset({3, 4, 5}),
-    "q3+q5+q6": frozenset({3, 5, 6}),
-    "q3+q4+q5+q6": frozenset({3, 4, 5, 6}),
-    "q4+q5": frozenset({4, 5}),
-    "q4+q5+q6": frozenset({4, 5, 6}),
-    "q5+q6": frozenset({5, 6}),
-}
+def iter_quality_groups() -> list[tuple[str, frozenset[int]]]:
+    """品质 1..6 的全部非空子集，按子集大小再按品质编号升序排列。"""
+    qs = range(1, 7)
+    out: list[tuple[str, frozenset[int]]] = []
+    for r in range(1, 7):
+        for comb in combinations(qs, r):
+            name = "+".join(f"q{c}" for c in comb)
+            out.append((name, frozenset(comb)))
+    return out
+
+
+QUALITY_GROUPS: list[tuple[str, frozenset[int]]] = iter_quality_groups()
 
 
 def map_item_probs(map_id: int) -> dict[int, float]:
@@ -96,7 +86,7 @@ def main() -> int:
                 spc += p * c
             return sp, spv, spc
 
-        for gname, qset in QUALITY_GROUPS.items():
+        for gname, qset in QUALITY_GROUPS:
             sp, spv, spc = agg(qset)
             row: dict[str, object] = {
                 "map_id": map_id,

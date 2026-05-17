@@ -23,6 +23,10 @@ UID 推断（``inferred_self_user_uid``，见 :mod:`bidking.pricing._self_uid_in
 对 ``max(0, 最少格 - 已确认该档占位格)`` 按 CSV 单档 ``q4``/``q5``/``q6`` 格均价计入总价，
 并对空置单价项使用扣减后的有效空置格数（``pricing.vacant`` 仍为几何/有效空置原值）。
 
+当低档总格已齐备且 **仅** 公开 ``q5_grid_count`` 与 ``q6_grid_count`` 之一时，空置主价区间按
+「余量必为红 / 必为金」分别用 CSV ``q6`` / ``q5`` 格均价；二者皆未公开或二者皆已公开时，
+仍按金单价估计主价、早单价作上界（与原逻辑一致）。
+
 当 ``event_stats`` 已给出明确的 ``q4_grid_count``（紫档总格已由公共信息划定）时，扫描推断的
 早单价可能品质集合中不再保留 q4，改用去掉 q4 后的 CSV 组合键（如 ``q5+q6``）查格均价，
 避免剩余空格再乘含紫档权重的混合单价。
@@ -126,11 +130,11 @@ def _event_stat_grid_min_optional(st: Any, key: str) -> Optional[int]:
     return n if n >= 0 else None
 
 
-def _event_stat_q4_grid_count_optional(st: Any) -> Optional[int]:
-    """``event_stats`` 中 ``q4_grid_count``：有值且非负时返回 int，否则视为紫档总格未公开。"""
+def _event_stat_grid_count_optional(st: Any, key: str) -> Optional[int]:
+    """``event_stats`` 中 ``*_grid_count``（如 ``q4_grid_count``）：有值且非负时返回 int，否则视为该档总格未公开。"""
     if not isinstance(st, dict):
         return None
-    v = st.get("q4_grid_count")
+    v = st.get(key)
     if v is None:
         return None
     try:
@@ -138,6 +142,11 @@ def _event_stat_q4_grid_count_optional(st: Any) -> Optional[int]:
     except (TypeError, ValueError):
         return None
     return n if n >= 0 else None
+
+
+def _event_stat_q4_grid_count_optional(st: Any) -> Optional[int]:
+    """``event_stats`` 中 ``q4_grid_count``：有值且非负时返回 int，否则视为紫档总格未公开。"""
+    return _event_stat_grid_count_optional(st, "q4_grid_count")
 
 
 def _vacant_early_unit_excluding_q4_when_q4_total_known(
@@ -1045,9 +1054,24 @@ def build_snapshot_pricing_dict(
             pts_ceiling = pts
             early_pts_blended_with_random_avg = True
     else:
-        pts = vacant_pts_base + float(vacant_adj) * float(u_orange)
-        pts_floor = vacant_pts_base + float(vacant_adj) * float(u_orange)
-        pts_ceiling = vacant_pts_base + float(vacant_adj) * float(u_early)
+        # 低档总格已划定时：若仅公开金档总格，余下空置必为红格；若仅公开红档总格，余下必为金格。
+        q5_gc = _event_stat_grid_count_optional(st_ev, "q5_grid_count")
+        q6_gc = _event_stat_grid_count_optional(st_ev, "q6_grid_count")
+        if q5_gc is not None and q6_gc is None:
+            u_mid = float(u_red)
+            u_lo = u_mid
+            u_hi = u_mid
+        elif q6_gc is not None and q5_gc is None:
+            u_mid = float(u_orange)
+            u_lo = u_mid
+            u_hi = u_mid
+        else:
+            u_mid = float(u_orange)
+            u_lo = float(u_orange)
+            u_hi = float(u_early)
+        pts = vacant_pts_base + float(vacant_adj) * u_mid
+        pts_floor = vacant_pts_base + float(vacant_adj) * u_lo
+        pts_ceiling = vacant_pts_base + float(vacant_adj) * u_hi
 
     ahmad_abde_scale = _resolve_ahmad_abde_scale(snap_full, board_snapshot_config=board_snapshot_config)
     ahmad_detail = _ahmad_pricing_detail_from_raw_pricing(

@@ -171,19 +171,19 @@
         }
       },
       "250": {
-        "name": "深海沉船",
-        "point": {
-          "origin": "left_top",
-          "x": 1617,
-          "y": 477
-        }
-      },
-      "450": {
         "name": "沉船密封舱",
         "point": {
           "origin": "left_top",
           "x": 1839,
           "y": 682
+        }
+      },
+      "450": {
+        "name": "深海沉船",
+        "point": {
+          "origin": "left_top",
+          "x": 1617,
+          "y": 477
         }
       },
       "260": {
@@ -205,7 +205,8 @@
       "440": 10000,
       "450": 25000
     }
-  },  "debug": {
+  },
+  "debug": {
     "save_crops": false,
     "save_ocr_text": false,
     "print_ocr_snippet": true,

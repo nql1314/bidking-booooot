@@ -3,7 +3,8 @@
 
 本模块负责：
 
-- **合并** ``HeroSkillLog`` / ``MapSkillLog`` / ``ItemSkillLog`` 为 ``skill_entries``（含英雄并入地图键、道具并入规范 SkillCid）。
+- **合并** ``HeroSkillLog`` / ``MapSkillLog`` / ``ItemSkillLog`` 为 ``MergedSkillLogEntries``（
+  ``by_skill_cid`` / ``by_item_cid`` 分表，避免相同数字的 ``SkillCid`` 与 ``ItemCid`` 互相覆盖）。
 - **属性 ↔ 技能溯源**（:data:`EVENT_STATS_ATTRIBUTE_SOURCES`）：说明每个 ``event_stats`` 键可由哪些
   ``SkillCid`` / ``ItemCid`` 与日志字段提供；同一键可对应**多条**来源（多技能或地图+英雄+道具先后覆盖同一合并键）。
 - **解析**：从合并后的 ``skill_entries`` 直读整数字段、浮点字段、地图价绑定，以及从轮廓类技能的 ``HitBoxList`` 汇总件数/占格。
@@ -14,6 +15,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..parsing.skill_bindings import (
@@ -27,6 +29,13 @@ from ..parsing.skill_bindings import (
     RAW_PRICING_INT_AFTER_ITEM_LOG,
     VIKTOR_COMBINED_HIGH_TIER_ITEM_COUNT_KEY,
 )
+
+
+def round_computed_div_avg(v: float, *, decimals: int = 3) -> float:
+    """由占格÷件数、总价÷件数等**内部除法**得到的均格/均价，固定位数，减轻二进制浮点尾差。
+
+    日志直读的 ``AllHitItemAvgBoxIndex`` / ``AllHitItemAvgPrice`` 等**不**经此函数。"""
+    return round(float(v), int(decimals))
 
 
 def _collect_attribute_sources() -> Dict[str, Tuple[str, ...]]:
@@ -83,9 +92,22 @@ def _collect_attribute_sources() -> Dict[str, Tuple[str, ...]]:
 EVENT_STATS_ATTRIBUTE_SOURCES: Dict[str, Tuple[str, ...]] = _collect_attribute_sources()
 
 
-def merge_latest_skill_entries(skill_logs: List[dict]) -> Dict[int, dict]:
-    """将多段 ``skill_logs`` 合并为 ``SkillCid`` / ``ItemCid`` → 最新一条日志条目。"""
-    out: Dict[int, dict] = {}
+@dataclass(frozen=True, slots=True)
+class MergedSkillLogEntries:
+    """合并后的技能 / 道具日志。
+
+    ``SkillCid`` 与 ``ItemCid`` 可能为相同整数（例如英雄技能 100105 与道具良品扫描 100105），
+    必须分表存储，否则道具绑定会误读英雄日志字段（如 ``TotalHitBoxIndex`` 缺失被当成 0）。
+    """
+
+    by_skill_cid: Dict[int, dict]
+    by_item_cid: Dict[int, dict]
+
+
+def merge_latest_skill_entries(skill_logs: List[dict]) -> MergedSkillLogEntries:
+    """将多段 ``skill_logs`` 合并为按 ``SkillCid``、按 ``ItemCid`` 的两张最新条目表。"""
+    skill_out: Dict[int, dict] = {}
+    item_out: Dict[int, dict] = {}
     for block in skill_logs or []:
         if not isinstance(block, dict):
             continue
@@ -101,7 +123,7 @@ def merge_latest_skill_entries(skill_logs: List[dict]) -> Dict[int, dict]:
                 except (TypeError, ValueError):
                     continue
                 if cid > 0:
-                    out[cid] = entry
+                    skill_out[cid] = entry
     for block in skill_logs or []:
         if not isinstance(block, dict):
             continue
@@ -119,8 +141,8 @@ def merge_latest_skill_entries(skill_logs: List[dict]) -> Dict[int, dict]:
                 if cid <= 0:
                     continue
                 canon = HERO_SKILL_CID_MERGE_INTO_MAP.get(cid)
-                if canon and canon not in out:
-                    out[canon] = entry
+                if canon and canon not in skill_out:
+                    skill_out[canon] = entry
     for block in skill_logs or []:
         if not isinstance(block, dict):
             continue
@@ -136,10 +158,10 @@ def merge_latest_skill_entries(skill_logs: List[dict]) -> Dict[int, dict]:
                 continue
             canon = ITEM_SKILL_CANONICAL_SKILL_CID.get(item_cid)
             if canon:
-                out[canon] = entry
+                skill_out[canon] = entry
             if item_cid > 0:
-                out[item_cid] = entry
-    return out
+                item_out[item_cid] = entry
+    return MergedSkillLogEntries(by_skill_cid=skill_out, by_item_cid=item_out)
 
 
 def safe_int_field(entry: Optional[dict], *keys: str) -> Optional[int]:
@@ -171,18 +193,18 @@ def safe_float_field(entry: Optional[dict], *keys: str) -> Optional[float]:
 
 
 def item_skill_int_if_logged(
-    skill_entries: Dict[int, dict], item_cid: int, log_field: str
+    item_by_cid: Dict[int, dict], item_cid: int, log_field: str
 ) -> Optional[int]:
-    ent = skill_entries.get(int(item_cid))
+    ent = item_by_cid.get(int(item_cid))
     if not isinstance(ent, dict):
         return None
     return safe_int_field(ent, log_field)
 
 
 def item_skill_float_if_logged(
-    skill_entries: Dict[int, dict], item_cid: int, log_field: str
+    item_by_cid: Dict[int, dict], item_cid: int, log_field: str
 ) -> Optional[float]:
-    ent = skill_entries.get(int(item_cid))
+    ent = item_by_cid.get(int(item_cid))
     if not isinstance(ent, dict):
         return None
     v = safe_float_field(ent, log_field)
@@ -213,7 +235,9 @@ def _aggregate_hitbox_list(boxes: List[dict]) -> Dict[str, Any]:
             continue
         count += 1
         total_cells += _shape_cell_count(box.get("ItemSlotType"))
-    avg_cells = (total_cells / count) if count else None
+    avg_cells = (
+        round_computed_div_avg(float(total_cells) / float(count)) if count else None
+    )
     return {
         "count": count,
         "total_cells": total_cells,
@@ -313,21 +337,21 @@ def _write_skill_float_fields_from_logs(
 
 
 def _write_item_int_fields_from_logs(
-    skill_entries: Dict[int, dict], direct: Dict[str, Any]
+    item_by_cid: Dict[int, dict], direct: Dict[str, Any]
 ) -> None:
     """``ItemSkillLog`` 整型直读（``RAW_PRICING_DIRECT_ITEM_INT_BINDINGS``）。"""
     for key, cid, field in RAW_PRICING_DIRECT_ITEM_INT_BINDINGS:
-        v = item_skill_int_if_logged(skill_entries, cid, field)
+        v = item_skill_int_if_logged(item_by_cid, cid, field)
         if v is not None:
             direct[key] = v
 
 
 def _write_item_float_fields_from_logs(
-    skill_entries: Dict[int, dict], direct: Dict[str, Any]
+    item_by_cid: Dict[int, dict], direct: Dict[str, Any]
 ) -> None:
     """``ItemSkillLog`` 浮点直读（``RAW_PRICING_DIRECT_ITEM_FLOAT_BINDINGS``）。"""
     for key, cid, field in RAW_PRICING_DIRECT_ITEM_FLOAT_BINDINGS:
-        v = item_skill_float_if_logged(skill_entries, cid, field)
+        v = item_skill_float_if_logged(item_by_cid, cid, field)
         if v is not None:
             direct[key] = v
 
@@ -369,18 +393,18 @@ def _maria_10010801_q123_hitbox_count(entry: dict) -> Optional[int]:
 
 
 def _apply_maria_hero_skill_logs(
-    skill_entries: Dict[int, dict], direct: Dict[str, Any]
+    skill_by_cid: Dict[int, dict], direct: Dict[str, Any]
 ) -> None:
     """玛丽亚：``100108`` 总价在 ``HitItemTotalPrice`` → ``q123_price_total``；``10010801`` 的 Q123 件数在 ``HitBoxList`` → ``q123_count``。
 
     合并键 ``100108`` 与道具 ``ItemCid=100108``（珍品扫描占格）同号，仅当条目含 ``HeroCid`` 时视为英雄日志再写 ``q123_price_total``。
     """
-    ent_price = skill_entries.get(100108)
+    ent_price = skill_by_cid.get(100108)
     if isinstance(ent_price, dict) and ent_price.get("HeroCid"):
         if ent_price.get("HitItemTotalPrice") is not None:
             direct["q123_price_total"] = safe_int_field(ent_price, "HitItemTotalPrice")
 
-    ent_scan = skill_entries.get(10010801)
+    ent_scan = skill_by_cid.get(10010801)
     if isinstance(ent_scan, dict):
         n = _maria_10010801_q123_hitbox_count(ent_scan)
         if n is not None:
@@ -388,7 +412,7 @@ def _apply_maria_hero_skill_logs(
 
 
 def parse_skill_entries_to_event_stats_direct(
-    skill_entries: Dict[int, dict],
+    merged: MergedSkillLogEntries,
 ) -> Dict[str, Any]:
     """从合并日志解析标量 ``event_stats`` 并应用轮廓补全。
 
@@ -439,14 +463,16 @@ def parse_skill_entries_to_event_stats_direct(
         VIKTOR_COMBINED_HIGH_TIER_ITEM_COUNT_KEY: None,
     }
 
-    _write_skill_int_fields_from_logs(skill_entries, direct)
-    _write_skill_float_fields_from_logs(skill_entries, direct)
-    _write_item_int_fields_from_logs(skill_entries, direct)
-    _write_item_float_fields_from_logs(skill_entries, direct)
-    _write_skill_int_after_item_log(skill_entries, direct)
-    _apply_maria_hero_skill_logs(skill_entries, direct)
+    skill_by = merged.by_skill_cid
+    item_by = merged.by_item_cid
+    _write_skill_int_fields_from_logs(skill_by, direct)
+    _write_skill_float_fields_from_logs(skill_by, direct)
+    _write_item_int_fields_from_logs(item_by, direct)
+    _write_item_float_fields_from_logs(item_by, direct)
+    _write_skill_int_after_item_log(skill_by, direct)
+    _apply_maria_hero_skill_logs(skill_by, direct)
 
-    apply_outline_hitbox_to_event_stats(skill_entries, direct)
+    apply_outline_hitbox_to_event_stats(skill_by, direct)
     return direct
 
 

@@ -297,7 +297,8 @@ def _automation_run_schedule(auto: dict[str, Any]) -> tuple[int, int, int, float
 
     - ``selected_runs``：每循环完成的局数（次数）；
     - ``run_cycles``：循环遍数，默认 1；
-    - ``cycle_rest_minutes``：相邻两循环之间的休息分钟数，默认 1（可为 0 关闭）。
+    - ``cycle_rest_minutes``：相邻两循环之间的休息分钟数，默认 1（可为 0 关闭）；
+      实际休眠会在该值 ±10% 内均匀随机。
 
     总目标局数 = 次数 × 循环。
     """
@@ -1484,7 +1485,7 @@ def run_loop(
     log("mode: full-window OCR -> lobby/end/round handling", gui_verbose_only=True)
     log(
         f"运行计划：每循环 {runs_per_cycle} 局 × {run_cycles} 循环 → 合计 {max_runs} 局；"
-        f"循环间休息 {cycle_rest_minutes:g} 分钟（0 表示不休息）",
+        f"循环间休息 {cycle_rest_minutes:g} 分钟（0 表示不休息；否则实际时长在该值 ±10% 内随机）",
     )
 
     handled_rounds: set[int] = set()
@@ -1525,10 +1526,10 @@ def run_loop(
             and completed_runs < max_runs
             and cycle_rest_minutes > 0.0
         ):
-            rest_sec = float(cycle_rest_minutes) * 60.0
+            rest_sec = float(cycle_rest_minutes) * 60.0 * random.uniform(0.9, 1.1)
             log(
                 f"本循环已完成 {runs_per_cycle} 局（累计 {completed_runs}/{max_runs}），"
-                f"休息 {cycle_rest_minutes:g} 分钟…"
+                f"休息约 {rest_sec / 60.0:.2f} 分钟（配置 {cycle_rest_minutes:g} 分钟 ±10%）…"
             )
             sleep_interruptible(rest_sec)
 

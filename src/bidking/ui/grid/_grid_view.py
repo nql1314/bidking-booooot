@@ -66,6 +66,7 @@ from ...parsing.item_db import (
     probability_source_label,
     query_item,
 )
+from ...parsing.skill_bindings import VIKTOR_COMBINED_HIGH_TIER_ITEM_COUNT_KEY
 from ...parsing.log_source import extract_event, skill_log_game_data_subset
 from ...parsing.state import CsvItem, GameState, ItemKnowledge
 from ...analysis._board_pricing import (
@@ -73,7 +74,12 @@ from ...analysis._board_pricing import (
     estimate_snapshot_item_price_for_uid,
 )
 from ...analysis import grid_overlay as _grid_overlay
-from ...analysis.raw_pricing import build_raw_pricing_dict
+from ...analysis.raw_pricing import (
+    build_raw_pricing_dict,
+    resolve_grid_avg_infer_max_grid_count,
+    resolve_grid_avg_infer_max_item_count,
+    resolve_price_avg_infer_max_item_count,
+)
 from ...analysis.snapshot import game_state_to_json, item_knowledge_to_json
 from ...config.runtime import (
     infer_fraud_empty_cells_algorithm_and_trim,
@@ -160,6 +166,73 @@ _DEFAULT_ROUND_INSTANT_WIN_MULT: Dict[int, float] = {
 def _instant_win_multiplier_for_round(round_no: Optional[int]) -> float:
     r = max(1, min(5, int(round_no or 1)))
     return float(_DEFAULT_ROUND_INSTANT_WIN_MULT.get(r, 1.0))
+
+
+#: ``raw_pricing.event_stats`` 键 → 悬浮「当局数据」中的中文含义（未收录键仍显示英文键名）。
+_EVENT_STATS_KEY_LABEL_ZH: Dict[str, str] = {
+    "total_count": "总件数",
+    "total_grid_count": "总格数",
+    "total_grid_avg": "总均格",
+    "random_avg_price_min": "随机拍卖类技能推断的均价下界（总价）",
+    "q1_count": "白件数",
+    "q1_grid_count": "白总格",
+    "q1_price_total": "白总价",
+    "q2_count": "绿件数",
+    "q2_grid_count": "绿总格",
+    "q2_price_total": "绿总价",
+    "q12_count": "白+绿合并件数",
+    "q12_grid_count": "白+绿合并总格",
+    "q12_grid_avg": "白+绿合并均格",
+    "q12_price_total": "白+绿合并总价",
+    "q123_price_total": "白+绿+蓝合并总价（玛丽亚等）",
+    "q123_count": "白+绿+蓝合并件数（玛丽亚轮廓）",
+    "q3_count": "蓝件数",
+    "q3_grid_count": "蓝总格",
+    "q3_grid_avg": "蓝均格",
+    "q3_price_total": "蓝总价",
+    "q4_count": "紫件数",
+    "q4_grid_count": "紫总格",
+    "q4_grid_avg": "紫均格",
+    "q4_count_min": "紫件数下界（推理）",
+    "q4_grid_min": "紫最少格（推理）",
+    "q4_price_avg": "紫均价",
+    "q4_price_total": "紫总价",
+    "q5_count": "金件数",
+    "q5_count_min": "金件数下界（推理）",
+    "q5_grid_count": "金总格",
+    "q5_grid_avg": "金均格",
+    "q5_grid_min": "金最少格（推理）",
+    "q5_price_avg": "金均价",
+    "q5_price_total": "金总价",
+    "q6_count": "红件数",
+    "q6_count_min": "红件数下界（推理）",
+    "q6_grid_count": "红总格",
+    "q6_grid_avg": "红均格",
+    "q6_grid_min": "红最少格（推理）",
+    "q6_price_avg": "红均价",
+    "q6_price_total": "红总价",
+    VIKTOR_COMBINED_HIGH_TIER_ITEM_COUNT_KEY: "维克托：紫+金+红件数",
+}
+
+
+def _event_stats_key_label_zh(key: str) -> str:
+    if key in _EVENT_STATS_KEY_LABEL_ZH:
+        return _EVENT_STATS_KEY_LABEL_ZH[key]
+    # 轮廓技能写入的 qN_count / qN_grid_count / qN_grid_avg（仅 N 为 1..6 的单数字档，避免误匹配 q12）
+    if key.startswith("q") and len(key) > 2 and key[1].isdigit() and key[2] == "_":
+        try:
+            n = int(key[1])
+        except ValueError:
+            n = 0
+        if n in range(1, 7):
+            tier = ("", "白", "绿", "蓝", "紫", "金", "红")[n]
+            if key.endswith("_count"):
+                return f"{tier}档件数（轮廓汇总）"
+            if key.endswith("_grid_count"):
+                return f"{tier}档总占格（轮廓汇总）"
+            if key.endswith("_grid_avg"):
+                return f"{tier}档平均每件占格（轮廓汇总）"
+    return key
 
 
 def _lines_from_ahmad_points_detail(detail: Any) -> List[str]:
@@ -389,6 +462,102 @@ def _prune_board_snapshot_run_archives(
 
 HIGH_VALUE_THRESHOLD = 100_000
 
+# 画板性能日志（排查卡顿）：环境变量 ``BIDKING_GRID_PERF_LOG``：
+#   未设置或 ``auto``：仅当本帧较慢或子阶段超阈值时追加一行；
+#   ``1`` / ``all``：每次 ``_draw`` / ``_refresh`` 都写；
+#   ``0`` / ``off``：关闭。
+# 输出路径 ``BIDKING_GRID_PERF_LOG_PATH``；否则与 ``board_snapshot.json`` 同目录的 ``grid_view_perf.log``，
+# 无快照路径时落到 ``<project>/data/grid_view_perf.log``。
+_GRID_PERF_LOG_LOCK = threading.Lock()
+
+
+def _grid_perf_log_mode() -> str:
+    raw = (os.environ.get("BIDKING_GRID_PERF_LOG") or "").strip().lower()
+    if raw in ("0", "off", "false", "no", "disable"):
+        return "off"
+    if raw in ("1", "on", "true", "yes", "all", "always"):
+        return "all"
+    if raw in ("auto", "slow", ""):
+        return "auto"
+    return "all"
+
+
+def _grid_perf_log_path(snapshot_path: Optional[str]) -> Path:
+    custom = (os.environ.get("BIDKING_GRID_PERF_LOG_PATH") or "").strip()
+    if custom:
+        return Path(custom).expanduser().resolve()
+    from ...config.paths import data_dir
+
+    if snapshot_path:
+        snap = Path(snapshot_path).expanduser().resolve()
+        return (snap.parent / "grid_view_perf.log").resolve()
+    return (data_dir() / "grid_view_perf.log").resolve()
+
+
+def _grid_perf_append(path: Path, line: str) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        with _GRID_PERF_LOG_LOCK:
+            with open(path, "a", encoding="utf-8") as wf:
+                wf.write(f"{ts} {line}\n")
+    except OSError:
+        pass
+
+
+def _grid_perf_should_emit_auto_draw(
+    total_ms: float,
+    *,
+    sync_infer_ms: float,
+    build_occ_ms: float,
+    bg_cells_ms: float,
+    empty_zone_ms: float,
+    items_draw_ms: float,
+    header_ms: float,
+    fraud_recalc_ms: float,
+    query_grid_ms: float,
+    make_snapshot_ms: float,
+    vacant_count_ms: float,
+) -> bool:
+    """``auto`` 模式：避免每帧写盘，仅在疑似瓶颈时记录。"""
+    if total_ms >= 48.0:
+        return True
+    pairs = (
+        (sync_infer_ms, 26.0),
+        (build_occ_ms, 14.0),
+        (bg_cells_ms, 70.0),
+        (empty_zone_ms, 22.0),
+        (items_draw_ms, 35.0),
+        (header_ms, 35.0),
+        (fraud_recalc_ms, 5.5),
+        (query_grid_ms, 16.0),
+        (make_snapshot_ms, 28.0),
+        (vacant_count_ms, 14.0),
+    )
+    return any(ms >= lim for ms, lim in pairs)
+
+
+def _grid_perf_should_emit_auto_refresh(
+    total_ms: float,
+    *,
+    raw_pricing_ms: float,
+    reconcile_ms: float,
+    draw_ms: float,
+    snapshot_ms: float,
+) -> bool:
+    if total_ms >= 55.0:
+        return True
+    return any(
+        ms >= lim
+        for ms, lim in (
+            (raw_pricing_ms, 22.0),
+            (reconcile_ms, 18.0),
+            (draw_ms, 45.0),
+            (snapshot_ms, 25.0),
+        )
+    )
+
+
 # 幽灵物品品质偏好：dict 中无记录 = 金默认（按 Q5 筛选）；该值 = 不限品质原推断（含金/红等）
 PHANTOM_Q_INFER = "_phantom_q_infer"
 
@@ -548,6 +717,8 @@ class GridWindow:
                     file=sys.stderr,
                 )
         self._snapshot_export_overlay = bool(snapshot_export_overlay)
+        self._perf_log_path: Path = _grid_perf_log_path(self._snapshot_path or "")
+        self._perf_log_mode: str = _grid_perf_log_mode()
         self._skill_logs: List[dict] = []
         self._last_raw_pricing: Optional[Dict[str, Any]] = None
         # 与顶栏「全红/全橙/金红/最低」悬浮提示同步的最近一次 pricing 字典
@@ -569,6 +740,16 @@ class GridWindow:
         _fe_algo, _fe_n = infer_fraud_empty_cells_algorithm_and_trim(_rt_cfg.raw)
         self._fraud_empty_cells_algorithm = _fe_algo
         self._fraud_empty_cells_tiling_n = _fe_n
+        _pricing_rt = _rt_cfg.raw.get("pricing")
+        self._price_avg_infer_max_item_count = resolve_price_avg_infer_max_item_count(
+            pricing_dict=_pricing_rt if isinstance(_pricing_rt, dict) else {}
+        )
+        self._grid_avg_infer_max_item_count = resolve_grid_avg_infer_max_item_count(
+            pricing_dict=_pricing_rt if isinstance(_pricing_rt, dict) else {}
+        )
+        self._grid_avg_infer_max_grid_count = resolve_grid_avg_infer_max_grid_count(
+            pricing_dict=_pricing_rt if isinstance(_pricing_rt, dict) else {}
+        )
 
         # 实时 tail：关闭画板或返回主页时置位，供后台线程退出
         self._monitor_stop = threading.Event()
@@ -607,6 +788,8 @@ class GridWindow:
         self._drag_state: Optional[dict] = None
         # _draw() 期间的占位格缓存（单次绘制内复用，避免重复构建）
         self._occupied_for_draw: Optional[set] = None
+        # _draw() 内各格「估价」共用一份 board_snapshot，避免每格重复 ``_make_board_snapshot``。
+        self._board_snapshot_for_item_price_draw: Optional[Dict[str, Any]] = None
         # _compute_max_size 重入栈：打破「effective_shape → 手动确认候选 → max_size → build_occupied」互递归
         self._compute_max_size_stack: List[str] = []
         # 用户右键手动剔除的空置候选格 (row,col)，不计入空置数、不画橘红（与扩展剩余格一致）
@@ -674,6 +857,9 @@ class GridWindow:
                 map_id=int(self.state.map_id or 0),
                 skill_logs=list(self._skill_logs),
                 snapshot_path_hint=self._snapshot_path,
+                price_avg_infer_max_item_count=self._price_avg_infer_max_item_count,
+                grid_avg_infer_max_item_count=self._grid_avg_infer_max_item_count,
+                grid_avg_infer_max_grid_count=self._grid_avg_infer_max_grid_count,
             )
         return {
             "game_state": game_state_to_json(self.state),
@@ -768,6 +954,9 @@ class GridWindow:
             map_id=int(self.state.map_id or 0),
             skill_logs=list(self._skill_logs),
             snapshot_path_hint=self._snapshot_path,
+            price_avg_infer_max_item_count=self._price_avg_infer_max_item_count,
+            grid_avg_infer_max_item_count=self._grid_avg_infer_max_item_count,
+            grid_avg_infer_max_grid_count=self._grid_avg_infer_max_grid_count,
         )
         self._last_raw_pricing = rp
         occ = self._occupied_cells_for_overlay_infer()
@@ -807,6 +996,8 @@ class GridWindow:
 
     def _fraud_placed_items_for_overlay(self) -> List[_grid_overlay.FraudPlacedItem]:
         """与 ``_build_occupied`` 同源的 :class:`~bidking.analysis.grid_overlay.FraudPlacedItem` 列表。"""
+        if getattr(self, "_perf_in_draw", False):
+            self._perf_fraud_placed_overlay_calls += 1
         return _grid_overlay.fraud_placed_items_from_build_occupied_like(
             items=self.state.items,
             phantom_items=self._phantom_items,
@@ -953,39 +1144,45 @@ class GridWindow:
         k: ItemKnowledge,
     ) -> Tuple[Optional[CsvItem], int, bool, Optional[float], str]:
         """按当前网格显示约束查询候选，包含手动尺寸、幽灵框和最大尺寸推断。"""
-        manual_item = self._valid_manual_confirm_item(uid, k)
-        if manual_item is not None:
-            return manual_item, 1, True, float(manual_item.base_value), "手动确认"
+        _t0 = time.perf_counter() if getattr(self, "_perf_in_draw", False) else None
+        try:
+            manual_item = self._valid_manual_confirm_item(uid, k)
+            if manual_item is not None:
+                return manual_item, 1, True, float(manual_item.base_value), "手动确认"
 
-        effective_shape = k.shape
-        max_shape: Optional[Tuple[int, int]] = None
+            effective_shape = k.shape
+            max_shape: Optional[Tuple[int, int]] = None
 
-        if k.shape is None:
-            if uid in self._manual_shapes:
-                mw, mh, _, _ = self._manual_shapes[uid]
-                effective_shape = mw * 10 + mh
-            elif uid in self._infer_shapes:
-                iw, ih, _, _ = self._infer_shapes[uid]
-                effective_shape = iw * 10 + ih
-            elif k.box_id is not None:
-                max_w, max_h = self._compute_max_size(uid, k)
-                if max_w < GRID_COLS or max_h < GRID_ROWS:
-                    max_shape = (max_w, max_h)
+            if k.shape is None:
+                if uid in self._manual_shapes:
+                    mw, mh, _, _ = self._manual_shapes[uid]
+                    effective_shape = mw * 10 + mh
+                elif uid in self._infer_shapes:
+                    iw, ih, _, _ = self._infer_shapes[uid]
+                    effective_shape = iw * 10 + ih
+                elif k.box_id is not None:
+                    max_w, max_h = self._compute_max_size(uid, k)
+                    if max_w < GRID_COLS or max_h < GRID_ROWS:
+                        max_shape = (max_w, max_h)
 
-        return query_item(
-            effective_shape,
-            self._effective_quality_for_query(uid, k),
-            k.categories,
-            self._csv_locked_item_cid(k),
-            self.csv_index,
-            self.csv_items,
-            k.excluded_categories,
-            k.excluded_qualities,
-            max_shape_wh=max_shape,
-            map_category_weights=self._map_category_weights,
-            map_id=self.state.map_id,
-            categories_any=k.categories_any if k.categories_any else None,
-        )
+            return query_item(
+                effective_shape,
+                self._effective_quality_for_query(uid, k),
+                k.categories,
+                self._csv_locked_item_cid(k),
+                self.csv_index,
+                self.csv_items,
+                k.excluded_categories,
+                k.excluded_qualities,
+                max_shape_wh=max_shape,
+                map_category_weights=self._map_category_weights,
+                map_id=self.state.map_id,
+                categories_any=k.categories_any if k.categories_any else None,
+            )
+        finally:
+            if _t0 is not None:
+                self._perf_query_grid_ms += time.perf_counter() - _t0
+                self._perf_query_grid_n += 1
 
     def _valid_manual_confirm_item(
         self, uid: str, k: ItemKnowledge
@@ -1166,7 +1363,10 @@ class GridWindow:
 
     def _display_price_value(self, uid: str, k: ItemKnowledge) -> Optional[float]:
         """返回当前格子的精确价或期望价（与合并 ``items`` + ``grid_overlay`` 后的定价一致）。"""
-        return estimate_snapshot_item_price_for_uid(self._make_board_snapshot(), uid)
+        snap = self._board_snapshot_for_item_price_draw
+        if snap is None:
+            snap = self._make_board_snapshot()
+        return estimate_snapshot_item_price_for_uid(snap, uid)
 
     @staticmethod
     def _stats_from_merged_items(board_snapshot: Dict[str, Any]) -> Tuple[int, int, int, int, int, int, int]:
@@ -1225,7 +1425,8 @@ class GridWindow:
             "画板金（Q5）/ 红（Q6）件数与格数\n"
             "与 ``merged_items_dict`` 一致（日志 + 幽灵、手动画框、推断外形、偏好与手动确认投影）。\n\n"
             "「未知」：合并表中 ``quality`` 仍为空的占位物品总格数（品质未定）。\n\n"
-            "「空置」：与 ``pricing.vacant``、图例原「估算总价」旁空置数同源（橘红候选区几何计数 / 200009 总格减占位）。"
+            "行末「当前画板…=物品占位…+空置…」：画板格 = ``merged_items_dict`` 占位总格 + 空置格数；"
+            "其中「空置」与 ``pricing.vacant``、图例「估算总价」悬浮里所述空置同源（橘红候选区几何计数 / 200009 总格减占位）。"
         )
 
     def _info_summary_text(self) -> str:
@@ -1302,6 +1503,8 @@ class GridWindow:
         bid = row * GRID_COLS + col
         if bid > limit:
             return False
+        if getattr(self, "_perf_in_draw", False):
+            self._perf_exclude_calls += 1
         placed = self._fraud_placed_items_for_overlay()
         memo_key = (
             self._fraud_empty_cells_algorithm,
@@ -1312,6 +1515,7 @@ class GridWindow:
         )
         if self._empty_zone_fraud_memo != memo_key:
             self._empty_zone_fraud_memo = memo_key
+            fr0 = time.perf_counter()
             self._empty_zone_fraud_cells = _grid_overlay.fraud_empty_cells_for_algorithm(
                 self._fraud_empty_cells_algorithm,
                 occupied,
@@ -1319,6 +1523,9 @@ class GridWindow:
                 placed,
                 fraud_empty_cells_tiling_n=self._fraud_empty_cells_tiling_n,
             )
+            if getattr(self, "_perf_in_draw", False):
+                self._perf_fraud_recalc_ms += time.perf_counter() - fr0
+                self._perf_fraud_recalc_n += 1
         return (row, col) in self._empty_zone_fraud_cells
 
     def _cell_is_vacant_manual_suppress_eligible(self, row: int, col: int) -> bool:
@@ -1347,27 +1554,33 @@ class GridWindow:
 
     def _compute_empty_zone_count(self) -> Optional[int]:
         """空置有效格数：算法在 ``analysis.grid_overlay``，此处仅聚合 UI 状态并触发计算。"""
-        occupied = (
-            self._occupied_for_draw
-            if self._occupied_for_draw is not None
-            else self._build_occupied()
-        )
-        d = _grid_overlay.compute_overlay_vacant_dict(
-            occupied=occupied,
-            max_box_id=self._empty_zone_max_box_id(),
-            vacant_manual_suppress=set(self._vacant_manual_suppress),
-            board_snapshot=self._vacant_scan_context_snapshot(),
-            placed_items=self._fraud_placed_items_for_overlay(),
-            fraud_empty_cells_algorithm=self._fraud_empty_cells_algorithm,
-            fraud_empty_cells_tiling_n=self._fraud_empty_cells_tiling_n,
-        )
-        g = d.get("geometric")
-        if g is not None:
-            try:
-                return int(g)
-            except (TypeError, ValueError):
-                return None
-        return d.get("effective_count")
+        _t0 = time.perf_counter() if getattr(self, "_perf_in_draw", False) else None
+        try:
+            occupied = (
+                self._occupied_for_draw
+                if self._occupied_for_draw is not None
+                else self._build_occupied()
+            )
+            d = _grid_overlay.compute_overlay_vacant_dict(
+                occupied=occupied,
+                max_box_id=self._empty_zone_max_box_id(),
+                vacant_manual_suppress=set(self._vacant_manual_suppress),
+                board_snapshot=self._vacant_scan_context_snapshot(),
+                placed_items=self._fraud_placed_items_for_overlay(),
+                fraud_empty_cells_algorithm=self._fraud_empty_cells_algorithm,
+                fraud_empty_cells_tiling_n=self._fraud_empty_cells_tiling_n,
+            )
+            g = d.get("geometric")
+            if g is not None:
+                try:
+                    return int(g)
+                except (TypeError, ValueError):
+                    return None
+            return d.get("effective_count")
+        finally:
+            if _t0 is not None:
+                self._perf_vacant_count_ms += time.perf_counter() - _t0
+                self._perf_vacant_count_n += 1
 
     def _create_phantom(
         self,
@@ -1784,25 +1997,34 @@ class GridWindow:
         self, raw_pricing: Optional[Dict[str, Any]] = None
     ) -> dict:
         """不含 ``pricing`` 的画板快照：供定价、单件估价与写盘复用。"""
-        gs = game_state_to_json(self.state)
-        if raw_pricing is None:
-            raw_pricing = build_raw_pricing_dict(
-                map_id=int(self.state.map_id or 0),
-                skill_logs=list(self._skill_logs),
-                snapshot_path_hint=self._snapshot_path,
-            )
-        self._last_raw_pricing = raw_pricing
-        occ_infer = self._occupied_cells_for_overlay_infer()
-        return {
-            "game_state": gs,
-            "skill_logs": list(self._skill_logs),
-            "current_round": int(self.state.current_round or 1),
-            "map_id": int(self.state.map_id or 0),
-            "raw_pricing": raw_pricing,
-            "grid_overlay": self._grid_overlay_to_json(
-                raw_pricing, occupied_cells=occ_infer
-            ),
-        }
+        _t0 = time.perf_counter() if getattr(self, "_perf_in_draw", False) else None
+        try:
+            gs = game_state_to_json(self.state)
+            if raw_pricing is None:
+                raw_pricing = build_raw_pricing_dict(
+                    map_id=int(self.state.map_id or 0),
+                    skill_logs=list(self._skill_logs),
+                    snapshot_path_hint=self._snapshot_path,
+                    price_avg_infer_max_item_count=self._price_avg_infer_max_item_count,
+                    grid_avg_infer_max_item_count=self._grid_avg_infer_max_item_count,
+                    grid_avg_infer_max_grid_count=self._grid_avg_infer_max_grid_count,
+                )
+            self._last_raw_pricing = raw_pricing
+            occ_infer = self._occupied_cells_for_overlay_infer()
+            return {
+                "game_state": gs,
+                "skill_logs": list(self._skill_logs),
+                "current_round": int(self.state.current_round or 1),
+                "map_id": int(self.state.map_id or 0),
+                "raw_pricing": raw_pricing,
+                "grid_overlay": self._grid_overlay_to_json(
+                    raw_pricing, occupied_cells=occ_infer
+                ),
+            }
+        finally:
+            if _t0 is not None:
+                self._perf_make_snapshot_ms += time.perf_counter() - _t0
+                self._perf_make_snapshot_n += 1
 
     def _build_pricing_snapshot_dict(self) -> dict:
         return build_snapshot_pricing_dict(
@@ -2048,12 +2270,24 @@ class GridWindow:
 
         ``write_snapshot`` 仅在日志 tail 发现新事件后的主线程刷新中置真，避免本地操作每次落盘。
         """
+        perf = self._perf_log_mode != "off"
+        if perf:
+            tr0 = time.perf_counter()
+            snap_ms = 0.0
+        if perf:
+            _rp0 = time.perf_counter()
         rp = build_raw_pricing_dict(
             map_id=int(self.state.map_id or 0),
             skill_logs=list(self._skill_logs),
             snapshot_path_hint=self._snapshot_path,
+            price_avg_infer_max_item_count=self._price_avg_infer_max_item_count,
+            grid_avg_infer_max_item_count=self._grid_avg_infer_max_item_count,
+            grid_avg_infer_max_grid_count=self._grid_avg_infer_max_grid_count,
         )
         self._last_raw_pricing = rp
+        if perf:
+            raw_pricing_ms = (time.perf_counter() - _rp0) * 1000.0
+            _rc0 = time.perf_counter()
         reconcile_overlay_after_refresh(
             self.state,
             self._manual_shapes,
@@ -2061,15 +2295,46 @@ class GridWindow:
             self._phantom_quality_pref,
             raw_pricing=rp,
         )
+        if perf:
+            reconcile_ms = (time.perf_counter() - _rc0) * 1000.0
         self._sanitize_unknown_quality_prefs()
         self._sanitize_phantom_quality_prefs()
         self._validate_manual_confirmations()
         self._sanitize_infer_suppress_uids()
 
+        if perf:
+            _dr0 = time.perf_counter()
         self._draw()
+        if perf:
+            draw_ms = (time.perf_counter() - _dr0) * 1000.0
         if write_snapshot and self._snapshot_path:
+            if perf:
+                _sn0 = time.perf_counter()
             with self._lock:
                 self._emit_board_snapshot_unlocked(rp)
+            if perf:
+                snap_ms = (time.perf_counter() - _sn0) * 1000.0
+        elif perf:
+            snap_ms = 0.0
+
+        if perf:
+            total_ms = (time.perf_counter() - tr0) * 1000.0
+            emit = self._perf_log_mode == "all" or _grid_perf_should_emit_auto_refresh(
+                total_ms,
+                raw_pricing_ms=raw_pricing_ms,
+                reconcile_ms=reconcile_ms,
+                draw_ms=draw_ms,
+                snapshot_ms=snap_ms,
+            )
+            if emit:
+                _grid_perf_append(
+                    self._perf_log_path,
+                    (
+                        f"[refresh] total_ms={total_ms:.1f} write_snapshot={write_snapshot} "
+                        f"raw_pricing_ms={raw_pricing_ms:.1f} reconcile_ms={reconcile_ms:.1f} "
+                        f"draw_ms={draw_ms:.1f} emit_snapshot_ms={snap_ms:.1f}"
+                    ),
+                )
 
     def _sanitize_infer_suppress_uids(self) -> None:
         """物品已消失或日志已锁定形状时，不再保留推算抑制。"""
@@ -2104,7 +2369,8 @@ class GridWindow:
         ]
         if n_empty is not None:
             lines.append(
-                f"提示：空置 {n_empty} 格（几何/200009 与橘红层同源）现显示在顶栏「地图…未知」后的「空置」；"
+                f"提示：空置 {n_empty} 格（几何/200009 与橘红层同源）见顶栏「地图…」行末"
+                "「当前画板…=物品占位…+空置…」中的空置项；"
                 "定价 ``pricing.vacant`` 与 ``grid_overlay.vacant`` / ``vacant_dict_from_board_snapshot`` 一致。"
             )
         else:
@@ -2253,7 +2519,7 @@ class GridWindow:
         lines.extend(
             [
                 f"U = ¥{u_int:,.0f} / 格（pricing.early_vacant_unit_from_scan）",
-                f"底栏地图行中「空置」格数与 pricing.vacant 一致，当前 V = {v_eff}。",
+                f"顶栏地图行「当前画板…=…+空置…」中的空置格数与 pricing.vacant 一致，当前 V = {v_eff}。",
             ]
         )
         if p.get("ahmad_pricing_active"):
@@ -2363,16 +2629,20 @@ class GridWindow:
                 self._last_raw_pricing = rp
         st = rp.get("event_stats") if isinstance(rp, dict) else None
         if not isinstance(st, dict):
-            return "当局数据（event_stats）\n（暂无数据）"
+            return "当局数据\n（暂无 event_stats）"
 
-        lines: List[str] = ["当局数据（event_stats）"]
+        lines: List[str] = ["当局数据（技能/地图公告汇总）"]
         for k, v in st.items():
             if v is None:
                 continue
+            ks = str(k)
+            label = _event_stats_key_label_zh(ks)
+            head = f"{label}（{ks}）" if label != ks else ks
             if isinstance(v, float):
-                lines.append(f"{k}: {v:g}")
+                # 避免 ``:g`` 默认约 6 位有效数字把如 24878.125 显示成 24878.1
+                lines.append(f"{head}: {v!r}")
             else:
-                lines.append(f"{k}: {v}")
+                lines.append(f"{head}: {v}")
         if len(lines) == 1:
             lines.append("（暂无非空字段）")
         return "\n".join(lines)
@@ -2402,13 +2672,14 @@ class GridWindow:
         if hasattr(self, "_map_merged_stats_label"):
             _tc, _ic, q5c, q5g, q6c, q6g, unk_cells = self._stats_from_merged_items(base)
             mid = int(self.state.map_id or 0)
+            board_cells = int(_tc) + int(vac_n)
             self._map_merged_stats_label.config(
                 text=(
                     f"地图 {mid}   "
                     f"金 {q5c}件·{q5g}格   "
                     f"红 {q6c}件·{q6g}格   "
                     f"未知 {unk_cells}格   "
-                    f"空置 {vac_n}格"
+                    f"当前画板{board_cells}格=物品占位{_tc}格+空置{vac_n}格"
                 )
             )
         pts_bar = _display_position_estimate_pts(p)
@@ -3116,144 +3387,238 @@ class GridWindow:
     # ── 绘制 ──────────────────────────────────────────────────────────────
 
     def _draw(self) -> None:
+        perf = self._perf_log_mode != "off"
+        if perf:
+            t_draw_start = time.perf_counter()
+            self._perf_in_draw = True
+            self._perf_exclude_calls = 0
+            self._perf_fraud_recalc_ms = 0.0
+            self._perf_fraud_recalc_n = 0
+            self._perf_query_grid_ms = 0.0
+            self._perf_query_grid_n = 0
+            self._perf_make_snapshot_ms = 0.0
+            self._perf_make_snapshot_n = 0
+            self._perf_vacant_count_ms = 0.0
+            self._perf_vacant_count_n = 0
+            self._perf_fraud_placed_overlay_calls = 0
+        sync_ms = del_occ_ms = bg_ms = ez_ms = items_ms = header_ms = 0.0
+
         # 手动画幽灵预览框时：占位与推断输入未变，不必每帧重算 raw_pricing + infer_shapes
         phantom_preview = self._phantom_draw_state is not None
-        if not phantom_preview:
-            self._sync_infer_shapes_from_analysis()
-        canvas = self.canvas
-        canvas.delete("all")
+        try:
+            if not phantom_preview:
+                if perf:
+                    _ts0 = time.perf_counter()
+                self._sync_infer_shapes_from_analysis()
+            if perf:
+                sync_ms = (time.perf_counter() - _ts0) * 1000.0
+            canvas = self.canvas
+            self._board_snapshot_for_item_price_draw = None
+            if perf:
+                _cd0 = time.perf_counter()
+            canvas.delete("all")
 
-        # 构建共享占位格缓存，供本次绘制所有 _compute_max_size 调用复用
-        self._occupied_for_draw = self._build_occupied()
+            # 构建共享占位格缓存，供本次绘制所有 _compute_max_size 调用复用
+            self._occupied_for_draw = self._build_occupied()
+            if perf:
+                del_occ_ms = (time.perf_counter() - _cd0) * 1000.0
 
-        # ── 1. 空格子背景 + BoxId 标注 ──────────────────────────────────
-        for row in range(self.vis_rows):
-            for col in range(GRID_COLS):
-                x1, y1 = col * CELL_W, row * CELL_H
-                x2, y2 = x1 + CELL_W, y1 + CELL_H
-                canvas.create_rectangle(
-                    x1,
-                    y1,
-                    x2,
-                    y2,
-                    fill=EMPTY_BG,
-                    outline=GRID_LINE,
-                    width=1,
-                )
-                bid = row * GRID_COLS + col
-                canvas.create_text(
-                    x1 + 4,
-                    y1 + 3,
-                    text=str(bid),
-                    anchor="nw",
-                    fill="#404050",
-                    font=("Consolas", 7),
-                )
-
-        # ── 1.5  空置候选区（橘红半透明；诈骗格剔除与计数逻辑一致） ─────
-        max_box_id = self._empty_zone_max_box_id()
-        if max_box_id >= 0:
-            vac_limit = min(max_box_id, GRID_COLS * GRID_ROWS - 1)
-            apply_fraud_cells = _grid_overlay.fraud_zone_cell_exclusion_enabled(
-                self._vacant_scan_context_snapshot(),
-                self._occupied_for_draw,
-                vac_limit,
-            )
-            for bid in range(vac_limit + 1):
-                row = bid // GRID_COLS
-                col = bid % GRID_COLS
-                if (row, col) not in self._occupied_for_draw:
-                    if (row, col) in self._vacant_manual_suppress:
-                        continue
-                    if self._exclude_from_empty_zone_estimate(
-                        row,
-                        col,
-                        self._occupied_for_draw,
-                        vac_limit,
-                        apply_fraud_filter=apply_fraud_cells,
-                    ):
-                        continue
-                    x1 = col * CELL_W
-                    y1 = row * CELL_H
+            # ── 1. 空格子背景 + BoxId 标注 ──────────────────────────────────
+            if perf:
+                _bg0 = time.perf_counter()
+            for row in range(self.vis_rows):
+                for col in range(GRID_COLS):
+                    x1, y1 = col * CELL_W, row * CELL_H
+                    x2, y2 = x1 + CELL_W, y1 + CELL_H
                     canvas.create_rectangle(
                         x1,
                         y1,
-                        x1 + CELL_W,
-                        y1 + CELL_H,
-                        fill=EMPTY_ZONE_COLOR,
-                        stipple=EMPTY_ZONE_STIPPLE,
-                        outline="",
+                        x2,
+                        y2,
+                        fill=EMPTY_BG,
+                        outline=GRID_LINE,
+                        width=1,
                     )
+                    bid = row * GRID_COLS + col
+                    canvas.create_text(
+                        x1 + 4,
+                        y1 + 3,
+                        text=str(bid),
+                        anchor="nw",
+                        fill="#404050",
+                        font=("Consolas", 7),
+                    )
+            if perf:
+                bg_ms = (time.perf_counter() - _bg0) * 1000.0
 
-        # ── 2. 物品格子（log 数据）────────────────────────────────────────
-        for uid, k in self.state.items.items():
-            if k.box_id is None:
-                continue
-            self._draw_item(uid, k)
+            # ── 1.5  空置候选区（橘红半透明；诈骗格剔除与计数逻辑一致） ─────
+            if perf:
+                _ez0 = time.perf_counter()
+            max_box_id = self._empty_zone_max_box_id()
+            if max_box_id >= 0:
+                vac_limit = min(max_box_id, GRID_COLS * GRID_ROWS - 1)
+                apply_fraud_cells = _grid_overlay.fraud_zone_cell_exclusion_enabled(
+                    self._vacant_scan_context_snapshot(),
+                    self._occupied_for_draw,
+                    vac_limit,
+                )
+                for bid in range(vac_limit + 1):
+                    row = bid // GRID_COLS
+                    col = bid % GRID_COLS
+                    if (row, col) not in self._occupied_for_draw:
+                        if (row, col) in self._vacant_manual_suppress:
+                            continue
+                        if self._exclude_from_empty_zone_estimate(
+                            row,
+                            col,
+                            self._occupied_for_draw,
+                            vac_limit,
+                            apply_fraud_filter=apply_fraud_cells,
+                        ):
+                            continue
+                        x1 = col * CELL_W
+                        y1 = row * CELL_H
+                        canvas.create_rectangle(
+                            x1,
+                            y1,
+                            x1 + CELL_W,
+                            y1 + CELL_H,
+                            fill=EMPTY_ZONE_COLOR,
+                            stipple=EMPTY_ZONE_STIPPLE,
+                            outline="",
+                        )
+            if perf:
+                ez_ms = (time.perf_counter() - _ez0) * 1000.0
 
-        # ── 3. 幽灵物品格子（手动画框）────────────────────────────────────
-        for phid, pk in self._phantom_items.items():
-            if phid in self._manual_shapes:
-                self._draw_item(phid, pk)
-
-        # ── 4. 正在拖拽画框的预览虚线框 ────────────────────────────────────
-        if self._phantom_draw_state:
-            pds = self._phantom_draw_state
-            sr, sc = pds["start_row"], pds["start_col"]
-            cr, cc = pds["cur_row"], pds["cur_col"]
-            min_r, max_r = min(sr, cr), max(sr, cr)
-            min_c, max_c = min(sc, cc), max(sc, cc)
-            preview_w = max_c - min_c + 1
-            preview_h = max_r - min_r + 1
-            preview_invalid = self._rect_overlaps_occupied(
-                min_r,
-                min_c,
-                preview_w,
-                preview_h,
-                occupied=self._occupied_for_draw,
-            )
-            if preview_invalid:
-                preview_color = "#cc4444"
-            elif pds.get("phantom_infer"):
-                preview_color = PHANTOM_BORDER
-            elif pds.get("default_quality") == 6:
-                preview_color = PHANTOM_PINK_BORDER
-            else:
-                preview_color = PHANTOM_GOLD_BORDER
-            px1 = min_c * CELL_W + 1
-            py1 = min_r * CELL_H + 1
-            px2 = (max_c + 1) * CELL_W - 1
-            py2 = (max_r + 1) * CELL_H - 1
-            canvas.create_rectangle(
-                px1,
-                py1,
-                px2,
-                py2,
-                fill="",
-                outline=preview_color,
-                width=2,
-                dash=(6, 3),
-            )
-            # 显示将要创建的大小
-            canvas.create_text(
-                (px1 + px2) / 2,
-                (py1 + py2) / 2,
-                text=f"{preview_w}x{preview_h}" + (" 重叠" if preview_invalid else ""),
-                fill=preview_color,
-                font=("微软雅黑", 10, "bold"),
+            # 整盘快照只建一次：各格 ``_display_price_value`` 共用（原先每格各建一次导致严重卡顿）。
+            self._board_snapshot_for_item_price_draw = self._make_board_snapshot(
+                raw_pricing=self._last_raw_pricing
             )
 
-        # 拖拽中只重绘画布：顶栏定价/信息栏依赖完整快照，每帧算会卡顿；松手后 _refresh 会更新
-        if not phantom_preview and not self._drag_state:
-            if hasattr(self, "_est_label_red"):
-                self._update_vacant_estimate_bar()
-            if hasattr(self, "_total_label"):
-                self._update_total_label()
-            if hasattr(self, "_info_text"):
-                self._info_text.set(self._info_summary_text())
+            # ── 2. 物品格子（log 数据）────────────────────────────────────────
+            if perf:
+                _it0 = time.perf_counter()
+            for uid, k in self.state.items.items():
+                if k.box_id is None:
+                    continue
+                self._draw_item(uid, k)
 
-        # 绘制完成，释放缓存
-        self._occupied_for_draw = None
+            # ── 3. 幽灵物品格子（手动画框）────────────────────────────────────
+            for phid, pk in self._phantom_items.items():
+                if phid in self._manual_shapes:
+                    self._draw_item(phid, pk)
+            if perf:
+                items_ms = (time.perf_counter() - _it0) * 1000.0
+
+            # ── 4. 正在拖拽画框的预览虚线框 ────────────────────────────────────
+            if self._phantom_draw_state:
+                pds = self._phantom_draw_state
+                sr, sc = pds["start_row"], pds["start_col"]
+                cr, cc = pds["cur_row"], pds["cur_col"]
+                min_r, max_r = min(sr, cr), max(sr, cr)
+                min_c, max_c = min(sc, cc), max(sc, cc)
+                preview_w = max_c - min_c + 1
+                preview_h = max_r - min_r + 1
+                preview_invalid = self._rect_overlaps_occupied(
+                    min_r,
+                    min_c,
+                    preview_w,
+                    preview_h,
+                    occupied=self._occupied_for_draw,
+                )
+                if preview_invalid:
+                    preview_color = "#cc4444"
+                elif pds.get("phantom_infer"):
+                    preview_color = PHANTOM_BORDER
+                elif pds.get("default_quality") == 6:
+                    preview_color = PHANTOM_PINK_BORDER
+                else:
+                    preview_color = PHANTOM_GOLD_BORDER
+                px1 = min_c * CELL_W + 1
+                py1 = min_r * CELL_H + 1
+                px2 = (max_c + 1) * CELL_W - 1
+                py2 = (max_r + 1) * CELL_H - 1
+                canvas.create_rectangle(
+                    px1,
+                    py1,
+                    px2,
+                    py2,
+                    fill="",
+                    outline=preview_color,
+                    width=2,
+                    dash=(6, 3),
+                )
+                # 显示将要创建的大小
+                canvas.create_text(
+                    (px1 + px2) / 2,
+                    (py1 + py2) / 2,
+                    text=f"{preview_w}x{preview_h}" + (" 重叠" if preview_invalid else ""),
+                    fill=preview_color,
+                    font=("微软雅黑", 10, "bold"),
+                )
+
+            # 拖拽中只重绘画布：顶栏定价/信息栏依赖完整快照，每帧算会卡顿；松手后 _refresh 会更新
+            if not phantom_preview and not self._drag_state:
+                if perf:
+                    _hd0 = time.perf_counter()
+                if hasattr(self, "_est_label_red"):
+                    self._update_vacant_estimate_bar()
+                if hasattr(self, "_total_label"):
+                    self._update_total_label()
+                if hasattr(self, "_info_text"):
+                    self._info_text.set(self._info_summary_text())
+                if perf:
+                    header_ms = (time.perf_counter() - _hd0) * 1000.0
+        finally:
+            # 绘制完成，释放缓存
+            self._occupied_for_draw = None
+            self._board_snapshot_for_item_price_draw = None
+            if perf:
+                self._perf_in_draw = False
+                total_ms = (time.perf_counter() - t_draw_start) * 1000.0
+                fraud_wall_ms = self._perf_fraud_recalc_ms * 1000.0
+                query_wall_ms = self._perf_query_grid_ms * 1000.0
+                snap_wall_ms = self._perf_make_snapshot_ms * 1000.0
+                vacant_wall_ms = self._perf_vacant_count_ms * 1000.0
+                emit = self._perf_log_mode == "all" or _grid_perf_should_emit_auto_draw(
+                    total_ms,
+                    sync_infer_ms=sync_ms,
+                    build_occ_ms=del_occ_ms,
+                    bg_cells_ms=bg_ms,
+                    empty_zone_ms=ez_ms,
+                    items_draw_ms=items_ms,
+                    header_ms=header_ms,
+                    fraud_recalc_ms=fraud_wall_ms,
+                    query_grid_ms=query_wall_ms,
+                    make_snapshot_ms=snap_wall_ms,
+                    vacant_count_ms=vacant_wall_ms,
+                )
+                if emit:
+                    n_items = sum(
+                        1 for u, kk in self.state.items.items() if kk.box_id is not None
+                    )
+                    n_ph = sum(
+                        1 for pid in self._phantom_items if pid in self._manual_shapes
+                    )
+                    algo = self._fraud_empty_cells_algorithm
+                    _grid_perf_append(
+                        self._perf_log_path,
+                        (
+                            f"[draw] total_ms={total_ms:.1f} phantom_preview={phantom_preview} "
+                            f"drag_state={bool(self._drag_state)} "
+                            f"sync_infer_ms={sync_ms:.1f} canvas_delete_build_occ_ms={del_occ_ms:.1f} "
+                            f"bg_cells_ms={bg_ms:.1f} empty_zone_ms={ez_ms:.1f} "
+                            f"items_ms={items_ms:.1f} n_log_items_drawn={n_items} n_phantom_drawn={n_ph} "
+                            f"header_ms={header_ms:.1f} "
+                            f"fraud_algo={algo!s} fraud_recalc_ms={fraud_wall_ms:.1f} "
+                            f"fraud_recalc_n={self._perf_fraud_recalc_n} "
+                            f"exclude_calls={self._perf_exclude_calls} "
+                            f"fraud_placed_overlay_calls={self._perf_fraud_placed_overlay_calls} "
+                            f"query_item_ms={query_wall_ms:.1f} query_item_n={self._perf_query_grid_n} "
+                            f"make_board_snapshot_ms={snap_wall_ms:.1f} make_board_snapshot_n={self._perf_make_snapshot_n} "
+                            f"vacant_dict_ms={vacant_wall_ms:.1f} vacant_dict_n={self._perf_vacant_count_n}"
+                        ),
+                    )
 
     def _draw_item(self, uid: str, k: ItemKnowledge) -> None:
         canvas = self.canvas
