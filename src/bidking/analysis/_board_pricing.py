@@ -3,7 +3,7 @@
 画板快照定价：由 ``game_state.items`` 与 ``grid_overlay`` 合并后的有效物品表汇总总价、
 权重占位与空置格，再结合扫描推断与地图 CSV 格均价给出 ``points`` / ``est_*``。
 
-``items`` 合并优先使用快照 ``grid_overlay["merged_items_dict"]``（见 :func:`grid_overlay.merged_items_dict_from_snapshot`），否则由 :func:`grid_overlay.merged_items_dict` 计算（含 ``infer_shapes`` 几何补全；推断外形的计价仍按未知轮廓加权）。
+``items`` 合并优先使用快照 ``grid_overlay["merged_items_dict"]``（见 :func:`grid_overlay.merged_items_dict_from_snapshot`），否则由 :func:`grid_overlay.merged_items_dict` 计算（含 ``infer_shapes`` 几何补全；推算写入的 ``shape``（如 1×1→11）参与 CSV 轮廓匹配，避免「仅知档位」却按全轮廓候选加权）。
 
 不再维护独立的「艾莎 bid」分支；策略层直接消费 ``pricing.points`` / ``points_floor`` /
 ``points_ceiling``。
@@ -277,9 +277,11 @@ def _parse_shape_int(shape: Any) -> Optional[int]:
 
 
 def _pricing_shape_int_for_csv(it: Dict[str, Any]) -> Optional[int]:
-    """推断外形仅用于几何占位；CSV 计价匹配仍按未知外形做多候选加权。"""
-    if it.get("_overlay_shape_origin") == "infer":
-        return None
+    """合并行上的 ``shape`` 用于 CSV 轮廓过滤（含 ``_overlay_shape_origin == "infer"`` 的推算行）。
+
+    推算轮廓与几何占位同源（``w×h`` 编码为 ``shape``）；若此处再置 ``None``，则已知档位
+    （如 Q6）会误匹配价表里**所有**同档外形，加权期望被人为抬高。无 ``shape`` 时仍为未知轮廓。
+    """
     return _parse_shape_int(it.get("shape"))
 
 

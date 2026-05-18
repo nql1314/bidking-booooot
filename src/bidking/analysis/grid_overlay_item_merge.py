@@ -50,6 +50,49 @@ def _shape_int_from_wh(w: int, h: int) -> Optional[int]:
     return None
 
 
+def apply_unknown_cell_quality_pref_to_items(
+    items: Dict[str, Any], overlay: Any
+) -> None:
+    """
+    将 ``grid_overlay.unknown_cell_quality_pref`` 写入合并表 ``quality``。
+
+    与画板弹窗「候选品质」下拉一致：仅日志侧品质仍为空、且未精确价锁定 CID 时生效；
+    须与 ``excluded_qualities`` 一致。早于 :func:`apply_manual_confirm_projection` 调用，
+    以便双击确认候选后仍以 CSV 行为准覆盖手选档位。
+    """
+    if not isinstance(overlay, dict):
+        return
+    raw = overlay.get("unknown_cell_quality_pref")
+    if not isinstance(raw, dict) or not raw:
+        return
+    for uid_raw, qv in raw.items():
+        uid_s = str(uid_raw)
+        row = items.get(uid_s)
+        if not isinstance(row, dict):
+            continue
+        if row.get("quality") is not None:
+            continue
+        cid = row.get("item_cid")
+        if cid is not None and row.get("price") is not None:
+            continue
+        q: Optional[int] = None
+        if isinstance(qv, int) and 1 <= qv <= 6:
+            q = qv
+        else:
+            try:
+                qi = int(qv)
+            except (TypeError, ValueError):
+                continue
+            if 1 <= qi <= 6:
+                q = qi
+        if q is None:
+            continue
+        ex = row.get("excluded_qualities")
+        if isinstance(ex, (list, tuple, set)) and q in ex:
+            continue
+        row["quality"] = q
+
+
 def apply_manual_confirm_projection(
     items: Dict[str, Any],
     csv_index: Dict[int, Any],
@@ -174,7 +217,7 @@ def apply_phantom_default_quality_for_phantom_rows(items: Dict[str, Any], overla
 
 
 def sync_phantom_row_quality_from_overlay(items: Dict[str, Any], overlay: Any) -> None:
-    """``phantom_quality_pref`` + 缺省 Q5；须在 ``manual_confirm_projection`` 之前调用。"""
+    """``phantom_quality_pref`` + 缺省 Q5；须在 ``apply_unknown_cell_quality_pref_to_items`` 与 ``apply_manual_confirm_projection`` 之前调用。"""
     if not isinstance(overlay, dict):
         return
     apply_phantom_quality_pref_to_items(items, overlay.get("phantom_quality_pref"))
@@ -187,8 +230,9 @@ def merged_items_dict(board_snapshot: Dict[str, Any]) -> Dict[str, Any]:
 
     ``grid_overlay.infer_shapes`` 会写入几何用 ``shape``，并标记 ``_overlay_shape_origin == "infer"``；
     ``phantom_quality_pref`` 会把显式 Q1–Q6 写入幽灵行的 ``quality``（与画板一致）；
+    ``unknown_cell_quality_pref`` 将弹窗「候选品质」写入日志行 ``quality``（与画板一致）；
     缺省金笔且无推断偏好键时补 **Q5**（与 ``GridWindow._phantom_effective_quality`` 一致）。
-    定价侧对推断外形按未知轮廓做多候选加权（见 :mod:`_board_pricing`）。
+    定价侧将该 ``shape`` 与手动画框、日志外形一样参与 CSV 轮廓匹配（见 :func:`_board_pricing._pricing_shape_int_for_csv`）。
     """
     gs = board_snapshot.get("game_state") or {}
     raw = gs.get("items") if isinstance(gs, dict) else None
@@ -214,6 +258,7 @@ def merged_items_dict(board_snapshot: Dict[str, Any]) -> Dict[str, Any]:
         apply_manual_shapes_to_items(items, overlay.get("manual_shapes"))
         apply_infer_shapes_to_items(items, overlay.get("infer_shapes"))
         sync_phantom_row_quality_from_overlay(items, overlay)
+        apply_unknown_cell_quality_pref_to_items(items, overlay)
     csv_index, _csv_items = _load_item_prices_db()
     apply_manual_confirm_projection(items, csv_index)
     return items
@@ -223,8 +268,8 @@ def merged_items_dict_from_snapshot(board_snapshot: Dict[str, Any]) -> Dict[str,
     """
     优先使用 ``grid_overlay["merged_items_dict"]``（与 UI 写出一致），否则调用 :func:`merged_items_dict`。
 
-    命中缓存时仍会按当前 ``phantom_items`` / ``phantom_quality_pref`` **重写幽灵 ``quality``**，
-    避免磁盘里旧的 ``merged_items_dict`` 与偏好脱节。
+    命中缓存时仍会按当前 ``phantom_quality_pref``、``unknown_cell_quality_pref`` 刷新 ``quality``，
+    并再次执行 ``manual_confirm_projection``（与全量合并路径对齐）。
     """
     overlay = board_snapshot.get("grid_overlay")
     if isinstance(overlay, dict) and "merged_items_dict" in overlay:
@@ -234,5 +279,8 @@ def merged_items_dict_from_snapshot(board_snapshot: Dict[str, Any]) -> Dict[str,
             for k, v in cached.items():
                 out[str(k)] = dict(v) if isinstance(v, dict) else v
             sync_phantom_row_quality_from_overlay(out, overlay)
+            apply_unknown_cell_quality_pref_to_items(out, overlay)
+            csv_index, _ = _load_item_prices_db()
+            apply_manual_confirm_projection(out, csv_index)
             return out
     return merged_items_dict(board_snapshot)
