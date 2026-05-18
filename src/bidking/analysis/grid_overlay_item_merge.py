@@ -118,6 +118,12 @@ def apply_manual_confirm_projection(
 
 
 def apply_manual_shapes_to_items(items: Dict[str, Any], manual_shapes: Any) -> None:
+    """
+    ``manual_shapes`` 与 ``infer_shapes`` 同格式 ``[w,h,dc,dr]``。
+
+    凡在 ``manual_shapes`` 中有条目的 uid，一律写入 ``shape=w*10+h`` 并标记 ``_overlay_shape_origin="manual"``，
+    **覆盖**日志已有外形与先前推断外形，与画板拖框后 ``_manual_shapes`` 优先于推算一致。
+    """
     if not isinstance(manual_shapes, dict):
         return
     for uid, entry in manual_shapes.items():
@@ -130,7 +136,7 @@ def apply_manual_shapes_to_items(items: Dict[str, Any], manual_shapes: Any) -> N
         if sh is None:
             continue
         row = items.get(uid_s)
-        if isinstance(row, dict) and row.get("shape") is None:
+        if isinstance(row, dict):
             row["shape"] = sh
             row["_overlay_shape_origin"] = "manual"
 
@@ -264,20 +270,163 @@ def merged_items_dict(board_snapshot: Dict[str, Any]) -> Dict[str, Any]:
     return items
 
 
+def _snapshot_item_row_keys_from_game() -> Tuple[str, ...]:
+    """与 :func:`bidking.analysis.snapshot.item_knowledge_to_json` 字段一致（合并表日志行基底）。"""
+    return (
+        "uid",
+        "box_id",
+        "box_id_confirmed",
+        "shape",
+        "quality",
+        "categories",
+        "categories_any",
+        "item_cid",
+        "price",
+        "manual_confirm_item_id",
+        "excluded_categories",
+        "excluded_qualities",
+    )
+
+
+def _copy_json_field(val: Any) -> Any:
+    """浅拷贝列表等，避免与 ``game_state`` 共享可变引用。"""
+    if isinstance(val, list):
+        return list(val)
+    if isinstance(val, dict):
+        return dict(val)
+    return val
+
+
+def _patch_cached_merged_log_rows_from_game_items(
+    out: Dict[str, Any], gs_items: Any
+) -> bool:
+    """
+    将当前 ``game_state.items`` 写回缓存合并表中的日志行，再跑 overlay 管线。
+
+    否则插件/桥接只刷新了 ``items``、未重写 ``merged_items_dict`` 时，会出现推断外形/品质/确认 id
+    与日志脱节；亦无法反映 ``infer_shapes`` 随局面重算后的变化（旧缓存行上 ``shape`` 已非空，
+    仅靠 :func:`apply_infer_shapes_to_items` 不会更新）。
+    """
+    if not isinstance(gs_items, dict) or not isinstance(out, dict):
+        return True
+    keys = _snapshot_item_row_keys_from_game()
+    for uid_raw, grow in gs_items.items():
+        if not isinstance(grow, dict):
+            continue
+        uid_s = str(uid_raw)
+        row = out.get(uid_s)
+        if not isinstance(row, dict):
+            return False
+        for k in keys:
+            row[k] = _copy_json_field(grow.get(k))
+        if row.get("shape") is not None:
+            row["_overlay_shape_origin"] = "game"
+        else:
+            row.pop("_overlay_shape_origin", None)
+    return True
+
+
+def _patch_cached_merged_phantom_rows_from_overlay(
+    out: Dict[str, Any], overlay: Any
+) -> bool:
+    """
+    用手画幽灵在 ``grid_overlay.phantom_items`` 中的当前 JSON 覆盖缓存里对应行，
+    避免只改了幽灵锚格/外形而 ``merged_items_dict`` 未重导时仍用旧幽灵基底。
+    """
+    if not isinstance(overlay, dict) or not isinstance(out, dict):
+        return True
+    ph = overlay.get("phantom_items")
+    if not isinstance(ph, dict):
+        return True
+    keys = _snapshot_item_row_keys_from_game()
+    for pid, it in ph.items():
+        ps = str(pid)
+        if not isinstance(it, dict):
+            continue
+        row = out.get(ps)
+        if not isinstance(row, dict):
+            return False
+        for k in keys:
+            row[k] = _copy_json_field(it.get(k))
+        if row.get("shape") is not None:
+            row["_overlay_shape_origin"] = "game"
+        else:
+            row.pop("_overlay_shape_origin", None)
+    return True
+
+
+def _merged_items_dict_cache_phantom_set_stale(overlay: Any, out: Dict[str, Any]) -> bool:
+    """``phantom_items`` 显式给出且 uid 集与缓存合并表不一致时须全量合并。"""
+    if not isinstance(overlay, dict) or not isinstance(out, dict):
+        return False
+    if "phantom_items" not in overlay:
+        return False
+    ph = overlay.get("phantom_items")
+    if not isinstance(ph, dict):
+        return False
+    ph_ids = {str(k) for k in ph}
+    out_ph = {str(k) for k in out if str(k).startswith("phantom_")}
+    if ph_ids != out_ph:
+        return True
+    for pid in ph_ids:
+        if pid not in out:
+            return True
+    return False
+
+
+def _merged_items_dict_cache_orphan_manual_shape(
+    out: Dict[str, Any], manual_shapes: Any
+) -> bool:
+    """缓存行曾标为手动画框，但当前 ``manual_shapes`` 已无该 uid（用户撤销拖框）：须全量重合并。"""
+    if not isinstance(out, dict):
+        return False
+    manual_map = manual_shapes if isinstance(manual_shapes, dict) else {}
+    uids_m = {str(x) for x in manual_map}
+    for uid_s, row in out.items():
+        if (
+            isinstance(row, dict)
+            and row.get("_overlay_shape_origin") == "manual"
+            and str(uid_s) not in uids_m
+        ):
+            return True
+    return False
+
+
 def merged_items_dict_from_snapshot(board_snapshot: Dict[str, Any]) -> Dict[str, Any]:
     """
     优先使用 ``grid_overlay["merged_items_dict"]``（与 UI 写出一致），否则调用 :func:`merged_items_dict`。
 
-    命中缓存时仍会按当前 ``phantom_quality_pref``、``unknown_cell_quality_pref`` 刷新 ``quality``，
-    并再次执行 ``manual_confirm_projection``（与全量合并路径对齐）。
+    命中缓存时：
+
+    1. 用当前 ``game_state.items`` **覆盖**缓存里对应日志行的基底字段（外形/品质/锚格/确认物品 id 等），
+       避免桥接只更新 ``items``、未重写 ``merged_items_dict`` 时定价仍用旧推断/旧确认。
+    2. 若幽灵 uid 集与 ``phantom_items`` 不一致（新增/删除手画幽灵），放弃缓存、全量合并。
+    3. 若缓存行标 ``manual`` 但 ``manual_shapes`` 已无该 uid（撤销拖框），全量合并。
+    4. 再按 ``manual_shapes`` / ``infer_shapes``、``phantom_quality_pref``、``unknown_cell_quality_pref``、
+       ``manual_confirm_projection`` 与全量路径一致地刷新。
+
+    任一步发现日志 uid 在 ``items`` 中有而缓存合并表无，则全量 :func:`merged_items_dict`。
     """
     overlay = board_snapshot.get("grid_overlay")
     if isinstance(overlay, dict) and "merged_items_dict" in overlay:
         cached = overlay.get("merged_items_dict")
         if isinstance(cached, dict):
+            gs = board_snapshot.get("game_state") or {}
+            gs_items = gs.get("items") if isinstance(gs, dict) else None
             out: Dict[str, Any] = {}
             for k, v in cached.items():
                 out[str(k)] = dict(v) if isinstance(v, dict) else v
+            if not _patch_cached_merged_log_rows_from_game_items(out, gs_items):
+                return merged_items_dict(board_snapshot)
+            if not _patch_cached_merged_phantom_rows_from_overlay(out, overlay):
+                return merged_items_dict(board_snapshot)
+            if _merged_items_dict_cache_phantom_set_stale(overlay, out):
+                return merged_items_dict(board_snapshot)
+            manual_raw = overlay.get("manual_shapes")
+            if _merged_items_dict_cache_orphan_manual_shape(out, manual_raw):
+                return merged_items_dict(board_snapshot)
+            apply_manual_shapes_to_items(out, manual_raw)
+            apply_infer_shapes_to_items(out, overlay.get("infer_shapes"))
             sync_phantom_row_quality_from_overlay(out, overlay)
             apply_unknown_cell_quality_pref_to_items(out, overlay)
             csv_index, _ = _load_item_prices_db()

@@ -29,27 +29,40 @@ def apply_ceiling_points(
     ceiling_pts: int | None,
     payload: dict[str, Any],
     round_no: int,
+    *,
+    bid_ratio: float = 1.0,
 ) -> tuple[int, dict[str, Any]]:
     if ceiling_pts is None:
         return int(fin), payload
     if int(round_no) <= 3:
         return int(fin), payload
-    if int(fin) <= int(ceiling_pts * 1.1):
-        payload["ceiling_points"] = {
+    ceil_cap = int(ceiling_pts)
+    if float(bid_ratio) > 1.0:
+        ceil_cap = int(round(ceiling_pts * float(bid_ratio)))
+    if int(fin) <= int(ceil_cap * 1.1):
+        ce: dict[str, Any] = {
             "applied": True,
-            "q5_q6_ceiling": int(ceiling_pts),
+            "q5_q6_ceiling": int(ceil_cap),
             "before": int(fin_before_opp),
             "after": int(fin),
         }
+        if ceil_cap != int(ceiling_pts):
+            ce["points_ceiling_config"] = int(ceiling_pts)
+            ce["bid_ratio_scale"] = float(bid_ratio)
+        payload["ceiling_points"] = ce
         return int(fin), payload
-    capped = min(int(ceiling_pts), int(fin_before_opp))
-    payload["ceiling_points"] = {
+    capped = min(int(ceil_cap), int(fin_before_opp))
+    ce2: dict[str, Any] = {
         "applied": True,
-        "q5_q6_ceiling": int(ceiling_pts),
+        "q5_q6_ceiling": int(ceil_cap),
         "before": int(fin_before_opp),
         "after": capped,
         "clamped": True,
     }
+    if ceil_cap != int(ceiling_pts):
+        ce2["points_ceiling_config"] = int(ceiling_pts)
+        ce2["bid_ratio_scale"] = float(bid_ratio)
+    payload["ceiling_points"] = ce2
     return capped, payload
 
 

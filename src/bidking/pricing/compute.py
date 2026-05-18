@@ -32,7 +32,8 @@ def compute_price(
     """
     读快照 ``pricing`` → ``compute_role_base``（艾莎在 ``compute_base_bid_points`` 内含空置红择优）→
     回合倍数 → 对手调整 →
-    ``points_ceiling`` 锚 → 人性化尾数 → 前两回合兜底 → bid_cap。
+    ``points_ceiling`` 锚（第 4 回合起；若倍数 ``ratio`` > 1 则封顶按 ``points_ceiling * ratio``）→
+    人性化尾数 → 前两回合兜底 → bid_cap。
 
     当传入或从磁盘启用的画板快照中含有效 ``map_id`` 时，``pricing.maps`` 覆盖层按该局地图档键
     加载（与 grid_view / 日志对局一致）；否则仍按 ``automation.selected_map`` 等解析。
@@ -133,20 +134,15 @@ def compute_price(
         f"{meta.get('bid_points_source')}: base={fin}"
     )
 
-    ratio, ratio_skipped_r5_hero = resolve_automation_bid_ratio(
-        effective_config, effective_round, bs
-    )
+    ratio = resolve_automation_bid_ratio(effective_config, effective_round)
     fin_before_ratio = fin
     fin = int(round(fin * ratio))
-    br: dict[str, Any] = {
+    payload["bid_ratio"] = {
         "round": effective_round,
         "ratio": ratio,
         "before": fin_before_ratio,
         "after": fin,
     }
-    if ratio_skipped_r5_hero:
-        br["skipped_multiplier_opponent_hero_103_or_107"] = True
-    payload["bid_ratio"] = br
 
     fin, payload["opponent_bid"], fin_before_opp = apply_opponent_bid_adjustment(
         effective_config,
@@ -167,7 +163,12 @@ def compute_price(
             ceiling_pts = None
 
     fin, payload = apply_ceiling_points(
-        fin, fin_before_opp, ceiling_pts, payload, effective_round
+        fin,
+        fin_before_opp,
+        ceiling_pts,
+        payload,
+        effective_round,
+        bid_ratio=ratio,
     )
     fin, payload = apply_human_like_price_tail(fin, payload)
     fin, payload = apply_early_round_fallback_floor(
