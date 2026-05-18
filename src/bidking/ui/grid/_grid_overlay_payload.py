@@ -80,6 +80,7 @@ def build_grid_overlay_export_dict(
         "manual_shapes": manual,
         "infer_shapes": infer_out,
         "phantom_quality_pref": pref,
+        "unknown_cell_quality_pref": uq_pref,
     }
     snap_merged = {
         "game_state": game_state_to_json(game_state),

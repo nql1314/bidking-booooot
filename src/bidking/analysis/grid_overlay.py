@@ -7,6 +7,7 @@
 - ``phantom_items``：仅补充 ``game_state.items`` 中不存在的 uid；
 - ``phantom_quality_pref``：显式 Q1–Q6 写入合并行的 ``quality``（幽灵 JSON 常为 ``quality: null``）；
 - ``manual_shapes``：对尚无 ``shape`` 的条目写入 ``shape = w*10+h``；
+- ``unknown_cell_quality_pref``：弹窗「候选品质」写入日志行 ``quality``（与画板金/红件数统计一致）；
 - ``manual_confirm_item_id``：按 ``item_prices.csv`` 投影 ``item_cid`` / ``quality`` / ``shape`` / ``price``。
 
 诈骗格剔除算法由 ``grid_view.fraud_empty_cells_algorithm`` 配置（字符串，或 ``["tiling", n]`` / ``{"tiling": n}`` 与铺板 trim 合并书写），
@@ -40,6 +41,7 @@ from .grid_overlay_item_merge import (
     apply_manual_shapes_to_items,
     apply_phantom_default_quality_for_phantom_rows,
     apply_phantom_quality_pref_to_items,
+    apply_unknown_cell_quality_pref_to_items,
     merged_items_dict,
     merged_items_dict_from_snapshot,
     sync_phantom_row_quality_from_overlay,
@@ -67,6 +69,7 @@ __all__ = [
     "apply_infer_shapes_to_items",
     "apply_phantom_default_quality_for_phantom_rows",
     "apply_phantom_quality_pref_to_items",
+    "apply_unknown_cell_quality_pref_to_items",
     "sync_phantom_row_quality_from_overlay",
     "apply_manual_confirm_projection",
     "apply_manual_shapes_to_items",

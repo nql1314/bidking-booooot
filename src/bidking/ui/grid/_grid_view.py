@@ -807,7 +807,8 @@ class GridWindow:
         self._phantom_counter: int = 0
         # 当前正在拖拽画框的状态：
         #   start_row/col, cur_row/col, button(1|3), default_quality(None=金默认Q5, 6=红)
-        #   phantom_infer: 左键空格=普通(推断)；Ctrl+左键空格=金；Ctrl+右键空格=红（button 3）
+        #   phantom_infer: **无 Alt** 时与原先一致——左键空格=推断品质幽灵；Ctrl+左键空格=金默认；Ctrl+右键=红
+        #   debug_known_quality_loose_shape: Alt+左键空格=品质已知(Q5)、轮廓未锁定（调试语义，见 _phantom_loose_contour_debug）
         self._phantom_draw_state: Optional[dict] = None
         self._topmost_pinned: bool = False
         self._topmost_pin_photo: Optional[Any] = None
@@ -1011,6 +1012,19 @@ class GridWindow:
             ),
         )
 
+    def _phantom_loose_contour_debug(self, uid: str, k: ItemKnowledge) -> bool:
+        """
+        空格 Alt+左键拖出的调试幽灵：日志语义上「品质已知、轮廓未锁定」，
+        手动画框仅用于占位与包络推断，候选不按框的 w×h 精确筛外形。
+        """
+        return (
+            uid in self._phantom_items
+            and k.quality is not None
+            and k.shape is None
+            and not k.box_id_confirmed
+            and uid in self._manual_shapes
+        )
+
     def _phantom_effective_quality(self, uid: str) -> Optional[int]:
         """幽灵用于筛选的品质：原推断为 None；显式 int；缺省为金 Q5（若扫描已排除 Q5 则不再强套金）。"""
         if uid not in self._phantom_items:
@@ -1154,7 +1168,9 @@ class GridWindow:
             max_shape: Optional[Tuple[int, int]] = None
 
             if k.shape is None:
-                if uid in self._manual_shapes:
+                if uid in self._manual_shapes and not self._phantom_loose_contour_debug(
+                    uid, k
+                ):
                     mw, mh, _, _ = self._manual_shapes[uid]
                     effective_shape = mw * 10 + mh
                 elif uid in self._infer_shapes:
@@ -1213,7 +1229,9 @@ class GridWindow:
         candidates = list(self.csv_items)
         if k.shape is not None:
             candidates = [i for i in candidates if i.shape == k.shape]
-        elif uid in self._manual_shapes:
+        elif uid in self._manual_shapes and not self._phantom_loose_contour_debug(
+            uid, k
+        ):
             mw, mh, _, _ = self._manual_shapes[uid]
             virtual_shape = mw * 10 + mh
             candidates = [i for i in candidates if i.shape == virtual_shape]
@@ -1590,6 +1608,8 @@ class GridWindow:
         h: int,
         default_phantom_quality: Optional[int] = None,
         use_infer_quality: bool = False,
+        *,
+        debug_known_quality_loose_shape: bool = False,
     ) -> bool:
         """在 (row, col) 以 (w, h) 大小创建一个幽灵物品，并应用当前扫描历史约束。"""
         if self._rect_overlaps_occupied(row, col, w, h):
@@ -1598,15 +1618,21 @@ class GridWindow:
         self._phantom_counter += 1
         pk = ItemKnowledge(uid=phid)
         pk.box_id = row * GRID_COLS + col
-        pk.box_id_confirmed = True  # 用户明确指定了位置
+        if debug_known_quality_loose_shape:
+            pk.box_id_confirmed = False
+            pk.shape = None
+            pk.quality = 5
+        else:
+            pk.box_id_confirmed = True  # 用户明确指定了位置
         self._phantom_items[phid] = pk
         self._manual_shapes[phid] = (w, h, col, row)
-        if use_infer_quality:
-            self._phantom_quality_pref[phid] = PHANTOM_Q_INFER
-        elif default_phantom_quality == 6:
-            self._phantom_quality_pref[phid] = 6
-        elif default_phantom_quality is not None and 1 <= default_phantom_quality <= 5:
-            self._phantom_quality_pref[phid] = default_phantom_quality
+        if not debug_known_quality_loose_shape:
+            if use_infer_quality:
+                self._phantom_quality_pref[phid] = PHANTOM_Q_INFER
+            elif default_phantom_quality == 6:
+                self._phantom_quality_pref[phid] = 6
+            elif default_phantom_quality is not None and 1 <= default_phantom_quality <= 5:
+                self._phantom_quality_pref[phid] = default_phantom_quality
         apply_scan_history_to_phantom_items(self._phantom_items, self.state)
         return True
 
@@ -3730,8 +3756,8 @@ class GridWindow:
                 tags=(tag,),
             )
 
-        # ── 缩放把手：四边（所有 log 未确认形状的物品均可手动调整） ────────
-        if k.shape is None:
+        # ── 缩放把手：四边（日志未确认形状；幽灵不用把手） ────────────────
+        if k.shape is None and not is_phantom:
             hw = RESIZE_HANDLE_W
             hc = RESIZE_HANDLE_COLOR
             pad = 2
@@ -3818,6 +3844,8 @@ class GridWindow:
 
         if k.shape:
             shape_text = ""
+        elif self._phantom_loose_contour_debug(uid, k):
+            shape_text = "?x?"
         elif uid in self._manual_shapes:
             mw, mh, mdc, mdr = self._manual_shapes[uid]
             shape_text = f"{mw}x{mh}*"  # * 表示手动设置
@@ -3862,12 +3890,28 @@ class GridWindow:
 
         return lines
 
+    @staticmethod
+    def _event_alt_down(event: tk.Event) -> bool:
+        """
+        检测 Alt 是否按下。
+
+        Windows 上 ``state & 0x0008``（Mod1）在仅左键 ``<Button-1>`` 时常被置位，与真实 Alt 无关，
+        若与 ``0x20000`` 一起做 OR 会把所有手画幽灵误判为「品质已知轮廓未锁定」笔。
+        """
+        st = int(getattr(event, "state", 0) or 0)
+        if (st & 0x20000) != 0:
+            return True
+        if sys.platform != "win32" and (st & 0x0008) != 0:
+            return True
+        return False
+
     # ── 点击事件 ──────────────────────────────────────────────────────────
 
     def _on_click(self, event: tk.Event) -> None:
         cx = int(self.canvas.canvasx(event.x))
         cy = int(self.canvas.canvasy(event.y))
         ctrl = (event.state & 0x0004) != 0
+        alt = GridWindow._event_alt_down(event)
 
         # 1. 四边缩放把手（左键，无需 Ctrl）
         rh = self._find_resize_handle_at(cx, cy)
@@ -3898,7 +3942,8 @@ class GridWindow:
                 self._show_popup(uid, k, event.x_root, event.y_root)
             return
 
-        # 4. 空格左键拖幽灵：普通(推断) / Ctrl+左键=金（四角缩放已在上方处理）
+        # 4. 空格左键拖幽灵（无 Alt 时行为与加 Alt 前一致）：
+        #    普通左键 = 推断品质幽灵；Ctrl+左键 = 金默认；Alt+左键 = 品质已知轮廓未锁定（仍占手动矩形格）
         self._phantom_draw_state = {
             "start_row": row,
             "start_col": col,
@@ -3906,7 +3951,8 @@ class GridWindow:
             "cur_col": col,
             "button": 1,
             "default_quality": None,
-            "phantom_infer": not ctrl,
+            "phantom_infer": not ctrl and not alt,
+            "debug_known_quality_loose_shape": alt,
         }
 
     def _on_middle_press(self, event: tk.Event) -> None:
@@ -4301,6 +4347,9 @@ class GridWindow:
                 max_r - min_r + 1,
                 default_phantom_quality=dq,
                 use_infer_quality=use_infer,
+                debug_known_quality_loose_shape=bool(
+                    pds.get("debug_known_quality_loose_shape")
+                ),
             )
             self._phantom_draw_state = None
             self._refresh()
@@ -4373,6 +4422,12 @@ class GridWindow:
         hdr_parts = []
         if k.shape:
             hdr_parts.append(f"形状: {fmt_shape(k.shape)}")
+        elif self._phantom_loose_contour_debug(uid, k) and k.box_id is not None:
+            max_w, max_h = self._compute_max_size(uid, k)
+            if max_w < GRID_COLS or max_h < GRID_ROWS:
+                hdr_parts.append(f"形状: ≤{max_w}x{max_h}（轮廓未锁定，包络）")
+            else:
+                hdr_parts.append("形状: 轮廓未锁定（包络）")
         elif uid in self._manual_shapes:
             mw, mh, mdc, mdr = self._manual_shapes[uid]
             tag = "手动画框" if uid in self._phantom_items else "手动设置"
@@ -4430,7 +4485,7 @@ class GridWindow:
         ).pack(fill="x")
 
         # 幽灵物品：默认金（Q5）；取消勾选或选「原推断」恢复含金/红等原推断；下拉可指定其它 Q
-        if uid in self._phantom_items:
+        if uid in self._phantom_items and not self._phantom_loose_contour_debug(uid, k):
             pq0 = self._phantom_quality_pref.get(uid)
             ph_ex = k.excluded_qualities or set()
             pick_ph = self._hand_pickable_qualities(k)

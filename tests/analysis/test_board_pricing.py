@@ -361,6 +361,22 @@ class BoardPricingTests(unittest.TestCase):
         self.assertEqual(m["y"]["shape"], 21)
         self.assertEqual(m["y"].get("_overlay_shape_origin"), "infer")
 
+    def test_pricing_shape_int_for_csv_uses_infer_footprint(self) -> None:
+        """推算写入的 ``shape`` 须参与 CSV 轮廓匹配，避免仅知档位却按全外形候选加权。"""
+        self.assertEqual(
+            bp._pricing_shape_int_for_csv(
+                {"shape": 11, "quality": 6, "_overlay_shape_origin": "infer"}
+            ),
+            11,
+        )
+        self.assertEqual(
+            bp._pricing_shape_int_for_csv({"shape": 22, "_overlay_shape_origin": "game"}),
+            22,
+        )
+        self.assertIsNone(
+            bp._pricing_shape_int_for_csv({"shape": None, "_overlay_shape_origin": "infer"})
+        )
+
     def test_merged_items_applies_phantom_quality_pref(self) -> None:
         """``phantom_quality_pref`` 须并入合并表 ``quality``，定价才按红笔等已知档位计价。"""
         snap = {
@@ -440,6 +456,62 @@ class BoardPricingTests(unittest.TestCase):
         }
         m = grid_overlay_mod.merged_items_dict(snap)
         self.assertIsNone(m["phantom_1"].get("quality"))
+
+    def test_merged_items_applies_unknown_cell_quality_pref(self) -> None:
+        """``unknown_cell_quality_pref`` 须并入合并表 ``quality``，与弹窗候选品质手选一致。"""
+        snap = {
+            "game_state": {
+                "items": {
+                    "u1": {
+                        "uid": "u1",
+                        "box_id": 0,
+                        "box_id_confirmed": True,
+                        "shape": 11,
+                        "quality": None,
+                        "categories": [],
+                        "item_cid": None,
+                        "price": None,
+                        "manual_confirm_item_id": None,
+                        "excluded_categories": [],
+                        "excluded_qualities": [],
+                    }
+                }
+            },
+            "grid_overlay": {
+                "unknown_cell_quality_pref": {"u1": 5},
+            },
+        }
+        m = grid_overlay_mod.merged_items_dict(snap)
+        self.assertEqual(m["u1"].get("quality"), 5)
+
+    def test_merged_items_unknown_cell_quality_pref_skips_when_price_locked(
+        self,
+    ) -> None:
+        """已精确价 + CID 时不再用候选品质覆盖（与画板 ``_unknown_quality_pref_eligible`` 一致）。"""
+        snap = {
+            "game_state": {
+                "items": {
+                    "u1": {
+                        "uid": "u1",
+                        "box_id": 0,
+                        "box_id_confirmed": True,
+                        "shape": 11,
+                        "quality": None,
+                        "categories": [],
+                        "item_cid": 200021,
+                        "price": 100,
+                        "manual_confirm_item_id": None,
+                        "excluded_categories": [],
+                        "excluded_qualities": [],
+                    }
+                }
+            },
+            "grid_overlay": {
+                "unknown_cell_quality_pref": {"u1": 5},
+            },
+        }
+        m = grid_overlay_mod.merged_items_dict(snap)
+        self.assertIsNone(m["u1"].get("quality"))
 
     def test_merged_items_dict_from_snapshot_applies_pref_on_cached_merged(self) -> None:
         """读出缓存 ``merged_items_dict`` 时仍应用 ``phantom_quality_pref``（兼容旧写出）。"""
