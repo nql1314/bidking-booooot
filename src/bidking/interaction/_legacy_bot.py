@@ -226,8 +226,6 @@ def format_bid_details_line(details: dict[str, Any]) -> str:
             ratio_f = 1.0
         if abs(ratio_f - 1.0) > 1e-9:
             parts.append(f"ratio x{ratio_raw} ({br.get('before')}->{br.get('after')})")
-        elif br.get("skipped_multiplier_opponent_hero_103_or_107"):
-            parts.append("ratio_skipped_r5_hero")
 
     opp = details.get("opponent_bid")
     if isinstance(opp, dict):

@@ -19,6 +19,9 @@ MAP_PRIOR_HTML = "物品轮廓爆率推断器.html"
 DEFAULT_MAP_CATEGORY_WEIGHTS: Dict[int, float] = {
     cat: 1.0 for cat in range(101, 111)
 }
+# 多候选权重期望价：单价超过该阈值的候选不参与期望计算（避免天价拉爆期望），
+# 候选集合本身不变；已指定 ItemCid 或仅剩单候选时走精确价，不经过此逻辑。
+WEIGHTED_EST_MAX_ITEM_BASE_VALUE: float = 5_000_000.0
 _DROP_WEIGHT_BY_ITEM: Dict[int, List[Tuple[int, int, int]]] = {}
 _DROP_GRAPH: Dict[int, List[Tuple[int, float]]] = {}
 _DROP_RESOLVED_CACHE: Dict[Tuple[int, Tuple[int, ...]], Dict[int, float]] = {}
@@ -340,16 +343,24 @@ def _weighted_est_price(
     map_category_weights: Optional[Dict[int, float]] = None,
     map_id: Optional[int] = None,
 ) -> Optional[float]:
-    """按掉落权重计算候选集合的期望价格。"""
+    """按掉落权重计算候选集合的期望价格。
+
+    仅用于期望单价：``base_value`` 大于 :data:`WEIGHTED_EST_MAX_ITEM_BASE_VALUE` 的候选
+    不计入加权和（权重在剩余候选上自然重归一）；若全部高于阈值则退回全体候选，
+    以免无可用子集。地图 drop 解析仍基于完整 ``candidates`` 的 item_id 集合。
+    """
     map_id = normalize_map_id(map_id)
     map_drop_id = MAP_TO_TIER_NEST.get(map_id, (None, None))[1] if map_id is not None else None
     map_drop_weights = _resolve_drop_to_items(
         map_drop_id,
         {item.item_id for item in candidates},
     )
+    cap = WEIGHTED_EST_MAX_ITEM_BASE_VALUE
+    priced = [c for c in candidates if float(c.base_value) <= cap]
+    est_pool = priced if priced else candidates
     weighted_sum = 0.0
     weight_sum = 0.0
-    for item in candidates:
+    for item in est_pool:
         weight = _candidate_weight(item, map_category_weights, map_id, map_drop_weights)
         weighted_sum += item.base_value * weight
         weight_sum += weight
@@ -566,7 +577,9 @@ def query_item(
         7. 按 excluded_categories 过滤（负向，排除含有已确认不属于类别的候选）
         8. 若类别正向过滤后为空，保留 shape+quality 结果（容错）
 
-    估算规则（多候选时）：按 drop_table_weights.csv 中的掉落权重计算期望价。
+    估算规则（多候选时）：按 drop_table_weights.csv 中的掉落权重计算期望价；
+    单价高于 :data:`WEIGHTED_EST_MAX_ITEM_BASE_VALUE`（默认 500 万）的候选不参与该期望，
+    不改变候选列表；ItemCid 已指定或仅剩单候选时为精确价，不适用此截断。
     """
     if item_cid and item_cid in csv_index:
         return csv_index[item_cid], 1, True, None, ""

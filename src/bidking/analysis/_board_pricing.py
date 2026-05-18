@@ -31,6 +31,10 @@ UID 推断（``inferred_self_user_uid``，见 :mod:`bidking.pricing._self_uid_in
 早单价可能品质集合中不再保留 q4，改用去掉 q4 后的 CSV 组合键（如 ``q5+q6``）查格均价，
 避免剩余空格再乘含紫档权重的混合单价。
 
+合并物品上 **仍无 ``shape``、品质已知且已确认占位** 时，几何占位按锚格计；``pricing.total`` 已为该档
+CSV 权重期望价。对 ``max(0, 加权等效格数 − 1)`` 之和从有效空置 ``vacant_adj`` 中扣减（见
+:func:`unknown_value.unknown_contour_vacant_weighted_excess`），使 ``空置格 × 早/金红单价`` 不因多计空格外扩。
+
 已知轮廓且品质未知、CSV 为多候选（权重价）的物品（含仅日志未确认的锚格）：几何占位格在边际上视同空置，参与 ``空置格 × 空置单价``；
 但 ``total`` / ``compute_items_total`` 已含该件权重价，故在 ``points`` / ``est_*`` 基底中扣除对应权重价，避免重复计价。
 """
@@ -1024,7 +1028,18 @@ def build_snapshot_pricing_dict(
     kcw_val, kcw_geo = _sum_known_contour_weighted_price_and_geo_cells(
         snap_full, csv_cells_raw=csv_cells_for_est
     )
-    vacant_adj = max(0, int(vacant_num) + int(kcw_geo) - int(tier_extra_cells))
+    mid_n = item_db.normalize_map_id(map_id if map_id else None)
+    uc_excess_f, uc_excess_detail = _unknown_value.unknown_contour_vacant_weighted_excess(
+        snap_full,
+        csv_cells_for_est if csv_cells_for_est else None,
+        {},
+        mid_n,
+    )
+    uc_vacant_subtract = max(0, int(round(float(uc_excess_f))))
+    vacant_adj = max(
+        0,
+        int(vacant_num) + int(kcw_geo) - int(tier_extra_cells) - uc_vacant_subtract,
+    )
     vacant_pts_base = float(total_f) - float(kcw_val) + float(tier_extra_val)
 
     est_orange = vacant_pts_base + float(vacant_adj) * float(u_orange)
@@ -1118,6 +1133,7 @@ def build_snapshot_pricing_dict(
         "map_quality_avg_csv": str(raw.get("map_quality_avg_csv") or "") if isinstance(raw, dict) else "",
         "known_contour_weighted_cells": int(kcw_geo),
         "known_contour_weighted_price": float(kcw_val),
+        "unknown_contour_vacant_cell_excess_subtract": int(uc_vacant_subtract),
         "early_points_blended_with_random_avg": bool(early_pts_blended_with_random_avg),
         "ahmad_points": ahmad_points,
         "ahmad_points_detail": ahmad_detail,
@@ -1125,6 +1141,8 @@ def build_snapshot_pricing_dict(
         "ahmad_pricing_active": bool(ahmad_pricing_active),
         "self_uid_inference": dict(self_uid_infer_detail),
     }
+    if uc_excess_detail:
+        pricing["unknown_contour_vacant_weighted_excess"] = dict(uc_excess_detail)
     if ahmad_pricing_active:
         pricing["generic_points"] = generic_pts
         pricing["generic_points_floor"] = generic_floor

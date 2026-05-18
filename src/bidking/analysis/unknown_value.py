@@ -177,19 +177,34 @@ def unknown_contour_vacant_weighted_excess(
     pricing: Dict[str, Any],
     map_id_normalized: Optional[int],
 ) -> Tuple[float, Dict[str, Any]]:
-    csv_index, csv_items = _load_item_prices_db()
+    """无 ``shape`` 且已确认占位：用合并表（``game_state.items`` + overlay，与定价同源）遍历。
+
+    延迟导入 ``merged_items_dict_from_snapshot``，避免本模块与
+    :mod:`bidking.analysis.grid_overlay_item_merge` 的循环依赖。
+    """
+    _csv_index, csv_items = _load_item_prices_db()
     if not csv_items:
         return 0.0, {}
-    raw_items = ((board_snapshot.get("game_state") or {}).get("items") or {})
+    from .grid_overlay_item_merge import merged_items_dict_from_snapshot
+
+    merged_items = merged_items_dict_from_snapshot(board_snapshot)
+    if not isinstance(merged_items, dict):
+        return 0.0, {}
     per_item: List[Dict[str, Any]] = []
     total_excess = 0.0
     n_uc = 0
-    for uid, it in raw_items.items():
+    for uid, it in merged_items.items():
         if not isinstance(it, dict):
             continue
         if not it.get("box_id_confirmed"):
             continue
         if it.get("shape") is not None:
+            continue
+        try:
+            item_cid_i = int(it.get("item_cid")) if it.get("item_cid") is not None else None
+        except (TypeError, ValueError):
+            item_cid_i = None
+        if item_cid_i is not None and it.get("price") is not None:
             continue
         try:
             q = int(it["quality"])

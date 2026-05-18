@@ -171,6 +171,21 @@ def _infer_ordered_wh_for_default_infer(
     return out
 
 
+def _q56_overlay_wh_sort_key(wh: Tuple[int, int]) -> Tuple[int, int, float, int, int]:
+    """
+    金红 ``use_rect_q56`` 路径下 ``(w,h)`` 的尝试顺序（升序 = 优先）。
+
+    在面积基础上兼顾外形：同面积时更「方」的矩形优先于 ``1×n`` / ``n×1`` 长条；
+    且 ``min(w,h)==1`` 且 ``max(w,h) > 4`` 的长条整段置后。
+    """
+    w, h = int(wh[0]), int(wh[1])
+    a = w * h
+    lo, hi = (w, h) if w <= h else (h, w)
+    long_line = 1 if lo == 1 and hi > 4 else 0
+    aspect_pen = (hi / lo) - 1.0 if lo > 0 else float("inf")
+    return (long_line, -a, aspect_pen, w, h)
+
+
 def _infer_unknown_contour_item_eligible(
     k: ItemKnowledge,
     uid: str,
@@ -288,8 +303,8 @@ def compute_grid_overlay_infer_shapes(
       首选外形不满足时按掉落概率依次尝试其余候选外形，仍无解则跳过该件推断。
     - 当 ``raw_pricing.event_stats`` 中低档总格 **q12+q3+q4** 齐备（或 ``q1+q2+q3+q4`` 等价已知），且扫描史已覆盖品质
       1–4、场上 Q1–Q4 物品轮廓与锚格均已锁定时：对 **金 (5)、红 (6)** 在已有 CSV 候选（与默认路径相同的 ``filter_csv_candidates_for_query`` 结果非空）前提下，
-      先将候选去重为 ``(w,h)`` 集合，再按 **面积降序**（同面积则 ``(w,h)`` 字典序）在阻挡语义与 ``max_box_id`` 下尝试放置（与默认路径相同的 ``box_id_confirmed`` 顶左/枚举规则），
-      取 **首个可行** 者即候选中可放置的 **最大面积** 外形；若均不可行则跳过该件（与低档件无解时一致）。
+      先将候选去重为 ``(w,h)`` 集合，再按 **面积与长宽比综合**（更大面积优先；同面积时更偏方块优先于 ``1×n``/``n×1`` 长条；``1×n``/``n×1`` 且 ``n>4`` 的长条整段置后；再 ``(w,h)`` 字典序稳定）在阻挡语义与 ``max_box_id`` 下尝试放置（与默认路径相同的 ``box_id_confirmed`` 顶左/枚举规则），
+      取 **首个可行** 者；若均不可行则跳过该件（与低档件无解时一致）。
       金优先于红；每推断成功一件即将其矩形并入后续件的阻挡集。
     """
     if not infer_unknown_contour_shapes:
@@ -364,7 +379,7 @@ def compute_grid_overlay_infer_shapes(
             for c in filt:
                 wh = shape_wh_from_snapshot(c.shape)
                 cand_wh.add(wh)
-            ordered_wh = sorted(cand_wh, key=lambda wh: (-wh[0] * wh[1], wh[0], wh[1]))
+            ordered_wh = sorted(cand_wh, key=_q56_overlay_wh_sort_key)
             chosen_q56: Optional[Tuple[int, int, int, int]] = None
             for w, h in ordered_wh:
                 for dr, dc in _infer_default_placement_candidates(

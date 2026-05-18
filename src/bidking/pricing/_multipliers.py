@@ -2,10 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from .snapshot_players import board_snapshot_self_identity
-
-_ROUND5_SKIP_RATIO_OPPONENT_HERO_CIDS = frozenset({103, 107})
-
 ROUND_RULES = {
     1: {"multiplier": 2.0, "pace": 0.42, "label": "两倍出价第二直接获得"},
     2: {"multiplier": 1.6, "pace": 0.56, "label": "1.6 倍出价第二直接获得"},
@@ -24,54 +20,25 @@ def resolve_round_multiplier(round_no: int, price_config: dict[str, Any]) -> flo
     return float(ROUND_RULES.get(r, ROUND_RULES[5])["multiplier"])
 
 
-def _opponents_have_hero_cids(
-    board_snapshot: dict[str, Any],
-    config: dict[str, Any],
-    hero_cids: frozenset[int],
-) -> bool:
-    self_uid, _ = board_snapshot_self_identity(config, board_snapshot)
-    players = (board_snapshot.get("game_state") or {}).get("players") or {}
-    if not isinstance(players, dict):
-        return False
-    for p_uid, pdata in players.items():
-        if not isinstance(pdata, dict):
-            continue
-        if self_uid and str(p_uid) == self_uid:
-            continue
-        try:
-            hc = int(pdata.get("hero_cid") or 0)
-        except (TypeError, ValueError):
-            continue
-        if hc in hero_cids:
-            return True
-    return False
-
-
 def resolve_automation_bid_ratio(
     config: dict[str, Any],
     round_no: int,
-    board_snapshot: dict[str, Any] | None,
-) -> tuple[float, bool]:
-    """automation.bid_ratio_by_round；第 5 回合遇对手 hero 103/107 时倍数强制为 1。"""
-    if int(round_no) >= 4 and board_snapshot is not None:
-        if _opponents_have_hero_cids(
-            board_snapshot, config, _ROUND5_SKIP_RATIO_OPPONENT_HERO_CIDS
-        ):
-            return 1.0, True
+) -> float:
+    """automation.bid_ratio_by_round。"""
     auto = config.get("automation") or {}
     raw = auto.get("bid_ratio_by_round")
     if raw is None:
         raw = config.get("bid_ratio_by_round")
     if not isinstance(raw, dict):
-        return 1.0, False
+        return 1.0
     key = str(int(round_no))
     v = raw.get(key)
     if v is None:
         v = raw.get("default")
     if v is None:
-        return 1.0, False
+        return 1.0
     try:
         r = float(v)
     except (TypeError, ValueError):
-        return 1.0, False
-    return (r if r > 0 else 1.0), False
+        return 1.0
+    return r if r > 0 else 1.0

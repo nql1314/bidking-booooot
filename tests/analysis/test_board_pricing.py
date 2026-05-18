@@ -310,7 +310,7 @@ class BoardPricingTests(unittest.TestCase):
         self.assertIsNone(grid_overlay_mod.map_skill_total_hidden_for_overlay({}))
 
     def test_merged_items_applies_overlay_manual_shape(self) -> None:
-        """``grid_overlay.manual_shapes`` 在无 shape 时写入定价用外形（w*10+h）。"""
+        """``grid_overlay.manual_shapes`` 写入定价用外形（w*10+h），含日志 ``shape`` 为空时。"""
         snap = {
             "game_state": {
                 "items": {
@@ -334,6 +334,79 @@ class BoardPricingTests(unittest.TestCase):
         m = grid_overlay_mod.merged_items_dict(snap)
         self.assertEqual(m["x"]["shape"], 21)
         self.assertEqual(m["x"].get("_overlay_shape_origin"), "manual")
+
+    def test_merged_items_manual_shape_overrides_log_shape(self) -> None:
+        """手动画框覆盖日志已有 ``shape``（拖框改形后与画板一致）。"""
+        snap = {
+            "game_state": {
+                "items": {
+                    "x": {
+                        "uid": "x",
+                        "box_id": 0,
+                        "box_id_confirmed": True,
+                        "shape": 11,
+                        "quality": 5,
+                        "categories": [],
+                        "item_cid": None,
+                        "price": None,
+                        "manual_confirm_item_id": None,
+                        "excluded_categories": [],
+                        "excluded_qualities": [],
+                    }
+                }
+            },
+            "grid_overlay": {"manual_shapes": {"x": [2, 1, 0, 0]}},
+        }
+        m = grid_overlay_mod.merged_items_dict(snap)
+        self.assertEqual(m["x"]["shape"], 21)
+        self.assertEqual(m["x"].get("_overlay_shape_origin"), "manual")
+
+    def test_merged_items_dict_from_snapshot_reapplies_manual_shapes_on_cache(self) -> None:
+        """命中 ``merged_items_dict`` 缓存时仍应用当前 ``manual_shapes``，覆盖陈旧推断外形。"""
+        snap = {
+            "game_state": {
+                "items": {
+                    "z": {
+                        "uid": "z",
+                        "box_id": 55,
+                        "box_id_confirmed": False,
+                        "shape": None,
+                        "quality": 6,
+                        "categories": [],
+                        "categories_any": [],
+                        "item_cid": None,
+                        "price": None,
+                        "manual_confirm_item_id": None,
+                        "excluded_categories": [],
+                        "excluded_qualities": [],
+                    }
+                }
+            },
+            "grid_overlay": {
+                "manual_shapes": {"z": [2, 1, 0, 0]},
+                "infer_shapes": {"z": [1, 2, 5, 4]},
+                "merged_items_dict": {
+                    "z": {
+                        "uid": "z",
+                        "box_id": 55,
+                        "box_id_confirmed": False,
+                        "shape": 12,
+                        "quality": 6,
+                        "categories": [],
+                        "categories_any": [],
+                        "item_cid": None,
+                        "price": None,
+                        "manual_confirm_item_id": None,
+                        "excluded_categories": [],
+                        "excluded_qualities": [],
+                        "_overlay_shape_origin": "infer",
+                    }
+                },
+            },
+        }
+        m = grid_overlay_mod.merged_items_dict_from_snapshot(snap)
+        self.assertEqual(m["z"]["shape"], 21)
+        self.assertEqual(m["z"].get("_overlay_shape_origin"), "manual")
 
     def test_merged_items_applies_infer_shapes_when_no_manual_shape(self) -> None:
         """``grid_overlay.infer_shapes`` 在无 shape 时写入几何外形并标记推断来源。"""
@@ -578,6 +651,57 @@ class BoardPricingTests(unittest.TestCase):
         }
         m = grid_overlay_mod.merged_items_dict_from_snapshot(snap)
         self.assertEqual(m["phantom_1"].get("quality"), 5)
+
+    def test_merged_items_dict_from_snapshot_invalidates_cache_when_manual_confirm_changes(
+        self,
+    ) -> None:
+        """``game_state`` 已写入 ``manual_confirm_item_id`` 但 ``merged_items_dict`` 仍为旧导出时，须全量重合并并投影 CSV 外形/价。"""
+        snap = {
+            "game_state": {
+                "items": {
+                    "t1": {
+                        "uid": "t1",
+                        "box_id": 55,
+                        "box_id_confirmed": False,
+                        "shape": None,
+                        "quality": 6,
+                        "categories": [],
+                        "categories_any": [],
+                        "item_cid": None,
+                        "price": None,
+                        "manual_confirm_item_id": 1033003,
+                        "excluded_categories": [],
+                        "excluded_qualities": [],
+                    }
+                }
+            },
+            "grid_overlay": {
+                "merged_items_dict": {
+                    "t1": {
+                        "uid": "t1",
+                        "box_id": 55,
+                        "box_id_confirmed": False,
+                        "shape": 12,
+                        "quality": 6,
+                        "categories": [],
+                        "categories_any": [],
+                        "item_cid": None,
+                        "price": None,
+                        "manual_confirm_item_id": None,
+                        "excluded_categories": [],
+                        "excluded_qualities": [],
+                        "_overlay_shape_origin": "infer",
+                    }
+                },
+                "infer_shapes": {"t1": [1, 2, 5, 4]},
+            },
+        }
+        m = grid_overlay_mod.merged_items_dict_from_snapshot(snap)
+        self.assertEqual(m["t1"].get("shape"), 23)
+        self.assertEqual(m["t1"].get("item_cid"), 1033003)
+        self.assertEqual(m["t1"].get("price"), 3875)
+        self.assertEqual(m["t1"].get("quality"), 3)
+        self.assertEqual(m["t1"].get("_overlay_shape_origin"), "game")
 
     def test_infer_shapes_nonempty_when_only_anchor_occupancy(self) -> None:
         """未确认物品仅占锚格时，可行性检测须剔除自身锚格，否则 ``infer_shapes`` 恒为空。"""
