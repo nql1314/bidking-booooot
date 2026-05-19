@@ -603,28 +603,10 @@ def window_rows_as_dict() -> list[dict[str, Any]]:
     return rows
 
 
-def _load_window_cli_config(config_path: str | None) -> dict[str, Any]:
-    """与 bot 一致：未指定路径时加载合并后的 runtime.json + config.json。"""
-    try:
-        from ..config.runtime import load_runtime
-    except ImportError:
-        from bidking.config.runtime import load_runtime
-
-    raw = (config_path or "").strip()
-    if not raw:
-        return load_runtime().raw
-    return load_runtime(raw).raw
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description="BidKing Win32 window backend helper.")
     parser.add_argument("command", choices=["list-windows", "capture"])
-    parser.add_argument(
-        "--config",
-        default=None,
-        metavar="PATH",
-        help="JSON config path. When omitted, load merged configs/runtime.json + configs/config.json from project root.",
-    )
+    parser.add_argument("--config", default=str(Path(__file__).resolve().parent / "automation_config.json"))
     parser.add_argument("--output", default="")
     parser.add_argument(
         "--full-client",
@@ -637,7 +619,7 @@ def main() -> int:
         print(json.dumps(window_rows_as_dict(), ensure_ascii=False, indent=2))
         return 0
 
-    config = _load_window_cli_config(args.config)
+    config = json.loads(Path(args.config).read_text(encoding="utf-8-sig"))
     if args.full_client:
         image, info = capture_window_frame(config)
         payload = {

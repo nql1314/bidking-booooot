@@ -1,7 +1,7 @@
 """第 1 层 · 游戏交互。
 
 只管「看屏幕、点鼠标、跑回合流程」。出价数额由 :func:`._legacy_bot.compute_price`
-读画板快照并委托 :mod:`bidking.pricing` 计算。
+调用 :mod:`bidking.pricing` 计算。
 
 - :mod:`.window`      —— 窗口查找 / 客户区截图 / 坐标缩放
 - :mod:`.ocr`         —— RapidOCR 单例

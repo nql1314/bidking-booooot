@@ -14,7 +14,6 @@ from bidking.analysis.grid_overlay import (
 )
 from bidking.config.runtime import (
     infer_fraud_empty_cells_algorithm,
-    infer_fraud_empty_cells_algorithm_and_trim,
     infer_fraud_empty_cells_tiling_n,
 )
 
@@ -49,37 +48,6 @@ class FraudEmptyCellsTests(unittest.TestCase):
                 {"grid_view": {"fraud_empty_cells_algorithm": "tiling_n"}}
             ),
             "tiling_n",
-        )
-
-    def test_infer_fraud_empty_cells_combined_list_and_dict(self) -> None:
-        self.assertEqual(
-            infer_fraud_empty_cells_algorithm_and_trim(
-                {"grid_view": {"fraud_empty_cells_algorithm": ["tiling", 20]}}
-            ),
-            ("tiling_n", 20),
-        )
-        self.assertEqual(
-            infer_fraud_empty_cells_algorithm_and_trim(
-                {"grid_view": {"fraud_empty_cells_algorithm": {"tiling": 7}}}
-            ),
-            ("tiling_n", 7),
-        )
-        self.assertEqual(
-            infer_fraud_empty_cells_algorithm_and_trim(
-                {"grid_view": {"fraud_empty_cells_algorithm": ["tiling", 0]}}
-            ),
-            ("tiling_strict", 0),
-        )
-        self.assertEqual(
-            infer_fraud_empty_cells_algorithm_and_trim(
-                {
-                    "grid_view": {
-                        "fraud_empty_cells_algorithm": "tiling_n",
-                        "fraud_empty_cells_tiling_n": 9,
-                    }
-                }
-            ),
-            ("tiling_n", 9),
         )
 
     def test_infer_fraud_empty_cells_tiling_n(self) -> None:

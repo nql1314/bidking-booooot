@@ -31,9 +31,8 @@
     日志英雄 + 地图自动判定（己方身份来自配置 ``board_snapshot.self_user_uid`` 或 ``self_name_substring``）。
   - raven：状态栏附带铺板顺序提示。
   - 地图技能 200009（所有藏品格数）：在已知区内已占位格数未达到该总数前，空置计数与橘红层**忽略诈骗格过滤**；吃满后对几何空置应用诈骗格剔除。
-  - 诈骗格规则**仅用于**上述自动空置区（计数与初始橘红），**不限制**右键手动剔除/恢复空置标记。由 ``grid_view.fraud_empty_cells_algorithm`` 指定：字符串 ``tiling_strict`` / ``tiling_n`` / ``none``，或列表 ``["tiling", n]`` / 对象 ``{"tiling": n}`` 将铺板与 trim 写在一起（等价于原 ``tiling_n`` + ``n``）；旧键 ``fraud_empty_cells_tiling_n`` 仍兼容。
+  - 诈骗格规则**仅用于**上述自动空置区（计数与初始橘红），**不限制**右键手动剔除/恢复空置标记。算法名由配置 ``grid_view.fraud_empty_cells_algorithm`` 选择（``tiling_strict`` / ``tiling_n`` / ``none``）；``tiling_n`` 另配 ``grid_view.fraud_empty_cells_tiling_n``（整数 n）。
   - 空置候选格：普通右键可手动剔除该格（不计空置、不铺橘红），再右键同一格可恢复。
-  - 日志物品仍为「推算轮廓」（CSV 自动扩框、非手动画框）时：在该物品当前占格内右键可取消本次推算扩框（按锚格 1×1 显示），直至日志锁定形状或新对局。
 """
 
 import io
@@ -74,7 +73,8 @@ from ...analysis import grid_overlay as _grid_overlay
 from ...analysis.raw_pricing import build_raw_pricing_dict
 from ...analysis.snapshot import game_state_to_json, item_knowledge_to_json
 from ...config.runtime import (
-    infer_fraud_empty_cells_algorithm_and_trim,
+    infer_fraud_empty_cells_algorithm,
+    infer_fraud_empty_cells_tiling_n,
     load_runtime,
 )
 from ...pricing.compute import compute_price
@@ -550,9 +550,12 @@ class GridWindow:
         _ub = gv_d.get("unknown_bg")
         _ub_s = str(_ub).strip() if _ub is not None else ""
         self._unknown_bg = _ub_s if _ub_s else UNKNOWN_BG
-        _fe_algo, _fe_n = infer_fraud_empty_cells_algorithm_and_trim(_rt_cfg.raw)
-        self._fraud_empty_cells_algorithm = _fe_algo
-        self._fraud_empty_cells_tiling_n = _fe_n
+        self._fraud_empty_cells_algorithm = infer_fraud_empty_cells_algorithm(
+            _rt_cfg.raw
+        )
+        self._fraud_empty_cells_tiling_n = infer_fraud_empty_cells_tiling_n(
+            _rt_cfg.raw
+        )
 
         # 实时 tail：关闭画板或返回主页时置位，供后台线程退出
         self._monitor_stop = threading.Event()
@@ -581,8 +584,6 @@ class GridWindow:
         self._manual_shapes: Dict[str, Tuple[int, int, int, int]] = {}
         # 推算轮廓（与快照 grid_overlay.infer_shapes 同源）；手动画框优先覆盖
         self._infer_shapes: Dict[str, Tuple[int, int, int, int]] = {}
-        # 用户右键取消「推算扩框」的 uid；``_sync_infer_shapes_from_analysis`` 与快照导出均会剔除
-        self._infer_suppress_uids: Set[str] = set()
         # 最近一次点击「扩展日志物品」之前的 _manual_shapes 快照（用于一键还原）
         self._manual_shapes_restore_backup: Optional[
             Dict[str, Tuple[int, int, int, int]]
@@ -768,7 +769,7 @@ class GridWindow:
         self._infer_shapes = {
             str(uid): (int(t[0]), int(t[1]), int(t[2]), int(t[3]))
             for uid, t in raw.items()
-            if len(t) >= 4 and str(uid) not in self._infer_suppress_uids
+            if len(t) >= 4
         }
 
     def _build_occupied(self, exclude_uid: str = "") -> set:
@@ -1805,7 +1806,6 @@ class GridWindow:
             max_box_id=max_anchor_box_id_from_overlay_ui(
                 self.state.items, self._phantom_items
             ),
-            infer_suppress_uids=self._infer_suppress_uids,
         )
         inf = export.get("infer_shapes") or {}
         self._infer_shapes = {
@@ -1995,7 +1995,6 @@ class GridWindow:
         self._phantom_draw_state = None
         self._manual_shapes.clear()
         self._infer_shapes.clear()
-        self._infer_suppress_uids.clear()
         self._phantom_quality_pref.clear()
         self._unknown_cell_quality_pref.clear()
         self._manual_shapes_restore_backup = None
@@ -2037,22 +2036,11 @@ class GridWindow:
         self._sanitize_unknown_quality_prefs()
         self._sanitize_phantom_quality_prefs()
         self._validate_manual_confirmations()
-        self._sanitize_infer_suppress_uids()
 
         self._draw()
         if write_snapshot and self._snapshot_path:
             with self._lock:
                 self._emit_board_snapshot_unlocked(rp)
-
-    def _sanitize_infer_suppress_uids(self) -> None:
-        """物品已消失或日志已锁定形状时，不再保留推算抑制。"""
-        drop = {
-            uid
-            for uid in self._infer_suppress_uids
-            if uid not in self.state.items
-            or self.state.items[uid].shape is not None
-        }
-        self._infer_suppress_uids -= drop
 
     def _validate_manual_confirmations(self) -> None:
         """校验所有物品的手动候选确认，冲突时自动清除。"""
@@ -3500,8 +3488,8 @@ class GridWindow:
     # ── 缩放把手拖动 ──────────────────────────────────────────────────────
 
     def _on_right_click(self, event: tk.Event) -> None:
-        """右键：幽灵物品 → 删除；日志手动画框 → 清除手动画框；日志推算扩框 → 取消推算扩框；
-        空格无 Ctrl → 切换手动剔除空置；Ctrl+右键 + 空格 → 拖动画红幽灵（Q6）。"""
+        """右键：幽灵物品 → 删除；空格无 Ctrl → 切换手动剔除空置；
+        Ctrl+右键 + 空格 → 拖动画红幽灵（Q6）。"""
         cx = int(self.canvas.canvasx(event.x))
         cy = int(self.canvas.canvasy(event.y))
         ctrl = (event.state & 0x0004) != 0
@@ -3520,14 +3508,6 @@ class GridWindow:
             k = self.state.items[uid]
             if k.shape is None and uid in self._manual_shapes:
                 self._manual_shapes.pop(uid, None)
-                self._refresh()
-                return
-            if (
-                k.shape is None
-                and uid not in self._manual_shapes
-                and uid in self._infer_shapes
-            ):
-                self._infer_suppress_uids.add(str(uid))
                 self._refresh()
                 return
         if uid is not None:

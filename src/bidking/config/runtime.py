@@ -17,7 +17,7 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional, Tuple, Union
+from typing import Any, Dict, Mapping, Optional, Union
 
 from .paths import config_overlay_path, runtime_path
 
@@ -149,63 +149,37 @@ def infer_unknown_contour_shapes_enabled(
     return True
 
 
-def _fraud_int_trim(v: Any) -> int:
-    try:
-        return max(0, int(v))
-    except (TypeError, ValueError):
-        return 0
+def infer_fraud_empty_cells_algorithm(
+    cfg: Optional[Union[RuntimeConfig, Mapping[str, Any]]] = None,
+) -> str:
+    """
+    空置前缀区「疑似诈骗格」剔除所用算法名，供 UI 与 :func:`bidking.analysis.grid_overlay.vacant_dict_from_board_snapshot` 使用。
 
+    读取合并后配置 ``grid_view.fraud_empty_cells_algorithm``：
 
-def _fraud_truthy(v: Any) -> bool:
-    if isinstance(v, bool):
-        return v
-    if isinstance(v, (int, float)):
-        return bool(int(v))
-    if isinstance(v, str):
-        return v.strip().lower() in ("1", "true", "yes", "on")
-    return bool(v)
+    - ``tiling_strict``（默认）：铺板可解释性，即 :func:`bidking.analysis.fraud_empty_cells.fraud_empty_cells_in_zone_prefix`；
+      兼容旧配置值 ``tiling`` / ``tile`` / ``explainability``。
+    - ``tiling_n``：铺板后再去掉 BoxId ``<= limit - n`` 的诈骗候选；``n`` 见 :func:`infer_fraud_empty_cells_tiling_n`；
+    - ``none``（及 ``off`` / ``disabled`` / ``false`` / ``0``）：不做诈骗判断，诈骗格集合恒为空。
 
-
-def _fraud_algo_and_trim_from_grid_view(gv: dict) -> Tuple[str, int]:
-    """解析 ``grid_view`` 中的诈骗格算法与 trim 整数 n（``tiling_n`` 用）。"""
-    legacy_n = _fraud_int_trim(gv.get("fraud_empty_cells_tiling_n", 0))
+    未知非空字符串时回退为 ``tiling_strict``。
+    """
+    raw: Mapping[str, Any]
+    if cfg is None:
+        raw = load_runtime().raw
+    elif isinstance(cfg, RuntimeConfig):
+        raw = cfg.raw
+    else:
+        raw = cfg
+    gv = raw.get("grid_view")
+    if not isinstance(gv, dict):
+        return "tiling_strict"
     v = gv.get("fraud_empty_cells_algorithm", "tiling_strict")
-
-    if isinstance(v, (list, tuple)) and len(v) >= 1:
-        head = (
-            str(v[0]).strip().lower().replace(" ", "_").replace("-", "_")
-        )
-        n_opt = _fraud_int_trim(v[1]) if len(v) >= 2 else 0
-        if head in ("none", "off", "disabled", "false", "0"):
-            return ("none", 0)
-        if head in ("tiling_n", "tilingn"):
-            nn = n_opt if len(v) >= 2 else legacy_n
-            return ("tiling_n", nn)
-        if head in ("tiling_strict", "tilingstrict"):
-            return ("tiling_strict", 0)
-        if head in ("tiling", "tile", "explainability", ""):
-            if len(v) >= 2 and n_opt > 0:
-                return ("tiling_n", n_opt)
-            return ("tiling_strict", 0)
-        return ("tiling_strict", 0)
-
-    if isinstance(v, dict):
-        if _fraud_truthy(v.get("none")) or _fraud_truthy(v.get("off")):
-            return ("none", 0)
-        if "tiling" in v:
-            nn = _fraud_int_trim(v.get("tiling"))
-            if nn > 0:
-                return ("tiling_n", nn)
-            return ("tiling_strict", 0)
-        if _fraud_truthy(v.get("tiling_strict")) or _fraud_truthy(v.get("strict")):
-            return ("tiling_strict", 0)
-        return ("tiling_strict", 0)
-
-    s = str(v).strip().lower().replace(" ", "_").replace("-", "_")
+    s = str(v).strip().lower()
     if s in ("none", "off", "disabled", "false", "0"):
-        return ("none", 0)
+        return "none"
     if s in ("tiling_n", "tilingn"):
-        return ("tiling_n", legacy_n)
+        return "tiling_n"
     if s in (
         "tiling_strict",
         "tilingstrict",
@@ -214,64 +188,32 @@ def _fraud_algo_and_trim_from_grid_view(gv: dict) -> Tuple[str, int]:
         "explainability",
         "",
     ):
-        return ("tiling_strict", 0)
-    return ("tiling_strict", 0)
-
-
-def _fraud_raw_for_infer(
-    cfg: Optional[Union[RuntimeConfig, Mapping[str, Any]]],
-) -> Mapping[str, Any]:
-    if cfg is None:
-        return load_runtime().raw
-    if isinstance(cfg, RuntimeConfig):
-        return cfg.raw
-    return cfg
-
-
-def infer_fraud_empty_cells_algorithm_and_trim(
-    cfg: Optional[Union[RuntimeConfig, Mapping[str, Any]]] = None,
-) -> Tuple[str, int]:
-    """
-    一次读取 ``grid_view.fraud_empty_cells_algorithm``（及兼容字段），返回 ``(algorithm, n)``。
-
-    ``algorithm`` 为 ``tiling_strict`` / ``tiling_n`` / ``none``；``n`` 仅在 ``tiling_n`` 时传给
-    :func:`bidking.analysis.fraud_empty_cells.fraud_empty_cells_for_algorithm`。
-
-    推荐写法（不再使用独立键 ``fraud_empty_cells_tiling_n``）：
-
-    - 列表：``["tiling", 20]`` —— 铺板可解释性基底上再按 ``n=20`` 做 BoxId 裁剪（原 ``tiling_n``）；
-    - 对象：``{"tiling": 20}`` —— 同上；``{"tiling": 0}`` 或 ``{}`` 中与 ``tiling`` 等价为严格铺板；
-    - 字符串：``"tiling_strict"`` / ``"none"`` 等，与旧版一致；若写 ``"tiling_n"``，则 ``n`` 仍可读
-      兼容键 ``fraud_empty_cells_tiling_n``。
-    """
-    raw = _fraud_raw_for_infer(cfg)
-    gv = raw.get("grid_view")
-    if not isinstance(gv, dict):
-        return ("tiling_strict", 0)
-    return _fraud_algo_and_trim_from_grid_view(gv)
-
-
-def infer_fraud_empty_cells_algorithm(
-    cfg: Optional[Union[RuntimeConfig, Mapping[str, Any]]] = None,
-) -> str:
-    """
-    空置前缀区「疑似诈骗格」剔除所用算法名，供 UI 与 :func:`bidking.analysis.grid_overlay.vacant_dict_from_board_snapshot` 使用。
-
-    读取合并后配置 ``grid_view.fraud_empty_cells_algorithm``（可为字符串、``["tiling", n]``、``{"tiling": n}`` 等），
-    详见 :func:`infer_fraud_empty_cells_algorithm_and_trim`。
-    """
-    return infer_fraud_empty_cells_algorithm_and_trim(cfg)[0]
+        return "tiling_strict"
+    return "tiling_strict"
 
 
 def infer_fraud_empty_cells_tiling_n(
     cfg: Optional[Union[RuntimeConfig, Mapping[str, Any]]] = None,
 ) -> int:
     """
-    ``tiling_n`` 诈骗格算法所用的整数 ``n``。
+    ``tiling_n`` 诈骗格算法所用的整数 ``n``（来自 ``grid_view.fraud_empty_cells_tiling_n``）。
 
-    优先来自与 ``fraud_empty_cells_algorithm`` 合并的写法（如 ``["tiling", 20]`` 的第二项）；
-    若 ``algorithm`` 为字符串 ``tiling_n``，则仍可读兼容键 ``grid_view.fraud_empty_cells_tiling_n``。
-
-    仅在算法为 ``tiling_n`` 时参与计算；否则返回值可忽略。恒为非负整数。
+    仅在 ``fraud_empty_cells_algorithm`` 为 ``tiling_n`` 时参与计算；解析失败或缺失时返回 ``0``
+    （与纯 ``tiling_strict`` 等价）。返回值恒为非负整数。
     """
-    return infer_fraud_empty_cells_algorithm_and_trim(cfg)[1]
+    raw: Mapping[str, Any]
+    if cfg is None:
+        raw = load_runtime().raw
+    elif isinstance(cfg, RuntimeConfig):
+        raw = cfg.raw
+    else:
+        raw = cfg
+    gv = raw.get("grid_view")
+    if not isinstance(gv, dict):
+        return 0
+    v = gv.get("fraud_empty_cells_tiling_n", 0)
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, n)

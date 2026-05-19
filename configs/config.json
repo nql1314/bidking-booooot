@@ -1,11 +1,7 @@
 {
   "pricing": {
     "enable_opponent_bid_adjustment": true,
-    "infer_unknown_contour_shapes": true
-  },
-  "grid_view": {
-    "unknown_bg": "#1a7394",
-    "fraud_empty_cells_algorithm": "tiling_strict"
+    "infer_unknown_contour_shapes": false
   },
   "board_snapshot": {
     "enabled": true,
@@ -13,18 +9,20 @@
     "write_mode": "both",
     "schema_version_min": 1,
     "self_user_uid": "",
-    "self_name_substring": "Nico666"
+    "self_name_substring": ""
   },
   "automation": {
-    "bot_runner": "fresh_bidking_bot",
-    "selected_mode": "ahmad_premium",
+    "bot_runner": "fresh_aisha_bot",
+    "selected_mode": "aisha_premium",
     "tool_rounds": [],
     "default_map": "1",
     "default_runs": 1,
-    "selected_map": "210",
-    "selected_runs": 83,
+    "selected_map": "230",
+    "selected_runs": 1,
     "warehouse_auto_sort": {
-      "enabled": true
+      "enabled": true,
+      "wait_after_warehouse_click_seconds": 5.0,
+      "wait_after_auto_sort_click_seconds": 5.0
     }
   },
   "debug": {
@@ -38,8 +36,8 @@
   },
   "timing": {
     "poll_seconds": 1,
-    "round_detect_wait_seconds": 5.0,
-    "round1_extra_wait_seconds": 5.0,
+    "round_detect_wait_seconds": 8.0,
+    "round1_extra_wait_seconds": 2.0,
     "tool_after_wait_seconds": 5.0,
     "click_pause_seconds": 0.12,
     "after_bid_confirm_wait_seconds": 1.0,
@@ -50,6 +48,11 @@
     "reward_continue_debounce_seconds": 1.0
   },
   "advisor": {
-    "role": "ahmad"
+    "role": "aisha"
+  },
+  "grid_view": {
+    "unknown_bg": "#1a7394",
+    "fraud_empty_cells_algorithm": "None",
+    "fraud_empty_cells_tiling_n": 30
   }
 }

@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, Set, Tuple, Union
+from typing import Any, Dict, Set, Tuple, Union
 
 from ...analysis import grid_overlay as _grid_overlay
 from ...analysis.snapshot import game_state_to_json, item_knowledge_to_json
@@ -46,7 +46,6 @@ def build_grid_overlay_export_dict(
     occupied_cells: set,
     max_box_id: int,
     infer_unknown_contour_shapes: bool = True,
-    infer_suppress_uids: Optional[Set[str]] = None,
 ) -> Dict[str, Any]:
     """组装写入 ``grid_overlay`` 的字段；不含 ``vacant``（须用全量占位格在 :meth:`GridWindow._grid_overlay_to_json` 中计算）。"""
     ph = {uid: item_knowledge_to_json(k) for uid, k in phantom_items.items()}
@@ -71,9 +70,6 @@ def build_grid_overlay_export_dict(
         raw_pricing=raw_pricing,
         infer_unknown_contour_shapes=infer_unknown_contour_shapes,
     )
-    sup = infer_suppress_uids or set()
-    if sup:
-        infer = {uid: t for uid, t in infer.items() if str(uid) not in sup}
     infer_out = {uid: [int(x) for x in tup] for uid, tup in infer.items()}
     overlay_for_merged = {
         "phantom_items": ph,

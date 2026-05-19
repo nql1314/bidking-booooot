@@ -196,7 +196,7 @@ def fraud_empty_cells_for_algorithm(
     - ``tiling_strict``：铺板可解释性（顶左画形），即 :func:`fraud_empty_cells_in_zone_prefix`；
       兼容旧名 ``tiling`` / ``tile`` / ``explainability``。
     - ``tiling_n``：先算 ``tiling_strict`` 基底，再**去掉** BoxId ``b <= limit - n`` 的格（这些格不再视为诈骗格）；
-      ``n`` 由参数 ``fraud_empty_cells_tiling_n`` 传入（来自 :func:`bidking.config.runtime.infer_fraud_empty_cells_algorithm_and_trim` 或兼容配置）；``n <= 0`` 时与 ``tiling_strict`` 相同。
+      ``n`` 由参数 ``fraud_empty_cells_tiling_n`` 传入（通常来自配置）；``n <= 0`` 时与 ``tiling_strict`` 相同。
     - ``none``：不做诈骗判断，恒返回空集（几何空置不因诈骗格剔除）。
 
     未知算法名时回退为 ``tiling_strict``，与旧行为一致。

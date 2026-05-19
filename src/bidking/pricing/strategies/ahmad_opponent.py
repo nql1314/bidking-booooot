@@ -33,7 +33,7 @@ def apply_opponent_bid_adjustment_core(
     if r_no >= 5:
         return bid_i + random.randint(1000, 1500), "opp_final", None
     if bid_i > adj:
-        return min(int(adj * mult),(adj + bid_i) / 2), "opp_low", None
+        return int(round((bid_i + adj) / 2)), "opp_low", None
 
     if bid_i > o_poss:
         return int(o_poss), "opp_poss", None

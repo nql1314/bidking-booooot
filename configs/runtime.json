@@ -19,14 +19,24 @@
       ],
       "between_clicks_seconds": 1.0
     },
-    "park_mouse_after_clicks": false
+    "park_mouse_after_clicks": true,
+    "loot_overlay_dismiss": {
+      "enabled": true,
+      "click_screen": [
+        1264,
+        130
+      ],
+      "after_dismiss_pause_seconds": 0.35,
+      "poll_dismiss_enabled": true,
+      "poll_dismiss_min_seconds": 2.5
+    }
   },
   "window": {
     "title_keyword": "BidKing",
     "title_regex": "",
     "process_name": "BidKing.exe",
     "hwnd": 0,
-    "center_on_start": false,
+    "center_on_start": true,
     "force_topmost_bump": true,
     "reference_client_size": {
       "width": 1920,
@@ -66,15 +76,15 @@
     },
     "bid_button": {
       "x": 862,
-      "y": 1004
+      "y": 972
     },
     "bid_input_box": {
       "x": 1046,
       "y": 865
     },
     "bid_confirm": {
-      "x": 1081,
-      "y": 1002
+      "x": 1057,
+      "y": 988
     },
     "end_reward_click": {
       "origin": "left_bottom",
@@ -116,8 +126,8 @@
     "unknown_escape_cooldown_seconds": 2.0,
     "post_confirm_escape_block_seconds": 60.0,
     "warehouse_auto_sort": {
-      "wait_after_warehouse_click_seconds": 3.0,
-      "wait_after_auto_sort_click_seconds": 3.0,
+      "wait_after_warehouse_click_seconds": 5.0,
+      "wait_after_auto_sort_click_seconds": 5.0,
       "warehouse_button_click": {
         "origin": "left_top",
         "x": 127,
