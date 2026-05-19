@@ -1,6 +1,7 @@
 {
   "pricing": {
-    "enable_opponent_bid_adjustment": false,
+    "enable_opponent_bid_adjustment": true,
+    "enable_vacant_red_floor_ceiling_pick": true,
     "fallback_bid_price": 155555,
     "secret_auction_rank_opponent_multipliers": {
       "behind_ge_2": 1.1,
@@ -11,13 +12,13 @@
     }
   },
   "automation": {
-    "bid_cap_price": 3000000,
+    "bid_cap_price": 2000000,
     "bid_ratio_by_round": {
       "1": 0.55,
       "2": 0.65,
       "3": 0.75,
-      "4": 0.95,
-      "5": 1.0
+      "4": 0.85,
+      "5": 0.9
     }
   }
 }

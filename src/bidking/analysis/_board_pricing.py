@@ -60,6 +60,9 @@ _RANDOM_AVG_MIN_DOMINANCE_RATIO = 0.5
 # Ahmad 跑刀仓位估价：与 ``automation.maps`` 档键 ``210``（快递盲盒堆，含 2101~2107 等子图）对齐。
 _EXPRESS_STATION_MAP_BUNDLE_KEY = "210"
 
+# 集装箱地图系列档
+_CONTAINER_MAP_BUNDLE_KEY = "230"
+
 
 def map_bundle_is_express_station_series(map_id: int) -> bool:
     """当前 ``MapId`` 是否属快递站系列（与 :func:`item_db.map_bundle_key_for_automation` 档键 ``210``）。"""
@@ -67,6 +70,14 @@ def map_bundle_is_express_station_series(map_id: int) -> bool:
     if mid <= 0:
         return False
     return item_db.map_bundle_key_for_automation(mid) == _EXPRESS_STATION_MAP_BUNDLE_KEY
+
+
+def map_bundle_is_container_series(map_id: int) -> bool:
+    """当前 ``MapId`` 是否属集装箱地图系列（与 :func:`item_db.map_bundle_key_for_automation` 档键 ``220``）。"""
+    mid = int(map_id or 0)
+    if mid <= 0:
+        return False
+    return item_db.map_bundle_key_for_automation(mid) == _CONTAINER_MAP_BUNDLE_KEY
 
 
 def _load_item_prices_db() -> Tuple[Dict[int, Any], List[Any]]:

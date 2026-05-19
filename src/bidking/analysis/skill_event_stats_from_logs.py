@@ -272,44 +272,50 @@ def apply_outline_hitbox_to_event_stats(
     """用轮廓类技能的 ``HitBoxList`` 补 ``q1``–``q6`` 件数/占格/均格（不推导价格）。"""
     for q in (1, 2, 3, 4, 5, 6):
         agg = _best_outline_aggregate_for_quality(skill_entries, q)
-        if agg is None or agg["count"] <= 0:
+        if agg is None:
             continue
+
+        count = agg["count"]
+        total_cells = agg["total_cells"]
+        avg_cells = agg["avg_cells"]
+
+        # 即使 count 为 0（技能没扫到物品），也要将对应字段设为 0
         if q == 1:
-            if direct["q1_count"] in (None, 0):
-                direct["q1_count"] = int(agg["count"])
-            if not direct["q1_grid_count"] and agg["total_cells"]:
-                direct["q1_grid_count"] = int(agg["total_cells"])
+            if direct["q1_count"] is None:
+                direct["q1_count"] = int(count) if count is not None else None
+            if direct["q1_grid_count"] is None:
+                direct["q1_grid_count"] = int(total_cells) if total_cells else 0
         if q == 2:
-            if direct["q2_count"] in (None, 0):
-                direct["q2_count"] = int(agg["count"])
-            if not direct["q2_grid_count"] and agg["total_cells"]:
-                direct["q2_grid_count"] = int(agg["total_cells"])
+            if direct["q2_count"] is None:
+                direct["q2_count"] = int(count) if count is not None else None
+            if direct["q2_grid_count"] is None:
+                direct["q2_grid_count"] = int(total_cells) if total_cells else 0
         if q == 3:
-            if direct["q3_count"] in (None, 0):
-                direct["q3_count"] = int(agg["count"])
-            if not direct["q3_grid_count"] and agg["total_cells"]:
-                direct["q3_grid_count"] = int(agg["total_cells"])
+            if direct["q3_count"] is None:
+                direct["q3_count"] = int(count) if count is not None else None
+            if direct["q3_grid_count"] is None:
+                direct["q3_grid_count"] = int(total_cells) if total_cells else 0
         if q == 4:
-            if direct["q4_count"] in (None, 0):
-                direct["q4_count"] = int(agg["count"])
-            if not direct["q4_grid_count"] and agg["total_cells"]:
-                direct["q4_grid_count"] = int(agg["total_cells"])
-            if direct["q4_grid_avg"] is None and agg["avg_cells"] is not None:
-                direct["q4_grid_avg"] = float(agg["avg_cells"])
+            if direct["q4_count"] is None:
+                direct["q4_count"] = int(count) if count is not None else None
+            if direct["q4_grid_count"] is None:
+                direct["q4_grid_count"] = int(total_cells) if total_cells else 0
+            if direct["q4_grid_avg"] is None and avg_cells is not None:
+                direct["q4_grid_avg"] = float(avg_cells)
         if q == 5:
-            if direct["q5_count"] in (None, 0):
-                direct["q5_count"] = int(agg["count"])
-            if not direct["q5_grid_count"] and agg["total_cells"]:
-                direct["q5_grid_count"] = int(agg["total_cells"])
-            if direct["q5_grid_avg"] is None and agg["avg_cells"] is not None:
-                direct["q5_grid_avg"] = float(agg["avg_cells"])
+            if direct["q5_count"] is None:
+                direct["q5_count"] = int(count) if count is not None else None
+            if direct["q5_grid_count"] is None:
+                direct["q5_grid_count"] = int(total_cells) if total_cells else 0
+            if direct["q5_grid_avg"] is None and avg_cells is not None:
+                direct["q5_grid_avg"] = float(avg_cells)
         if q == 6:
-            if direct["q6_count"] in (None, 0):
-                direct["q6_count"] = int(agg["count"])
-            if not direct["q6_grid_count"] and agg["total_cells"]:
-                direct["q6_grid_count"] = int(agg["total_cells"])
-            if direct["q6_grid_avg"] is None and agg["avg_cells"] is not None:
-                direct["q6_grid_avg"] = float(agg["avg_cells"])
+            if direct["q6_count"] is None:
+                direct["q6_count"] = int(count) if count is not None else None
+            if direct["q6_grid_count"] is None:
+                direct["q6_grid_count"] = int(total_cells) if total_cells else 0
+            if direct["q6_grid_avg"] is None and avg_cells is not None:
+                direct["q6_grid_avg"] = float(avg_cells)
 
 
 def _write_skill_int_fields_from_logs(

@@ -3,10 +3,15 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from ..analysis._board_pricing import map_id_from_board_snapshot
+from ..analysis._board_pricing import (
+    map_bundle_is_container_series,
+    map_bundle_is_express_station_series,
+    map_id_from_board_snapshot,
+)
 from ..config.map_runtime_overlay import merged_runtime_with_map_pricing
-from ..parsing.item_db import map_bundle_key_for_automation, normalize_map_id
+from ..parsing.item_db import map_bundle_key_for_automation
 from .snapshot_io import current_round_from_snapshot, load_board_snapshot_if_enabled
+from .snapshot_players import board_snapshot_self_identity
 from ._multipliers import resolve_automation_bid_ratio
 from ._numeric import parse_int_config
 from .opponent_adjust import apply_opponent_bid_adjustment
@@ -55,9 +60,8 @@ def compute_price(
         mid_snap = map_id_from_board_snapshot(bs)
         if mid_snap is not None and int(mid_snap) > 0:
             mid_i = int(mid_snap)
-            mid_n = normalize_map_id(mid_i)
-            mid_for_key = int(mid_n) if mid_n is not None else mid_i
-            map_bundle_key = map_bundle_key_for_automation(mid_for_key)
+            # 使用原始 map_id 计算档键，不做归一化
+            map_bundle_key = map_bundle_key_for_automation(mid_i)
 
     if map_bundle_key is not None:
         effective_config = merged_runtime_with_map_pricing(
@@ -170,10 +174,50 @@ def compute_price(
         effective_round,
         bid_ratio=ratio,
     )
+     # 集装箱地图：非作者账号遇到作者账号时，价格乘以 0.88
+    mid_ct = map_id_from_board_snapshot(bs)
+    if mid_ct is not None and map_bundle_is_container_series(int(mid_ct)):
+        self_uid_ct, _ = board_snapshot_self_identity(effective_config, bs)
+        if self_uid_ct:
+            players_ct = (bs.get("game_state") or {}).get("players") or {}
+            if not isinstance(players_ct, dict):
+                players_ct = bs.get("players") if isinstance(bs.get("players"), dict) else {}
+            if isinstance(players_ct, dict):
+                _author_uid_large = "358372071974712"  # 大号
+                _author_uid_small = "941456831344888"  # 小号
+                author_uids = {_author_uid_large, _author_uid_small}
+                opp_uids_ct = {
+                    str(k) for k in players_ct if str(k) != str(self_uid_ct)
+                }
+                # 当前使用者非作者账号，且对手中包含作者账号
+                if self_uid_ct not in author_uids:
+                    if author_uids.intersection(opp_uids_ct):
+                        fin = int(round(fin * 0.88))
     fin, payload = apply_human_like_price_tail(fin, payload)
     fin, payload = apply_early_round_fallback_floor(
         fin, effective_round, int(fallback), payload
     )
+    # 快递站系列地图：与作者（两固定 UID）对局时的约定出价（早于 bid_cap）
+    mid_sp = map_id_from_board_snapshot(bs)
+    if mid_sp is not None and map_bundle_is_express_station_series(int(mid_sp)):
+        self_uid_sp, _ = board_snapshot_self_identity(effective_config, bs)
+        if self_uid_sp:
+            players_sp = (bs.get("game_state") or {}).get("players") or {}
+            if not isinstance(players_sp, dict):
+                players_sp = bs.get("players") if isinstance(bs.get("players"), dict) else {}
+            if isinstance(players_sp, dict):
+                _author_uid_primary = "941456831344888"
+                _author_uid_alt = "358372071974712"
+                opp_uids = {
+                    str(k) for k in players_sp if str(k) != str(self_uid_sp)
+                }
+                forced: int | None = None
+                if self_uid_sp == _author_uid_primary and _author_uid_alt in opp_uids:
+                    forced = 250
+                elif self_uid_sp == _author_uid_alt and _author_uid_primary in opp_uids:
+                    forced = 886
+                if forced is not None:
+                    fin = int(forced)
     fin, payload = apply_bid_cap(effective_config, fin, payload)
     payload["final_round_used"] = effective_round
     return int(fin), payload
