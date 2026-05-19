@@ -26,7 +26,7 @@ from ..config.map_runtime_overlay import (
     automation_maps_sorted_keys,
     resolve_automation_map_config_key,
 )
-from ..config.paths import config_overlay_path, runtime_path
+from ..config.paths import config_overlay_path, pricing_map_overlay_path, runtime_path
 from ..config.pricing import deep_merge
 from ..config.runtime import apply_board_snapshot_env_overrides
 
@@ -35,8 +35,9 @@ ROOT = Path(__file__).resolve().parent
 CONFIG_OVERLAY_PATH = config_overlay_path()
 
 BOT_RUNNER_LABEL_TO_KEY = {
-    "ahmad跑刀": "fresh_bidking_bot",
-    "aisha通用": "fresh_aisha_bot",
+    "艾哈迈德跑刀": "fresh_bidking_bot",
+    "艾莎通用": "fresh_aisha_bot",
+    "艾莎挂机": "aisha_idle_bot",
     "通用角色（全角色）": "fresh_aisha_bot",
 }
 BOT_RUNNER_COMBO_VALUES = tuple(BOT_RUNNER_LABEL_TO_KEY.keys())
@@ -79,8 +80,8 @@ def _bot_runner_label_from_config(cfg: dict) -> str:
     if key == "fresh_aisha_bot" and role == "universal":
         return "通用角色（全角色）"
     if key == "fresh_aisha_bot":
-        return "aisha通用"
-    return "ahmad跑刀"
+        return "艾莎通用"
+    return "艾哈迈德跑刀"
 
 
 def resolve_bot_runner(cfg: dict) -> str:
@@ -149,6 +150,33 @@ class BidKingApp:
     def save_json(self, path: Path, data: dict) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _apply_idle_bot_to_map_config(self, map_key: str) -> None:
+        """艾莎挂机脚本：将 enable_vacant_red_floor_ceiling_pick 和 enable_opponent_bid_adjustment
+        强制设置为 false 并写入到当前地图的配置文件中（configs/pricing.maps/<map_key>.json）。
+        """
+        if not map_key:
+            return
+
+        # 使用项目内置工具函数获取地图配置文件路径
+        map_config_path = pricing_map_overlay_path(map_key)
+        if not map_config_path.parent.exists():
+            map_config_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # 读取现有配置（如果存在）
+        map_config: dict = {}
+        if map_config_path.is_file():
+            try:
+                map_config = self.load_json(map_config_path)
+            except Exception:
+                map_config = {}
+
+        # 强制设置两个开关为 false
+        map_config.setdefault("pricing", {})
+        map_config["pricing"]["enable_vacant_red_floor_ceiling_pick"] = False
+        map_config["pricing"]["enable_opponent_bid_adjustment"] = False
+
+        self.save_json(map_config_path, map_config)
 
     def _rebuild_merged_config(self) -> None:
         self.config = deep_merge(self.runtime_base, self.overlay)
@@ -324,11 +352,11 @@ class BidKingApp:
         runner_label = self.bot_runner_var.get().strip()
         runner_key = BOT_RUNNER_LABEL_TO_KEY.get(runner_label, "fresh_bidking_bot")
         selected_mode = (
-            "aisha_premium" if runner_key == "fresh_aisha_bot" else "ahmad_premium"
+            "aisha_premium" if runner_key in ("fresh_aisha_bot", "aisha_idle_bot") else "ahmad_premium"
         )
         if runner_label == "通用角色（全角色）":
             advisor_role = "universal"
-        elif runner_key == "fresh_aisha_bot":
+        elif runner_key in ("fresh_aisha_bot", "aisha_idle_bot"):
             advisor_role = "aisha"
         else:
             advisor_role = "ahmad"
@@ -354,6 +382,11 @@ class BidKingApp:
         self.overlay.setdefault("advisor", {})["role"] = advisor_role
 
         self.save_json(CONFIG_OVERLAY_PATH, self.overlay)
+
+        # 艾莎挂机脚本：强制临时禁用 enable_vacant_red_floor_ceiling_pick 和 enable_opponent_bid_adjustment
+        # 修改写入到当前选中的地图配置文件中（configs/pricing.maps/<map_key>.json）
+        if runner_key == "aisha_idle_bot":
+            self._apply_idle_bot_to_map_config(selected_map)
         self.config = deep_merge(self.runtime_base, self.overlay)
         apply_board_snapshot_env_overrides(self.config)
 
@@ -409,7 +442,7 @@ class BidKingApp:
                 rk = self.config.get("automation", {}).get(
                     "bot_runner", "fresh_bidking_bot",
                 )
-                if rk == "fresh_aisha_bot":
+                if rk in ("fresh_aisha_bot", "aisha_idle_bot"):
                     from ..interaction._legacy_bot import run_aisha_loop
 
                     run_aisha_loop(CONFIG_OVERLAY_PATH, progress_sink=sink)

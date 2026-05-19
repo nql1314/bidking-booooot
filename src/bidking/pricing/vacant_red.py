@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .opponent_adjust import board_snapshot_is_secret_auction
 from .snapshot_players import (
     board_snapshot_self_identity,
     iter_opponent_round_bids_from_snapshot,
@@ -13,23 +14,6 @@ _HERO_CID_RED_SCOUT = 110
 
 # 与旧版 aisha_premium 一致：低级图不做空置红推断
 _VACANT_RED_INFERENCE_EXCLUDE_MAP_CONFIG_KEYS = frozenset({"1", "2"})
-
-
-def _count_quality_items_all(board_snapshot: dict[str, Any], quality: int) -> int:
-    raw = (board_snapshot.get("game_state") or {}).get("items") or {}
-    if not isinstance(raw, dict):
-        return 0
-    k = 0
-    for _uid, it in raw.items():
-        if not isinstance(it, dict):
-            continue
-        q = it.get("quality")
-        try:
-            if int(q) == quality:
-                k += 1
-        except (TypeError, ValueError):
-            continue
-    return k
 
 
 def _hero_110_red_scout_signal(
@@ -78,6 +62,70 @@ def _hero_110_red_scout_signal(
     return bool(hits), hits
 
 
+def _infer_secret_auction_red_by_rank(
+    config: dict[str, Any],
+    board_snapshot: dict[str, Any],
+    ref_round: int,
+    vac: int,
+    current_round: int,
+) -> tuple[bool, dict[str, Any]]:
+    """隐秘拍卖专用：prices 为排名（1=最好，4=最差），用相对排名判断是否有空置红。
+
+    策略：
+    - 只针对第4、5回合生效，其他回合直接返回无红
+    - 若我方排名 >= 3（第3或第4名），认为对手抢得凶，推断有红。
+    - 或有 2 个以上对手排名比我方靠前（数值更小），也认为有红。
+    - 如果第4回合判断有红，第5回合直接沿用该结果
+    """
+    detail: dict[str, Any] = {
+        "mode": "secret_auction_rank",
+        "reference_round": ref_round,
+        "current_round": current_round,
+    }
+
+    # 只针对第4、5回合生效
+    if int(current_round) not in (4, 5):
+        detail["decision_rule"] = "only_round_4_5_effective"
+        return False, detail
+
+    # 第5回合：检查第4回合是否已判断有红
+    if int(current_round) == 5:
+        round_4_red = board_snapshot.get("vacant_red_round4_inferred")
+        if round_4_red is True:
+            detail["decision_rule"] = "round4_had_red_inherit"
+            detail["round4_red_inferred"] = True
+            return True, detail
+
+    our_rank = self_round_bid_from_snapshot(config, board_snapshot, ref_round)
+    detail["our_rank"] = our_rank
+
+    op_ranks = list(iter_opponent_round_bids_from_snapshot(config, board_snapshot, ref_round))
+    detail["opponent_ranks"] = op_ranks
+
+    if our_rank is None:
+        detail["decision_rule"] = "no_self_rank_assume_red"
+        has_red = True
+        # 第4回合记录结果供第5回合使用
+        if int(current_round) == 4:
+            board_snapshot["vacant_red_round4_inferred"] = has_red
+        return has_red, detail
+
+    our_r = int(our_rank)
+    ahead_count = sum(1 for r in op_ranks if r is not None and int(r) < our_r)
+    detail["opponents_ahead_count"] = ahead_count
+
+    # 排名 >=3（第3或第4名）或至少有2个对手排名更好，则认为有红
+    has_red = our_r >= 3 or ahead_count >= 2
+    detail["decision_rule"] = "rank_based"
+    detail["rank_threshold"] = {"ours": our_r, "has_red": has_red}
+
+    # 第4回合记录结果供第5回合使用
+    if int(current_round) == 4:
+        board_snapshot["vacant_red_round4_inferred"] = has_red
+
+    return has_red, detail
+
+
 def infer_vacant_has_red_from_opponent_history(
     *,
     config: dict[str, Any],
@@ -98,6 +146,24 @@ def infer_vacant_has_red_from_opponent_history(
         return False, detail
 
     ref_r = 3 if int(current_round) == 4 else 4
+
+    # 隐秘拍卖：prices 是排名而非金币，使用排名判断逻辑
+    if board_snapshot_is_secret_auction(board_snapshot):
+        detail["reference_price_round"] = ref_r
+        has_red, sub_detail = _infer_secret_auction_red_by_rank(
+            config, board_snapshot, ref_r, vac, current_round
+        )
+        detail["secret_auction_inference"] = sub_detail
+        detail["has_red_inferred"] = has_red
+        detail["decision_rule"] = "secret_auction_rank_based"
+        # 继续向下检查 vac > 12 的保底规则（197-201行）
+        if has_red:
+            return has_red, detail
+        # has_red 为 False 时，继续检查 vac > 16
+        if current_round == 4 and vac >= 20:
+            detail["decision_rule"] = "secret_auction_vac_gt_12_assume_red"
+            return True, detail
+        return has_red, detail
     detail["reference_price_round"] = ref_r
     our_b = self_round_bid_from_snapshot(config, board_snapshot, ref_r)
     detail["our_bid_same_round"] = our_b
@@ -167,6 +233,8 @@ def apply_vacant_red_floor_ceiling_pick(
     """第 4–5 回合：若 ``points_floor`` ≠ ``points_ceiling``，在倍数前先择优锚定价。"""
     if int(round_no) not in (4, 5):
         return int(fin), {"applied": False, "reason": "not_round_4_or_5"}
+    if not config.get("pricing", {}).get("enable_vacant_red_floor_ceiling_pick", True):
+        return int(fin), {"applied": False, "reason": "vacant_red_floor_ceiling_pick_disabled"}
     cfg_map_key = _automation_selected_map_config_key(config)
     if cfg_map_key in _VACANT_RED_INFERENCE_EXCLUDE_MAP_CONFIG_KEYS:
         return int(fin), {

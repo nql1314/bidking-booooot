@@ -1,5 +1,6 @@
 {
   "pricing": {
+    "enable_vacant_red_floor_ceiling_pick": true,
     "enable_opponent_bid_adjustment": true,
     "infer_unknown_contour_shapes": true,
     "price_avg_infer_max_item_count": 30,
@@ -15,7 +16,7 @@
     "path": "data/board_snapshot.json",
     "write_mode": "both",
     "schema_version_min": 1,
-    "self_user_uid": "941456831344888"
+    "self_user_uid": "358372071974712"
   },
   "automation": {
     "bot_runner": "fresh_aisha_bot",
@@ -23,13 +24,13 @@
     "tool_rounds": [],
     "default_map": "1",
     "default_runs": 1,
-    "selected_map": "230",
-    "selected_runs": 2,
+    "selected_map": "440",
+    "selected_runs": 10,
     "warehouse_auto_sort": {
       "enabled": true
     },
-    "run_cycles": 3,
-    "cycle_rest_minutes": 1.0
+    "run_cycles": 2,
+    "cycle_rest_minutes": 0.0
   },
   "timing": {
     "poll_seconds": 1,
