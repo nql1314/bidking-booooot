@@ -272,3 +272,38 @@ def infer_fraud_empty_cells_tiling_n(
     仅在算法为 ``tiling_n`` 时参与计算；否则返回值可忽略。恒为非负整数。
     """
     return infer_fraud_empty_cells_algorithm_and_trim(cfg)[1]
+
+
+def _truthy_value(v: Any) -> bool:
+    """判断配置值是否为真（支持 bool/int/float/str）。"""
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return bool(int(v))
+    if isinstance(v, str):
+        return v.strip().lower() in ("1", "true", "yes", "on")
+    return bool(v)
+
+
+def infer_big_gold_adjustment_enabled(
+    cfg: Optional[Union[RuntimeConfig, Mapping[str, Any]]] = None,
+) -> bool:
+    """
+    是否启用大金区域折算权重。
+
+    读取 ``pricing.enable_big_gold_adjustment``；键缺失或值为假时为 ``False``（与原逻辑一致）。
+    当启用时，若空置区存在大金尺寸（3x4,4x3,4x4,3x5,5x2等）连续区域，
+    对该区域使用折算单价 (u_orange+u_early)/2，避免大金过大导致估价偏高。
+    """
+    raw: Mapping[str, Any]
+    if cfg is None:
+        raw = load_runtime().raw
+    elif isinstance(cfg, RuntimeConfig):
+        raw = cfg.raw
+    else:
+        raw = cfg
+    p = raw.get("pricing")
+    if not isinstance(p, dict):
+        return False
+    v = p.get("enable_big_gold_adjustment", False)
+    return _truthy_value(v)
