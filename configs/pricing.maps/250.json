@@ -1,5 +1,9 @@
 {
   "pricing": {
+    "vacant_red_floor_ceiling_pick_mode": "normal",
+    "enable_opponent_bid_adjustment": true,
+    "enable_vacant_red_floor_ceiling_pick": true,
+    "enable_big_gold_adjustment": true,
     "fallback_bid_price": 222222
   },
   "automation": {
