@@ -1410,13 +1410,28 @@ def handle_round(
         sleep_interruptible(float(timing_cfg.get("round_detect_wait_seconds", 0.0) or 0.0))
     tool_rounds = {int(item) for item in config.get("automation", {}).get("tool_rounds", [1, 2])}
     ran_tool_this_round = int(round_no) in tool_rounds
-    
+
+    # 当空置格 <= 配置阈值时，不使用道具
+    tool_skip_vacant_threshold = int(
+        config.get("automation", {}).get("tool_skip_vacant_threshold", 5)
+    )
+    bs_data = load_board_snapshot_for_loop(config)
+    if bs_data is not None:
+        pricing = bs_data.get("pricing") or {}
+        vacant = pricing.get("vacant")
+        if vacant is not None and int(vacant) <= tool_skip_vacant_threshold:
+            log(
+                f"round {round_no}: vacant={vacant} <= {tool_skip_vacant_threshold}, skip tool",
+                gui_verbose_only=True,
+            )
+            ran_tool_this_round = False
+
     if ran_tool_this_round:
         run_tool_sequence(config)
         log(f"after tool", gui_verbose_only=True)
         sleep_interruptible(5)
     else:
-        log(f"round {round_no}: tool skipped by config", gui_verbose_only=True)
+        log(f"round {round_no}: tool skipped", gui_verbose_only=True)
 
     price, details = compute_price(
         config,
