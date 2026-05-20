@@ -2,13 +2,19 @@ from __future__ import annotations
 
 from typing import Any
 
-from .opponent_adjust import board_snapshot_is_secret_auction
+from .opponent_adjust import board_map_bundle_key, board_snapshot_is_secret_auction
 from .snapshot_players import (
     board_snapshot_self_identity,
     iter_opponent_round_bids_from_snapshot,
     player_round_price_bid,
     self_round_bid_from_snapshot,
 )
+
+_VACANT_RED_PICK_MODE_NORMAL = "normal"
+_VACANT_RED_PICK_MODE_AGGRESSIVE = "aggressive"
+
+# 暗图（440/450 隐秘拍卖档）：积极模式不比较对手价，规则 7 之后统一均价
+_AGGRESSIVE_DARK_MAP_BUNDLE_KEYS = frozenset({"440", "450"})
 
 _HERO_CID_RED_SCOUT = 110
 
@@ -223,6 +229,90 @@ def _automation_selected_map_config_key(config: dict[str, Any]) -> str:
     return str(auto.get("selected_map") or auto.get("default_map") or "").strip()
 
 
+def resolve_vacant_red_floor_ceiling_pick_mode(config: dict[str, Any]) -> str:
+    """``pricing.vacant_red_floor_ceiling_pick_mode``：``normal``（默认）或 ``aggressive``。"""
+    raw = (config.get("pricing") or {}).get("vacant_red_floor_ceiling_pick_mode")
+    mode = str(raw or _VACANT_RED_PICK_MODE_NORMAL).strip().lower()
+    if mode in (_VACANT_RED_PICK_MODE_AGGRESSIVE, "激进", "积极"):
+        return _VACANT_RED_PICK_MODE_AGGRESSIVE
+    return _VACANT_RED_PICK_MODE_NORMAL
+
+
+def board_snapshot_aggressive_dark_map(
+    board_snapshot: dict[str, Any] | None,
+) -> bool:
+    """暗图档（440/450）：``prices`` 为名次，不宜按金币比较对手价。"""
+    k = board_map_bundle_key(board_snapshot)
+    return bool(k) and k in _AGGRESSIVE_DARK_MAP_BUNDLE_KEYS
+
+
+def _reference_round_for_vacant_red_pick(current_round: int) -> int:
+    return 3 if int(current_round) == 4 else 4
+
+
+def _max_opponent_bid_for_vacant_red_pick(
+    config: dict[str, Any],
+    board_snapshot: dict[str, Any],
+    current_round: int,
+) -> int | None:
+    ref_r = _reference_round_for_vacant_red_pick(current_round)
+    op_bids = iter_opponent_round_bids_from_snapshot(config, board_snapshot, ref_r)
+    if not op_bids:
+        return None
+    return int(max(op_bids))
+
+
+def _aggressive_floor_ceiling_choice(
+    *,
+    points_floor: int,
+    points_ceiling: int,
+    vacant_used: int,
+    max_opponent_bid: int | None,
+    dark_map: bool = False,
+) -> tuple[int, str, dict[str, Any]]:
+    """积极模式：默认金红价（``points_ceiling``），按序命中则退回全橙或均价。"""
+    pf_i = int(points_floor)
+    red_i = int(points_ceiling)
+    avg_i = int(round((pf_i + red_i) / 2))
+    vac_i = int(vacant_used)
+    detail: dict[str, Any] = {
+        "points_floor": pf_i,
+        "points_ceiling_red": red_i,
+        "avg_points": avg_i,
+        "vacant_used": vac_i,
+        "max_opponent_bid": max_opponent_bid,
+        "dark_map": bool(dark_map),
+    }
+
+    if vac_i <= 4:
+        return pf_i, "aggressive_vac_le_4_floor", detail
+
+    if not dark_map and max_opponent_bid is not None:
+        mo = float(max_opponent_bid)
+        fl = float(pf_i)
+        if fl > mo * 1.2:
+            return pf_i, "aggressive_floor_gt_opp_x1_2", detail
+        if fl > mo:
+            return avg_i, "aggressive_floor_gt_max_opp_avg", detail
+        if mo >= 1.2 * fl:
+            return red_i, "aggressive_opp_ge_floor_x1_2_red", detail
+        if mo >= float(red_i):
+            return red_i, "aggressive_opp_ge_red", detail
+
+    if 5 <= vac_i <= 12:
+        return avg_i, "aggressive_vac_5_12_avg", detail
+
+    if vac_i >= 12:
+        if dark_map:
+            return avg_i, "aggressive_dark_map_avg", detail
+        return red_i, "aggressive_vac_ge_12_red", detail
+
+    if dark_map:
+        return avg_i, "aggressive_dark_map_avg", detail
+
+    return red_i, "aggressive_vac_ge_12_red", detail
+
+
 def apply_vacant_red_floor_ceiling_pick(
     config: dict[str, Any],
     board_snapshot: dict[str, Any],
@@ -254,6 +344,33 @@ def apply_vacant_red_floor_ceiling_pick(
     if vac_m is None:
         return int(fin), {"applied": False, "reason": "missing_vacant"}
     vac_i = int(vac_m)
+    pick_mode = resolve_vacant_red_floor_ceiling_pick_mode(config)
+
+    if pick_mode == _VACANT_RED_PICK_MODE_AGGRESSIVE:
+        dark_map = board_snapshot_aggressive_dark_map(board_snapshot)
+        max_opp = None
+        if not dark_map:
+            max_opp = _max_opponent_bid_for_vacant_red_pick(
+                config, board_snapshot, int(round_no)
+            )
+        chosen, rule, agg_detail = _aggressive_floor_ceiling_choice(
+            points_floor=pf_i,
+            points_ceiling=pc_i,
+            vacant_used=vac_i,
+            max_opponent_bid=max_opp,
+            dark_map=dark_map,
+        )
+        return chosen, {
+            "applied": True,
+            "pick_mode": _VACANT_RED_PICK_MODE_AGGRESSIVE,
+            "decision_rule": rule,
+            "chosen_points": chosen,
+            "points_floor": pf_i,
+            "points_ceiling": pc_i,
+            "before_pick": int(fin),
+            "after_pick": chosen,
+            "aggressive_detail": agg_detail,
+        }
 
     has_red, infer_detail = infer_vacant_has_red_from_opponent_history(
         config=config,
@@ -265,6 +382,7 @@ def apply_vacant_red_floor_ceiling_pick(
     chosen = pc_i if has_red else pf_i
     return chosen, {
         "applied": True,
+        "pick_mode": _VACANT_RED_PICK_MODE_NORMAL,
         "has_red_inferred": has_red,
         "chosen_points": chosen,
         "points_floor": pf_i,

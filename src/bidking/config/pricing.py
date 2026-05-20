@@ -1,7 +1,8 @@
 """pricing.json 加载与按地图深合并覆盖。
 
 Schema 见 ``configs/pricing.json``：``ahmad_premium`` / ``grid_prices`` /
-``burst_limit`` / ``avg_tolerance`` / ``round_rules`` / ``category_weights``。
+``burst_limit`` / ``avg_tolerance`` / ``round_rules`` / ``category_weights`` /
+``vacant_tier_cell_exponents``（仅 ``q5``、``q5+q6`` 金/金红空置幂律 α；红档 ``q6`` 恒线性）。
 
 地图覆盖：``configs/pricing.maps/<map_id>.json`` —— 同 schema，对全局做
 **深合并**（dict 递归，list 整体替换）。
