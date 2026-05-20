@@ -1,10 +1,6 @@
 {
   "pricing": {
-    "fallback_bid_price": 22222,
-    "vacant_tier_cell_exponents": {
-      "q5": 0.85,
-      "q5+q6": 0.86
-    }
+    "fallback_bid_price": 22222
   },
   "automation": {
     "default_map": "1",
