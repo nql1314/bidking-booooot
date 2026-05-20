@@ -3,10 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from ..analysis._board_pricing import (
+from ..analysis._board_pricing import map_id_from_board_snapshot
+from ..analysis.strategy.ahmad import (
     map_bundle_is_container_series,
     map_bundle_is_express_station_series,
-    map_id_from_board_snapshot,
 )
 from ..config.map_runtime_overlay import merged_runtime_with_map_pricing
 from ..parsing.item_db import map_bundle_key_for_automation
