@@ -42,6 +42,7 @@ CSV 权重期望价。对 ``max(0, 加权等效格数 − 1)`` 之和从有效�
 from __future__ import annotations
 
 import math
+import time
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from ..parsing import item_db
@@ -51,6 +52,7 @@ from . import unknown_value as _unknown_value
 from . import grid_overlay as _grid_overlay
 from ._shape_wh import shape_wh_from_snapshot
 from . import strategy as _strategy
+from ..logsys.perf_log import perf_log, perf_log_elapsed
 
 _item_prices_cache: Optional[Tuple[Dict[int, Any], List[Any]]] = None
 
@@ -63,14 +65,18 @@ def _load_item_prices_db() -> Tuple[Dict[int, Any], List[Any]]:
     global _item_prices_cache
     if _item_prices_cache is not None:
         return _item_prices_cache
+    t0 = time.perf_counter()
     path = _unknown_value._item_prices_csv_path_resolved()
     if not path:
         _item_prices_cache = ({}, [])
+        perf_log_elapsed("_load_item_prices_db (no path)", t0)
         return _item_prices_cache
     try:
         _item_prices_cache = item_db.load_csv(path)
+        perf_log_elapsed("_load_item_prices_db (load_csv)", t0)
     except OSError:
         _item_prices_cache = ({}, [])
+        perf_log_elapsed("_load_item_prices_db (OSError)", t0)
     return _item_prices_cache
 
 
@@ -153,6 +159,7 @@ def _vacant_early_unit_excluding_q4_when_q4_total_known(
     扫描负向约束得到 ``(u0, qg0, pq0)`` 后：若事件已公开 ``q4_grid_count``，且 ``pq0`` 仍含
     品质 4，则从可能集合去掉 4 并按新组合键查 CSV；缺键则退回原扫描早单价。
     """
+    t0 = time.perf_counter()
     u0, qg0, pq0 = _scan_inference.vacant_early_unit_from_exclusions(
         board_snapshot=board_snapshot,
         csv_cells_raw=csv_cells_for_est if csv_cells_for_est else None,
@@ -165,8 +172,10 @@ def _vacant_early_unit_excluding_q4_when_q4_total_known(
     pq_ex = frozenset(q for q in pq0 if int(q) != 4)
     qg = _scan_inference.csv_quality_group_from_possible_set(pq_ex)
     if qg is None or not csv_cells_for_est or qg not in csv_cells_for_est:
+        perf_log_elapsed("_vacant_early_unit_excluding_q4 (fallback)", t0)
         return u0, qg0, pq0
     u = int(round(float(csv_cells_for_est[qg])))
+    perf_log_elapsed("_vacant_early_unit_excluding_q4 (adjusted)", t0)
     return u, str(qg), pq_ex
 
 
@@ -176,6 +185,7 @@ def _confirmed_tier_footprint_q456(
     """
     合并物品表上 Q4/Q5/Q6、含有效 ``box_id`` 且快照 ``shape`` 已知的几何占位格数之和。
     """
+    t0 = time.perf_counter()
     items = _grid_overlay.merged_items_dict_from_snapshot(board_snapshot)
     s4 = s5 = s6 = 0.0
     for _uid, it in items.items():
@@ -204,7 +214,9 @@ def _confirmed_tier_footprint_q456(
             s5 += fp
         else:
             s6 += fp
-    return int(round(s4)), int(round(s5)), int(round(s6))
+    result = int(round(s4)), int(round(s5)), int(round(s6))
+    perf_log_elapsed(f"_confirmed_tier_footprint_q456 (items={len(items)})", t0)
+    return result
 
 
 def _tier_min_extra_value_and_cells(
@@ -361,6 +373,7 @@ def _item_value(
     map_id_normalized: Optional[int],
     map_category_weights: Dict[int, float],
 ) -> float:
+    t0 = time.perf_counter()
     bid_raw = it.get("box_id")
     if bid_raw is None:
         return 0.0
@@ -411,7 +424,9 @@ def _item_value(
         return 0.0
 
     if unique:
-        return float(best.base_value)
+        result = float(best.base_value)
+        perf_log_elapsed("_item_value (unique)", t0)
+        return result
     w_est = est
     if w_est is None and csv_items:
         cand = list(csv_items)
@@ -432,7 +447,9 @@ def _item_value(
         if excl_c:
             cand = [i for i in cand if not any(c in excl_c for c in i.category_tags)]
         w_est = _weighted_est_price(cand, map_category_weights or None, map_id_normalized)
-    return float(w_est) if w_est is not None else float(best.base_value)
+    result = float(w_est) if w_est is not None else float(best.base_value)
+    perf_log_elapsed("_item_value (weighted)", t0)
+    return result
 
 
 def _sum_known_contour_weighted_price_and_geo_cells(
@@ -447,6 +464,7 @@ def _sum_known_contour_weighted_price_and_geo_cells(
     不要求 ``box_id_confirmed``，与 :func:`_item_value` 对未确认物品的计价一致。
     已确认品质的多候选不再计入，避免误扣 ``vacant_pts_base``、错抬空置格倍数。
     """
+    t0 = time.perf_counter()
     mid = map_id_from_board_snapshot(board_snapshot)
     mid_n = item_db.normalize_map_id(mid)
     items = _grid_overlay.merged_items_dict_from_snapshot(board_snapshot)
@@ -538,6 +556,7 @@ def _sum_known_contour_weighted_price_and_geo_cells(
         geo = max(1, int(w) * int(h))
         sum_val += val
         sum_geo += geo
+    perf_log_elapsed("_sum_known_contour_weighted_price_and_geo_cells", t0)
     return sum_val, sum_geo
 
 
@@ -548,6 +567,163 @@ def _geo_footprint_cells_from_shape_field(shape_val: Any) -> Optional[float]:
         return None
     w, h = shape_wh_from_snapshot(sh)
     return float(max(1, w * h))
+
+
+# 大金区域定义：(宽, 高) 或 (高, 宽) 都匹配
+_BIG_GOLD_SHAPES = frozenset([
+    (3, 4), (4, 3),  # 3x4, 4x3
+    (4, 4),          # 4x4
+    (3, 5), (5, 3),  # 3x5, 5x3
+    (5, 2), (2, 5),  # 5x2, 2x5
+])
+
+
+def _find_continuous_regions(
+    vacant_cells: Set[Tuple[int, int]],
+    occupied: Set[Tuple[int, int]],
+) -> List[Set[Tuple[int, int]]]:
+    """
+    在空置格中查找所有连续区域（4连通）。
+    返回每个连续区域的格子集合列表。
+    """
+    t0 = time.perf_counter()
+    if not vacant_cells:
+        return []
+
+    remaining = set(vacant_cells)
+    regions: List[Set[Tuple[int, int]]] = []
+
+    while remaining:
+        # 从一个种子点开始BFS
+        seed = remaining.pop()
+        region: Set[Tuple[int, int]] = {seed}
+        queue = [seed]
+
+        while queue:
+            r, c = queue.pop(0)
+            for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                nr, nc = r + dr, c + dc
+                if (nr, nc) in remaining and (nr, nc) not in occupied:
+                    remaining.discard((nr, nc))
+                    region.add((nr, nc))
+                    queue.append((nr, nc))
+
+        regions.append(region)
+
+    perf_log_elapsed(f"_find_continuous_regions (regions={len(regions)})", t0)
+    return regions
+
+
+def _get_bounding_box(cells: Set[Tuple[int, int]]) -> Tuple[int, int, int, int]:
+    """
+    获取一组格子的包围盒。
+    返回 (min_row, min_col, height, width)。
+    """
+    if not cells:
+        return 0, 0, 0, 0
+    rows = [r for r, c in cells]
+    cols = [c for r, c in cells]
+    min_r, max_r = min(rows), max(rows)
+    min_c, max_c = min(cols), max(cols)
+    return min_r, min_c, max_r - min_r + 1, max_c - min_c + 1
+
+
+def _is_rectangular_region(cells: Set[Tuple[int, int]], height: int, width: int) -> bool:
+    """
+    检查区域是否是一个完整的矩形（没有空洞）。
+    """
+    if len(cells) != height * width:
+        return False
+    min_r, min_c, h, w = _get_bounding_box(cells)
+    if h != height or w != width:
+        return False
+    # 检查是否填满整个矩形
+    for r in range(min_r, min_r + height):
+        for c in range(min_c, min_c + width):
+            if (r, c) not in cells:
+                return False
+    return True
+
+
+def _detect_big_gold_regions(
+    board_snapshot: Dict[str, Any],
+) -> Tuple[int, int]:
+    """
+    检测空置区域中可能为大金的连续区域。
+
+    返回: (big_gold_cells, total_vacant_cells)
+    - big_gold_cells: 符合大金尺寸（3x4,4x3,4x4,3x5,5x3,5x2,2x5）的连续区域总格数
+    - total_vacant_cells: 总空置格数
+    """
+    t0 = time.perf_counter()
+    from .grid_overlay_dims import GRID_ROWS, GRID_COLS
+
+    # 获取空置格和占位格
+    vb = _grid_overlay.vacant_block_from_board_snapshot(board_snapshot)
+    vacant_num = int(vb.get("geometric") or 0)
+
+    if vacant_num <= 0:
+        return 0, 0
+
+    occupied = _grid_overlay.snapshot_occupied_cells(board_snapshot)
+
+    # 构建完整的空置格集合（基于几何前缀区）
+    max_bid = _grid_overlay.max_anchor_box_id_merged(board_snapshot)
+    limit = min(max_bid, _grid_overlay.GRID_MAX_BOX_ID)
+
+    vacant_cells: Set[Tuple[int, int]] = set()
+    for bid in range(limit + 1):
+        row, col = bid // GRID_COLS, bid % GRID_COLS
+        if (row, col) not in occupied:
+            vacant_cells.add((row, col))
+
+    if not vacant_cells:
+        return 0, vacant_num
+
+    # 查找所有连续区域
+    regions = _find_continuous_regions(vacant_cells, occupied)
+
+    big_gold_total = 0
+    for region in regions:
+        if len(region) < 6:  # 最小的大金区域是 2x5=10 格，但检查所有>=6的区域
+            continue
+
+        min_r, min_c, h, w = _get_bounding_box(region)
+
+        # 检查是否匹配大金形状（考虑旋转）
+        shape_match = (h, w) in _BIG_GOLD_SHAPES or (w, h) in _BIG_GOLD_SHAPES
+
+        if shape_match and _is_rectangular_region(region, h, w):
+            big_gold_total += len(region)
+
+    perf_log_elapsed(f"_detect_big_gold_regions (vacant={vacant_num}, big_gold={big_gold_total})", t0)
+    return big_gold_total, vacant_num
+
+
+def _adjust_u_early_for_big_gold(
+    u_early: float,
+    u_orange: float,
+    big_gold_cells: int,
+    total_vacant: int,
+) -> float:
+    """
+    根据大金区域调整 u_early，避免大金过大导致的估价偏高。
+
+    公式: u_early_adj = (big_gold_cells/vac) * (u_orange+u_early)/2 + (vac-big_gold)/vac * u_early
+    """
+    if total_vacant <= 0 or big_gold_cells <= 0:
+        return u_early
+
+    if big_gold_cells >= total_vacant:
+        return (u_orange + u_early) / 2
+
+    ratio_big = big_gold_cells / total_vacant
+    ratio_other = (total_vacant - big_gold_cells) / total_vacant
+
+    # 大金区域使用较低的单价 (u_orange+u_early)/2
+    u_big_gold = (u_orange + u_early) / 2
+
+    return ratio_big * u_big_gold + ratio_other * u_early
 
 
 def estimate_snapshot_item_price(
@@ -587,6 +763,7 @@ def estimate_snapshot_item_price_for_uid(
 
 def compute_items_total(board_snapshot: Dict[str, Any]) -> float:
     """对所有带有效 ``box_id`` 的物品求标价之和（合并 ``grid_overlay`` 投影）。"""
+    t0 = time.perf_counter()
     mid = map_id_from_board_snapshot(board_snapshot)
     mid_n = item_db.normalize_map_id(mid)
     items = _grid_overlay.merged_items_dict_from_snapshot(board_snapshot)
@@ -605,6 +782,7 @@ def compute_items_total(board_snapshot: Dict[str, Any]) -> float:
             map_id_normalized=mid_n,
             map_category_weights=weights,
         )
+    perf_log_elapsed(f"compute_items_total (items={len(items)})", t0)
     return total
 
 
@@ -614,6 +792,7 @@ def build_snapshot_pricing_dict(
     snapshot_path_hint: Optional[str] = None,
     board_snapshot_config: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    t0_total = time.perf_counter()
     """组装 ``board_snapshot.json`` 的 ``pricing`` 字段。
 
     从 ``board_snapshot`` 合并后的有效物品表（``game_state.items`` + ``grid_overlay``）
@@ -629,6 +808,7 @@ def build_snapshot_pricing_dict(
     """
     from ..pricing._self_uid_inference import apply_self_uid_inference_to_board_snapshot
 
+    t0_init = time.perf_counter()
     branch_bs = (
         board_snapshot_config
         if board_snapshot_config is not None
@@ -638,6 +818,7 @@ def build_snapshot_pricing_dict(
         board_snapshot,
         config_self_user_uid=str(branch_bs.get("self_user_uid") or "").strip(),
     )
+    perf_log_elapsed("build_snapshot_pricing_dict: init", t0_init)
     game_state_json = board_snapshot.get("game_state") or {}
     skill_logs = list(board_snapshot.get("skill_logs") or [])
     map_id = int(board_snapshot.get("map_id") or (game_state_json.get("map_id") or 0))
@@ -662,6 +843,7 @@ def build_snapshot_pricing_dict(
     snap_full["current_round"] = current_round
     snap_full["raw_pricing"] = raw
 
+    t0_csv = time.perf_counter()
     raw_csv_cells = raw.get("csv_quality_groups_avg_per_cell") if isinstance(raw, dict) else None
     if isinstance(raw_csv_cells, dict):
         try:
@@ -670,13 +852,19 @@ def build_snapshot_pricing_dict(
             csv_cells_for_est = {}
     else:
         csv_cells_for_est = {}
+    perf_log_elapsed("build_snapshot_pricing_dict: csv_cells_parse", t0_csv)
 
+    t0_items = time.perf_counter()
     total_f = float(compute_items_total(snap_full))
+    perf_log_elapsed("build_snapshot_pricing_dict: compute_items_total", t0_items)
 
+    t0_vacant = time.perf_counter()
     vb = _grid_overlay.vacant_block_from_board_snapshot(snap_full)
     vacant_num = int(vb.get("geometric") or 0)
     vacant_src = str(vb.get("source") or "")
+    perf_log_elapsed("build_snapshot_pricing_dict: vacant_block", t0_vacant)
 
+    t0_units = time.perf_counter()
     u_orange = int(round(float(csv_cells_for_est.get("q5", 0.0))))
     u_gr = int(round(float(csv_cells_for_est.get("q5+q6", 0.0))))
     u_red = int(round(float(csv_cells_for_est.get("q6", 0.0))))
@@ -687,7 +875,9 @@ def build_snapshot_pricing_dict(
         csv_cells_for_est=csv_cells_for_est,
         event_stats=st_ev,
     )
+    perf_log_elapsed("build_snapshot_pricing_dict: unit_prices", t0_units)
 
+    t0_tiers = time.perf_counter()
     cq4, cq5, cq6 = _confirmed_tier_footprint_q456(snap_full)
     tier_extra_val, tier_extra_cells = _tier_min_extra_value_and_cells(
         st_ev,
@@ -699,6 +889,8 @@ def build_snapshot_pricing_dict(
     kcw_val, kcw_geo = _sum_known_contour_weighted_price_and_geo_cells(
         snap_full, csv_cells_raw=csv_cells_for_est
     )
+    perf_log_elapsed("build_snapshot_pricing_dict: tier_footprint", t0_tiers)
+    t0_unknown = time.perf_counter()
     mid_n = item_db.normalize_map_id(map_id if map_id else None)
     uc_excess_f, uc_excess_detail = _unknown_value.unknown_contour_vacant_weighted_excess(
         snap_full,
@@ -706,11 +898,13 @@ def build_snapshot_pricing_dict(
         {},
         mid_n,
     )
+    perf_log_elapsed("build_snapshot_pricing_dict: unknown_contour", t0_unknown)
     uc_vacant_subtract = max(0, int(round(float(uc_excess_f))))
     vacant_adj = max(
         0,
         int(vacant_num) + int(kcw_geo) - int(tier_extra_cells) - uc_vacant_subtract,
     )
+    t0_est = time.perf_counter()
     vacant_pts_base = float(total_f) - float(kcw_val) + float(tier_extra_val)
 
     est_orange = vacant_pts_base + float(vacant_adj) * float(u_orange)
@@ -756,11 +950,22 @@ def build_snapshot_pricing_dict(
         else:
             u_mid = float(u_orange)
             u_lo = float(u_orange)
-            u_hi = float(u_early)
+            # 大金区域折算：配置开启时检测并调整 u_early，避免大金过大导致估价偏高
+            from ..config.runtime import infer_big_gold_adjustment_enabled
+            if infer_big_gold_adjustment_enabled():
+                big_gold_cells, total_vacant = _detect_big_gold_regions(snap_full)
+                u_early_adj = _adjust_u_early_for_big_gold(
+                    float(u_early), float(u_orange), big_gold_cells, total_vacant
+                )
+                u_hi = u_early_adj
+            else:
+                u_hi = float(u_early)
         pts = vacant_pts_base + float(vacant_adj) * u_mid
         pts_floor = vacant_pts_base + float(vacant_adj) * u_lo
         pts_ceiling = vacant_pts_base + float(vacant_adj) * u_hi
+    perf_log_elapsed("build_snapshot_pricing_dict: estimate_points", t0_est)
 
+    t0_ahmad = time.perf_counter()
     ahmad_abde_scale = _strategy.ahmad.resolve_ahmad_abde_scale(snap_full, board_snapshot_config=board_snapshot_config)
     ahmad_detail = _strategy.ahmad.ahmad_pricing_detail_from_raw_pricing(
         raw,
@@ -770,6 +975,7 @@ def build_snapshot_pricing_dict(
         ahmad_abde_scale=float(ahmad_abde_scale),
     )
     ahmad_points = int(ahmad_detail.get("ahmad_points") or 0)
+    perf_log_elapsed("build_snapshot_pricing_dict: ahmad_pricing", t0_ahmad)
 
     generic_pts = int(round(pts))
     generic_floor = int(round(pts_floor))
@@ -817,4 +1023,5 @@ def build_snapshot_pricing_dict(
         pricing["generic_points"] = generic_pts
         pricing["generic_points_floor"] = generic_floor
         pricing["generic_points_ceiling"] = generic_ceil
+    perf_log_elapsed(f"build_snapshot_pricing_dict: TOTAL (map={map_id}, round={current_round})", t0_total)
     return pricing
