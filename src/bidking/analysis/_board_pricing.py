@@ -49,6 +49,11 @@ from ..parsing.item_db import _weighted_est_price, map_category_ratios, query_it
 from . import scan_inference as _scan_inference
 from . import unknown_value as _unknown_value
 from . import grid_overlay as _grid_overlay
+from .vacant_tier_scale import (
+    resolve_vacant_tier_exponent,
+    vacant_tier_premium,
+    vacant_tier_scaled_cells,
+)
 from ._shape_wh import shape_wh_from_snapshot
 
 _item_prices_cache: Optional[Tuple[Dict[int, Any], List[Any]]] = None
@@ -70,6 +75,25 @@ def map_bundle_is_express_station_series(map_id: int) -> bool:
     if mid <= 0:
         return False
     return item_db.map_bundle_key_for_automation(mid) == _EXPRESS_STATION_MAP_BUNDLE_KEY
+
+
+def _pricing_section_for_map(map_id: int) -> Dict[str, Any]:
+    """``configs/pricing.maps/<档键>.json`` 内 ``pricing`` 段（与 compute 档键一致）。"""
+    try:
+        mid = int(map_id or 0)
+    except (TypeError, ValueError):
+        return {}
+    if mid <= 0:
+        return {}
+    try:
+        from ..config.pricing import resolve_for
+
+        bundle_key = item_db.map_bundle_key_for_automation(mid)
+        merged = resolve_for(bundle_key or mid)
+    except Exception:
+        return {}
+    p = merged.get("pricing") if isinstance(merged, dict) else None
+    return dict(p) if isinstance(p, dict) else {}
 
 
 def map_bundle_is_container_series(map_id: int) -> bool:
@@ -1053,9 +1077,18 @@ def build_snapshot_pricing_dict(
     )
     vacant_pts_base = float(total_f) - float(kcw_val) + float(tier_extra_val)
 
-    est_orange = vacant_pts_base + float(vacant_adj) * float(u_orange)
-    est_gold_red = vacant_pts_base + float(vacant_adj) * float(u_gr)
-    est_red = vacant_pts_base + float(vacant_adj) * float(u_red)
+    pricing_section = _pricing_section_for_map(map_id)
+    exp_q5 = resolve_vacant_tier_exponent(pricing_section, "q5")
+    exp_q5_q6 = resolve_vacant_tier_exponent(pricing_section, "q5+q6")
+    exp_q6 = 1.0  # 红档空置恒线性，不做幂律衰减
+
+    prem_orange = vacant_tier_premium(float(u_orange), vacant_adj, exp_q5)
+    prem_gr = vacant_tier_premium(float(u_gr), vacant_adj, exp_q5_q6)
+    prem_red = vacant_tier_premium(float(u_red), vacant_adj, exp_q6)
+
+    est_orange = vacant_pts_base + prem_orange
+    est_gold_red = vacant_pts_base + prem_gr
+    est_red = vacant_pts_base + prem_red
 
     q14_grid_known = _event_stats_q14_grid_counts_all_known(raw)
     early_pts_blended_with_random_avg = False
@@ -1086,20 +1119,20 @@ def build_snapshot_pricing_dict(
         q5_gc = _event_stat_grid_count_optional(st_ev, "q5_grid_count")
         q6_gc = _event_stat_grid_count_optional(st_ev, "q6_grid_count")
         if q5_gc is not None and q6_gc is None:
-            u_mid = float(u_red)
-            u_lo = u_mid
-            u_hi = u_mid
+            prem_mid = vacant_tier_premium(float(u_red), vacant_adj, exp_q6)
+            prem_lo = prem_mid
+            prem_hi = prem_mid
         elif q6_gc is not None and q5_gc is None:
-            u_mid = float(u_orange)
-            u_lo = u_mid
-            u_hi = u_mid
+            prem_mid = vacant_tier_premium(float(u_orange), vacant_adj, exp_q5)
+            prem_lo = prem_mid
+            prem_hi = prem_mid
         else:
-            u_mid = float(u_orange)
-            u_lo = float(u_orange)
-            u_hi = float(u_early)
-        pts = vacant_pts_base + float(vacant_adj) * u_mid
-        pts_floor = vacant_pts_base + float(vacant_adj) * u_lo
-        pts_ceiling = vacant_pts_base + float(vacant_adj) * u_hi
+            prem_mid = vacant_tier_premium(float(u_orange), vacant_adj, exp_q5)
+            prem_lo = prem_mid
+            prem_hi = float(vacant_adj) * float(u_early)
+        pts = vacant_pts_base + prem_mid
+        pts_floor = vacant_pts_base + prem_lo
+        pts_ceiling = vacant_pts_base + prem_hi
 
     ahmad_abde_scale = _resolve_ahmad_abde_scale(snap_full, board_snapshot_config=board_snapshot_config)
     ahmad_detail = _ahmad_pricing_detail_from_raw_pricing(
@@ -1151,6 +1184,18 @@ def build_snapshot_pricing_dict(
         "ahmad_abde_scale": float(ahmad_abde_scale),
         "ahmad_pricing_active": bool(ahmad_pricing_active),
         "self_uid_inference": dict(self_uid_infer_detail),
+        "vacant_tier_exponent_q5": float(exp_q5),
+        "vacant_tier_exponent_q5_q6": float(exp_q5_q6),
+        "vacant_tier_exponent_q6": float(exp_q6),
+        "vacant_tier_scaled_cells_q5": float(
+            vacant_tier_scaled_cells(vacant_adj, exp_q5)
+        ),
+        "vacant_tier_scaled_cells_q5_q6": float(
+            vacant_tier_scaled_cells(vacant_adj, exp_q5_q6)
+        ),
+        "vacant_gold_vacant_premium": float(prem_orange),
+        "vacant_gold_red_vacant_premium": float(prem_gr),
+        "vacant_red_vacant_premium": float(prem_red),
     }
     if uc_excess_detail:
         pricing["unknown_contour_vacant_weighted_excess"] = dict(uc_excess_detail)
