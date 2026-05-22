@@ -1212,9 +1212,9 @@ def run_map_selection_transition(config: dict[str, Any], selected_map: str) -> f
     log(f"click map point: screen={sx},{sy}", gui_verbose_only=True)
     if not bool(config.get("safety", {}).get("dry_run", False)):
         human_click_at_screen(config, sx, sy, log_detail=f"map_select.{selected_map}")
-    sleep_interruptible(float(config.get("timing", {}).get("click_pause_seconds", 0.12)))
-    sleep_interruptible(2.0)
-    park_mouse_if_configured(config)
+    timing = config.get("timing", {}) or {}
+    sleep_interruptible(float(timing.get("click_pause_seconds", 0.12)))
+    sleep_interruptible(float(timing.get("after_map_select_wait_seconds", 2.0)))
     click_point(config, "post_continue_confirm")
     confirm_at = time.monotonic()
     log("map selection transition complete; waiting for round OCR", gui_verbose_only=True)
