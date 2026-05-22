@@ -1,10 +1,10 @@
 {
   "pricing": {
-    "vacant_red_floor_ceiling_pick_mode": "normal",
+    "vacant_red_floor_ceiling_pick_mode": "aggressive",
     "enable_opponent_bid_adjustment": true,
     "enable_vacant_red_floor_ceiling_pick": true,
     "enable_big_gold_adjustment": true,
-    "fallback_bid_price": 155555,
+    "fallback_bid_price": 333333,
     "secret_auction_rank_opponent_multipliers": {
       "behind_ge_2": 1.1,
       "behind_1": 1.05,
@@ -16,11 +16,11 @@
   "automation": {
     "bid_cap_price": 2000000,
     "bid_ratio_by_round": {
-      "1": 0.55,
-      "2": 0.65,
-      "3": 0.75,
-      "4": 0.85,
-      "5": 0.9
+      "1": 0.6,
+      "2": 0.7,
+      "3": 0.8,
+      "4": 0.9,
+      "5": 0.95
     }
   }
 }

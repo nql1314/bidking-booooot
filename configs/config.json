@@ -5,7 +5,7 @@
     "infer_unknown_contour_shapes": true,
     "price_avg_infer_max_item_count": 30,
     "grid_avg_infer_max_item_count": 30,
-    "grid_avg_infer_max_grid_count": 300
+    "grid_avg_infer_max_grid_count": 60
   },
   "grid_view": {
     "unknown_bg": "#1a7394",

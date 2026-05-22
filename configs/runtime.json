@@ -214,5 +214,8 @@
     "print_round_debug": false,
     "gui_verbose": false,
     "runs_dir": "runs"
+  },
+  "viewer": {
+    "show_bot_runner": true
   }
 }

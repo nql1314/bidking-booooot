@@ -80,6 +80,10 @@ class RuntimeConfig:
     def grid_view(self) -> Dict[str, Any]:
         return self.raw.get("grid_view", {})
 
+    @property
+    def viewer(self) -> Dict[str, Any]:
+        return self.raw.get("viewer", {})
+
 
 def apply_board_snapshot_env_overrides(cfg: Dict[str, Any]) -> None:
     """将 ``BIDKING_SELF_*`` 环境变量写入 ``cfg['board_snapshot']``（就地修改）。"""

@@ -1,10 +1,10 @@
 {
   "pricing": {
-    "vacant_red_floor_ceiling_pick_mode": "normal",
+    "vacant_red_floor_ceiling_pick_mode": "aggressive",
     "enable_opponent_bid_adjustment": true,
     "enable_vacant_red_floor_ceiling_pick": true,
     "enable_big_gold_adjustment": false,
-    "fallback_bid_price": 155555
+    "fallback_bid_price": 888888
   },
   "automation": {
     "bid_cap_price": 5000000,
@@ -12,8 +12,8 @@
       "1": 0.55,
       "2": 0.65,
       "3": 0.75,
-      "4": 0.95,
-      "5": 1.0
+      "4": 0.9,
+      "5": 0.95
     }
   }
 }
