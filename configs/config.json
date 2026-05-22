@@ -38,6 +38,7 @@
     "round1_extra_wait_seconds": 5.0,
     "tool_after_wait_seconds": 5.0,
     "click_pause_seconds": 0.12,
+    "after_map_select_wait_seconds": 10.0,
     "after_bid_confirm_wait_seconds": 1.0,
     "bid_confirm_verify_max_seconds": 30,
     "bid_confirm_retry_pause_seconds": 0.35,
