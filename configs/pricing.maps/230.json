@@ -1,16 +1,16 @@
 {
   "pricing": {
-    "fallback_bid_price": 111222
+    "fallback_bid_price": 111333
   },
   "automation": {
     "default_map": "1",
     "bid_cap_price": 800000,
     "bid_ratio_by_round": {
       "1": 0.55,
-      "2": 0.6,
+      "2": 0.65,
       "3": 0.75,
-      "4": 0.95,
-      "5": 1.0
+      "4": 0.85,
+      "5": 0.95
     }
   }
 }

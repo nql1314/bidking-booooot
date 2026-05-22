@@ -287,21 +287,31 @@ def _show_start_page(default_log: str, csv_path: str) -> None:
     bottom = tk.Frame(frame)
     bottom.pack(fill="x", pady=(10, 0))
 
-    # ⚠ 谨慎使用：在独立窗口打开 Bot 总控；总控里点「开启」后会接管鼠标 / 键盘。
-    # 请先在「策略配置」里核对出价参数、棋盘快照与主配置 JSON；仅在确实需要自动出价时再点。
-    tk.Button(
-        bottom,
-        text="启动Bot总控（先启动bot总控 再启动画板 需要同时运行)",
-        command=lambda: _launch_bot_runner(root),
-        bg="#664422",
-        fg="#ffe8c8",
-        activebackground="#7a5530",
-        activeforeground="#ffffff",
-        relief="flat",
-        padx=10,
-        pady=4,
-        cursor="hand2",
-    ).pack(fill="x", anchor="w")
+    # 检查配置是否启用 bot 总控入口（默认启用）
+    try:
+        from ..config.runtime import load_runtime
+
+        viewer_cfg = load_runtime().viewer
+        show_bot_runner = viewer_cfg.get("show_bot_runner", True)
+    except Exception:
+        show_bot_runner = True
+
+    if show_bot_runner:
+        # ⚠ 谨慎使用：在独立窗口打开 Bot 总控；总控里点「开启」后会接管鼠标 / 键盘。
+        # 请先在「策略配置」里核对出价参数、棋盘快照与主配置 JSON；仅在确实需要自动出价时再点。
+        tk.Button(
+            bottom,
+            text="启动Bot总控（先启动bot总控 再启动画板 需要同时运行)",
+            command=lambda: _launch_bot_runner(root),
+            bg="#664422",
+            fg="#ffe8c8",
+            activebackground="#7a5530",
+            activeforeground="#ffffff",
+            relief="flat",
+            padx=10,
+            pady=4,
+            cursor="hand2",
+        ).pack(fill="x", anchor="w")
 
     start_block = tk.Frame(bottom)
     start_block.pack(fill="x", pady=(12, 0))
