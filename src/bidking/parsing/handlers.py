@@ -50,6 +50,13 @@ def handle_s2c33(
     state.match_started_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     state.match_ended_at = ""
 
+    try:
+        from ..pricing.self_bid_cache import clear_self_bid_disk_cache
+
+        clear_self_bid_disk_cache()
+    except Exception:
+        pass
+
     print(f"\n{SEP}", file=out)
     print(f"  第 1 回合  [游戏开始]", file=out)
     print(f"  对局ID: {state.uid}   地图: {state.map_id}", file=out)

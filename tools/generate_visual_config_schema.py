@@ -74,6 +74,7 @@ EXCLUDED_PREFIXES: tuple[str, ...] = (
     "ocr.",
     "automation.maps.",
     "automation.map_entry_ticket_by_map_id.",
+    "automation.map_entry_money_by_map_id.",
 )
 
 EXCLUDED_PATHS: frozenset[str] = frozenset({
