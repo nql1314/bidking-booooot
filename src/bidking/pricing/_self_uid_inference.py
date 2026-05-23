@@ -247,3 +247,8 @@ def apply_self_uid_inference_to_board_snapshot(
         detail["config_self_user_uid_persisted"] = False
 
     return detail
+
+
+def persist_self_user_uid_to_config(inferred_uid: str) -> bool:
+    """将己方 UID 写入 ``configs/config.json`` 的 ``board_snapshot.self_user_uid``（有变化时）。"""
+    return _maybe_persist_inferred_self_user_uid(inferred_uid)

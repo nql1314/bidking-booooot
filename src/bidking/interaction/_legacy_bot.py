@@ -41,10 +41,15 @@ from ..config.paths import config_overlay_path  # noqa: E402
 from ..config.pricing import deep_merge  # noqa: E402
 from ..logsys.app_log import append_app_log, log_timestamp, set_app_log_file  # noqa: E402
 from ..logsys.perf_log import perf_log, perf_log_elapsed  # noqa: E402
+from ..parsing.asset_amount import (  # noqa: E402
+    map_entry_money_by_map_key,
+    parse_asset_amount_from_bidking_home,
+    parse_uid_from_home_full_window,
+)
+from ..pricing._self_uid_inference import persist_self_user_uid_to_config  # noqa: E402
 
 # 参考客户端 1920×1080：出价状态文案区（「已出价」/「弃权」等）
 DEFAULT_BID_CONFIRM_REGION = {"left": 704, "top": 962, "width": 303, "height": 75}
-
 try:
     import ctypes
     import ctypes.wintypes as wt
@@ -703,6 +708,57 @@ def read_bid_confirm_region_text_from_frame(
     return text, box
 
 
+def _sync_home_screen_uid_to_config(
+    config: dict[str, Any],
+    config_path: Path,
+    full_window_text: str,
+) -> None:
+    uid = parse_uid_from_home_full_window(full_window_text)
+    if not uid:
+        return
+    bs = config.setdefault("board_snapshot", {})
+    if not isinstance(bs, dict):
+        bs = {}
+        config["board_snapshot"] = bs
+    bs["self_user_uid"] = uid
+    if persist_self_user_uid_to_config(uid):
+        log(f"主界面 UID：{uid}（已写入 {config_path.name}）")
+    else:
+        log(f"主界面 UID：{uid}")
+
+
+def enforce_map_entry_money_on_home_screen(
+    config: dict[str, Any],
+    config_path: Path,
+    *,
+    selected_map: str,
+    full_window_text: str,
+) -> None:
+    """主界面整窗 OCR：``BidKing`` 下资产、``UID:`` 行；不足准入则停止 bot。"""
+    _sync_home_screen_uid_to_config(config, config_path, full_window_text)
+    current = parse_asset_amount_from_bidking_home(full_window_text)
+    if current is None:
+        preview = "\n".join((full_window_text or "").splitlines()[:6])
+        log(f"主界面当前资产：未能识别（未找到 BidKing 下方金额；OCR 前几行=\n{preview})")
+        return
+
+    auto = config.get("automation") or {}
+    required = map_entry_money_by_map_key(auto, selected_map)
+    if required > 0:
+        log(f"主界面当前资产：{current:,}（地图 {selected_map} 准入 {required:,}）")
+    else:
+        log(f"主界面当前资产：{current:,}")
+
+    if required <= 0:
+        return
+    if current < required:
+        log(
+            f"资产不足：当前 {current:,} < 地图 {selected_map} 准入 {required:,}，自动停止 bot"
+        )
+        request_stop()
+        raise StopRequested()
+
+
 def has_ingame_bid_button_label_visible(text: str) -> bool:
     """``bid_confirm_region`` OCR：可出价且未提交时出现「出价」；排除「已出价」等。"""
     tight = compact_text(text)
@@ -1059,6 +1115,8 @@ def run_tool_sequence(config: dict[str, Any]) -> None:
     click_point(config, "tool_button")
     click_point(config, "leftmost_tool")
     click_point(config, "tool_confirm")
+    # 无道具时确认后界面可能仍挂层，点空白处关闭以免卡死
+    click_point(config, "tool_post_confirm")
 
 
 def _perform_bid_ui_sequence(config: dict[str, Any], price: int) -> None:
@@ -1784,6 +1842,12 @@ def run_loop(
                     f"loop {loop_index}: 新局 game_uid {cached_game_uid!r} -> {game_uid!r}；重置回合状态"
                 )
                 handled_rounds.clear()
+                try:
+                    from ..pricing.self_bid_cache import clear_self_bid_disk_cache
+
+                    clear_self_bid_disk_cache()
+                except Exception:
+                    pass
             if game_uid is not None:
                 cached_game_uid = game_uid
 
@@ -1907,6 +1971,15 @@ def run_loop(
 
             if observation.home_bid_button:
                 if time.monotonic() - last_home_bid_at >= transition_debounce:
+                    try:
+                        enforce_map_entry_money_on_home_screen(
+                            config,
+                            config_path,
+                            selected_map=selected_map,
+                            full_window_text=observation.capture.text,
+                        )
+                    except StopRequested:
+                        return
                     wc = merge_warehouse_auto_sort_settings(config)
                     if bool(wc.get("enabled", True)):
                         need_wh_sort = False
@@ -2020,6 +2093,7 @@ def print_click_positions(config_path: Path) -> None:
         "tool_button",
         "leftmost_tool",
         "tool_confirm",
+        "tool_post_confirm",
         "bid_button",
         "bid_input_box",
         "bid_confirm",

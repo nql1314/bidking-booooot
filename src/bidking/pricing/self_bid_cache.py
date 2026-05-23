@@ -65,6 +65,11 @@ def _save_disk_cache(data: dict[str, Any]) -> None:
     tmp.replace(path)
 
 
+def clear_self_bid_disk_cache() -> None:
+    """新对局开始时清空磁盘缓存（仅保留当前局后续写入的记录）。"""
+    _save_disk_cache({"games": {}})
+
+
 def _history_on_snapshot(board_snapshot: dict[str, Any] | None) -> dict[str, int]:
     if not isinstance(board_snapshot, dict):
         return {}
