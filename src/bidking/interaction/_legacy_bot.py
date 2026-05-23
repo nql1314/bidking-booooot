@@ -250,6 +250,10 @@ def format_bid_details_line(details: dict[str, Any]) -> str:
     if isinstance(erf, dict) and erf.get("applied"):
         parts.append(f"early_floor {erf.get('before')}->{erf.get('after')}")
 
+    lrs = details.get("late_round_low_bid_surrender")
+    if isinstance(lrs, dict) and lrs.get("applied"):
+        parts.append(f"surrender {lrs.get('before')}->{lrs.get('after')}")
+
     bc = details.get("bid_cap")
     if isinstance(bc, dict) and bc.get("applied"):
         parts.append(f"bid_cap->{bc.get('cap_price')}")
@@ -1587,13 +1591,17 @@ def handle_round(
     )
     input_bid(config, price, config_path=config_path)
     try:
-        from ..pricing.self_bid_cache import record_self_gold_bid
+        from ..pricing.self_bid_cache import (
+            record_self_gold_bid,
+            resolve_self_bid_cache_amount,
+        )
 
         bs_rec = load_board_snapshot_for_loop(config)
+        cache_amount = resolve_self_bid_cache_amount(int(price), details)
         record_self_gold_bid(
             config,
             round_no=int(round_no),
-            bid_amount=int(price),
+            bid_amount=cache_amount,
             board_snapshot=bs_rec,
         )
     except Exception:

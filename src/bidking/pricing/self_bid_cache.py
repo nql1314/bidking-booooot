@@ -126,6 +126,32 @@ def get_self_gold_bid(
     return None
 
 
+def resolve_self_bid_cache_amount(
+    final_price: int,
+    pricing_details: dict[str, Any] | None = None,
+) -> int:
+    """
+    写入 ``self_bid_history`` 的金币数额。
+
+    部分后处理仅改变实际输入价（如超回合低价放弃出 886），
+    ``pricing_details["self_bid_cache_amount"]`` 保留策略原始出价。
+    """
+    if isinstance(pricing_details, dict):
+        raw = pricing_details.get("self_bid_cache_amount")
+        if raw is not None:
+            try:
+                return int(raw)
+            except (TypeError, ValueError):
+                pass
+        lrs = pricing_details.get("late_round_low_bid_surrender")
+        if isinstance(lrs, dict) and lrs.get("applied"):
+            try:
+                return int(lrs["before"])
+            except (KeyError, TypeError, ValueError):
+                pass
+    return int(final_price)
+
+
 def record_self_gold_bid(
     config: dict[str, Any],
     *,

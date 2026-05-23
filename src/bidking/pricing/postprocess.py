@@ -101,6 +101,60 @@ def apply_early_round_fallback_floor(
     return fin, payload
 
 
+def apply_late_round_low_bid_surrender(
+    config: dict[str, Any],
+    fin: int,
+    round_no: int,
+    payload: dict[str, Any],
+) -> tuple[int, dict[str, Any]]:
+    """
+    超过 ``late_round_low_bid_surrender_after_round`` 且出价低于
+    ``late_round_low_bid_surrender_below`` 时，强制改为放弃价（默认 886）。
+
+    由 ``pricing.enable_late_round_low_bid_surrender`` 总开关控制。
+    """
+    fin = int(fin)
+    pricing_cfg = config.get("pricing") or {}
+    key = "late_round_low_bid_surrender"
+    enabled = bool(pricing_cfg.get("enable_late_round_low_bid_surrender", False))
+    after_round = max(0, parse_int_config(pricing_cfg.get("late_round_low_bid_surrender_after_round"), 4))
+    below_bid = max(0, parse_int_config(pricing_cfg.get("late_round_low_bid_surrender_below"), 5000))
+    surrender_bid = max(0, parse_int_config(pricing_cfg.get("late_round_low_bid_surrender_bid"), 886))
+    r = int(round_no)
+    meta: dict[str, Any] = {
+        "enabled": enabled,
+        "after_round": after_round,
+        "below": below_bid,
+        "surrender_bid": surrender_bid,
+        "round": r,
+    }
+    if not enabled:
+        meta["applied"] = False
+        meta["reason"] = "disabled"
+        payload[key] = meta
+        return fin, payload
+    if r <= after_round:
+        meta["applied"] = False
+        meta["reason"] = "round_not_past_threshold"
+        payload[key] = meta
+        return fin, payload
+    if fin >= below_bid:
+        meta["applied"] = False
+        meta["reason"] = "bid_not_below_threshold"
+        meta["before"] = fin
+        payload[key] = meta
+        return fin, payload
+    before = fin
+    fin = int(surrender_bid)
+    meta["applied"] = True
+    meta["before"] = before
+    meta["after"] = fin
+    payload[key] = meta
+    # 界面出放弃价，但 self_bid 缓存仍记截断前的策略出价
+    payload["self_bid_cache_amount"] = before
+    return fin, payload
+
+
 def apply_bid_cap(
     config: dict[str, Any],
     final_price: int,

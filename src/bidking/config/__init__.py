@@ -23,6 +23,7 @@ from .runtime import (
 )
 from .pricing import load_pricing, resolve_for, deep_merge
 from .map_runtime_overlay import merged_runtime_with_map_pricing
+from .visual_schema import load_visual_config_schema, visual_config_schema_path
 
 __all__ = [
     "board_snapshot_default_path",
@@ -46,4 +47,6 @@ __all__ = [
     "resolve_for",
     "deep_merge",
     "merged_runtime_with_map_pricing",
+    "load_visual_config_schema",
+    "visual_config_schema_path",
 ]
