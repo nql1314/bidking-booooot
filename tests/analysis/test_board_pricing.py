@@ -1218,8 +1218,49 @@ class BoardPricingTests(unittest.TestCase):
         self.assertEqual(p.get("early_vacant_csv_group"), "q5+q6")
         self.assertEqual(p.get("early_vacant_unit_from_scan"), 3000)
 
-    def test_early_vacant_unit_blends_q456_q56_when_q4_grid_min_only(self) -> None:
-        """仅有 ``q4_grid_min``、未公开 ``q4_grid_count`` 时，早单价取 q456 与 q56 格均价平均。"""
+    def test_early_vacant_unit_no_blend_when_q123_not_all_scanned(self) -> None:
+        """q123 未齐扫描时，即使有 ``q4_grid_min`` 也不做 q456/q56 混合，仍用扫描推断单价。"""
+        gs = {
+            "uid": "u1",
+            "map_id": 0,
+            "current_round": 3,
+            "players": {},
+            "items": {
+                "a": {
+                    "uid": "a",
+                    "box_id": 3,
+                    "box_id_confirmed": True,
+                    "shape": 11,
+                    "quality": 1,
+                    "categories": [],
+                    "item_cid": None,
+                    "price": None,
+                    "manual_confirm_item_id": None,
+                    "excluded_categories": [],
+                    "excluded_qualities": [],
+                }
+            },
+            "displayed_event_uids": [],
+            "scan_history": [
+                {"scan_type": "quality", "value": 1, "hit_uids": ["x"]},
+                {"scan_type": "quality", "value": 2, "hit_uids": ["x"]},
+            ],
+        }
+        raw = {
+            "csv_quality_groups_avg_per_cell": {
+                "q4+q5+q6": 12000.0,
+                "q5+q6": 3000.0,
+                "q4": 8000.0,
+            },
+            "event_stats": {"q4_grid_min": 2},
+        }
+        snap = {"game_state": gs, "skill_logs": [], "map_id": 0, "current_round": 3, "raw_pricing": raw}
+        p = bp.build_snapshot_pricing_dict(snap, snapshot_path_hint=None)
+        self.assertNotEqual(p.get("early_vacant_csv_group"), "q4+q5+q6~q5+q6")
+        self.assertNotEqual(p.get("early_vacant_unit_from_scan"), 7500)
+
+    def test_early_vacant_unit_no_blend_when_q4_grid_avg_missing(self) -> None:
+        """q123 已齐、有 ``q4_grid_min`` 但无 ``q4_grid_avg`` 时不做 q456/q56 混合。"""
         gs = {
             "uid": "u1",
             "map_id": 0,
@@ -1254,6 +1295,90 @@ class BoardPricingTests(unittest.TestCase):
                 "q4": 8000.0,
             },
             "event_stats": {"q4_grid_min": 2},
+        }
+        snap = {"game_state": gs, "skill_logs": [], "map_id": 0, "current_round": 5, "raw_pricing": raw}
+        p = bp.build_snapshot_pricing_dict(snap, snapshot_path_hint=None)
+        self.assertNotEqual(p.get("early_vacant_csv_group"), "q4+q5+q6~q5+q6")
+        self.assertNotEqual(p.get("early_vacant_unit_from_scan"), 7500)
+
+    def test_early_vacant_unit_no_blend_when_q4_grid_min_at_most_10(self) -> None:
+        """q123 已齐且有紫均格，但 ``q4_grid_min`` 不大于 10 时不做 q456/q56 混合。"""
+        gs = {
+            "uid": "u1",
+            "map_id": 0,
+            "current_round": 5,
+            "players": {},
+            "items": {
+                "a": {
+                    "uid": "a",
+                    "box_id": 3,
+                    "box_id_confirmed": True,
+                    "shape": 11,
+                    "quality": 1,
+                    "categories": [],
+                    "item_cid": None,
+                    "price": None,
+                    "manual_confirm_item_id": None,
+                    "excluded_categories": [],
+                    "excluded_qualities": [],
+                }
+            },
+            "displayed_event_uids": [],
+            "scan_history": [
+                {"scan_type": "quality", "value": 1, "hit_uids": ["x"]},
+                {"scan_type": "quality", "value": 2, "hit_uids": ["x"]},
+                {"scan_type": "quality", "value": 3, "hit_uids": ["x"]},
+            ],
+        }
+        raw = {
+            "csv_quality_groups_avg_per_cell": {
+                "q4+q5+q6": 12000.0,
+                "q5+q6": 3000.0,
+                "q4": 8000.0,
+            },
+            "event_stats": {"q4_grid_min": 10, "q4_grid_avg": 3.5},
+        }
+        snap = {"game_state": gs, "skill_logs": [], "map_id": 0, "current_round": 5, "raw_pricing": raw}
+        p = bp.build_snapshot_pricing_dict(snap, snapshot_path_hint=None)
+        self.assertNotEqual(p.get("early_vacant_csv_group"), "q4+q5+q6~q5+q6")
+        self.assertNotEqual(p.get("early_vacant_unit_from_scan"), 7500)
+
+    def test_early_vacant_unit_blends_q456_q56_when_q4_grid_min_only(self) -> None:
+        """q123 已齐、有紫均格与 ``q4_grid_min``（>10）、未公开 ``q4_grid_count`` 时，早单价取 q456 与 q56 格均价平均。"""
+        gs = {
+            "uid": "u1",
+            "map_id": 0,
+            "current_round": 5,
+            "players": {},
+            "items": {
+                "a": {
+                    "uid": "a",
+                    "box_id": 3,
+                    "box_id_confirmed": True,
+                    "shape": 11,
+                    "quality": 1,
+                    "categories": [],
+                    "item_cid": None,
+                    "price": None,
+                    "manual_confirm_item_id": None,
+                    "excluded_categories": [],
+                    "excluded_qualities": [],
+                }
+            },
+            "displayed_event_uids": [],
+            "scan_history": [
+                {"scan_type": "quality", "value": 1, "hit_uids": ["x"]},
+                {"scan_type": "quality", "value": 2, "hit_uids": ["x"]},
+                {"scan_type": "quality", "value": 3, "hit_uids": ["x"]},
+            ],
+        }
+        raw = {
+            "csv_quality_groups_avg_per_cell": {
+                "q4+q5+q6": 12000.0,
+                "q5+q6": 3000.0,
+                "q4": 8000.0,
+            },
+            "event_stats": {"q4_grid_min": 11, "q4_grid_avg": 3.5},
         }
         snap = {"game_state": gs, "skill_logs": [], "map_id": 0, "current_round": 5, "raw_pricing": raw}
         p = bp.build_snapshot_pricing_dict(snap, snapshot_path_hint=None)
@@ -1690,6 +1815,92 @@ class BoardPricingTests(unittest.TestCase):
             p.get("est_orange"),
             int(round(t - kcw + float(vac + kg) * 111.0)),
         )
+
+    def test_blend_random_avg_helper_q14_separate_floor_ceiling(self) -> None:
+        ev = {"random_avg_price_min": 1_531_348}
+        pts, pf, pc, blended = bp._blend_points_with_random_avg_min_if_dominant(
+            270_243.0,
+            270_243.0,
+            501_215.0,
+            ev,
+            collapse_floor_ceiling=False,
+        )
+        self.assertTrue(blended)
+        self.assertEqual(pts, 1_531_348 + 270_243 / 3)
+        self.assertEqual(pf, 1_531_348 + 270_243 / 3)
+        self.assertEqual(pc, 1_531_348 + 501_215 / 3)
+
+    def test_blend_random_avg_helper_early_collapses_floor_ceiling(self) -> None:
+        ev = {"random_avg_price_min": 900_000}
+        pts, pf, pc, blended = bp._blend_points_with_random_avg_min_if_dominant(
+            200_000.0,
+            200_000.0,
+            200_000.0,
+            ev,
+            collapse_floor_ceiling=True,
+        )
+        self.assertTrue(blended)
+        self.assertEqual(pts, pf)
+        self.assertEqual(pts, 900_000 + 200_000 / 3)
+
+    def test_blend_random_avg_skipped_when_not_dominant(self) -> None:
+        ev = {"random_avg_price_min": 100_000}
+        pts, pf, pc, blended = bp._blend_points_with_random_avg_min_if_dominant(
+            300_000.0,
+            280_000.0,
+            500_000.0,
+            ev,
+            collapse_floor_ceiling=False,
+        )
+        self.assertFalse(blended)
+        self.assertEqual(pts, 300_000.0)
+        self.assertEqual(pf, 280_000.0)
+        self.assertEqual(pc, 500_000.0)
+
+    def test_q14_known_random_avg_blended_in_snapshot_pricing(self) -> None:
+        gs = {
+            "uid": "u1",
+            "map_id": 4510,
+            "current_round": 5,
+            "players": {},
+            "items": {
+                "a": {
+                    "uid": "a",
+                    "box_id": 3,
+                    "box_id_confirmed": True,
+                    "shape": 11,
+                    "quality": 1,
+                    "categories": [],
+                    "item_cid": None,
+                    "price": None,
+                    "manual_confirm_item_id": None,
+                    "excluded_categories": [],
+                    "excluded_qualities": [],
+                }
+            },
+            "displayed_event_uids": [],
+            "scan_history": [],
+        }
+        raw = {
+            "csv_quality_groups_avg_per_cell": {
+                "q5": 9435.0,
+                "q5+q6": 25933.0,
+                "q6": 51093.0,
+            },
+            "event_stats": {
+                "q1_grid_count": 1,
+                "q2_grid_count": 1,
+                "q3_grid_count": 1,
+                "q4_grid_count": 1,
+                "random_avg_price_min": 1_500_000,
+            },
+        }
+        snap = {"game_state": gs, "skill_logs": [], "map_id": 4510, "current_round": 5}
+        p = bp.build_snapshot_pricing_dict({**snap, "raw_pricing": raw}, snapshot_path_hint=None)
+        self.assertTrue(p.get("early_points_blended_with_random_avg"))
+        base_pts = p["total"] + p["vacant"] * 9435
+        self.assertEqual(p["points"], int(round(1_500_000 + base_pts / 3)))
+
 
 class SelfUidInferencePersistTests(unittest.TestCase):
     """单独验证推断 UID 写回 ``config.json`` overlay（不继承 BoardPricingTests 的禁用写盘）。"""

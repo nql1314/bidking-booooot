@@ -31,8 +31,12 @@ UID 推断（``inferred_self_user_uid``，见 :mod:`bidking.pricing._self_uid_in
 早单价可能品质集合中不再保留 q4，改用去掉 q4 后的 CSV 组合键（如 ``q5+q6``）查格均价，
 避免剩余空格再乘含紫档权重的混合单价。
 
-当仅有 ``q4_grid_min``、未公开 ``q4_grid_count`` 时，紫最少格已从空置扣减并按 ``q4`` 单档计价，
-剩余空格若仍用扫描 ``q4+q5+q6`` 混合单价会偏高；早单价改为 CSV ``q4+q5+q6`` 与 ``q5+q6`` 格均价的算术平均。
+低档总格已齐（``q14_grid_known``）时，若 ``random_avg_price_min`` 仍明显高于 ``points``（>50%），
+对 ``points`` / ``points_floor`` / ``points_ceiling`` 分别做 ``random_avg_price_min + 原值/3``（与早期回合同式）。
+
+当白绿蓝（q123）均已扫描、事件已给出紫均格（``q4_grid_avg``）、仅有 ``q4_grid_min``（且 ``> 10``）、
+未公开 ``q4_grid_count`` 时，紫最少格已从空置扣减并按 ``q4`` 单档计价，剩余空格若仍用扫描
+``q4+q5+q6`` 混合单价会偏高；早单价改为 CSV ``q4+q5+q6`` 与 ``q5+q6`` 格均价的算术平均。
 
 合并物品上 **仍无 ``shape``、品质已知且已确认占位** 时，几何占位按锚格计；``pricing.total`` 已为该档
 CSV 权重期望价。对 ``max(0, 加权等效格数 − 1)`` 之和从有效空置 ``vacant_adj`` 中扣减（见
@@ -59,9 +63,51 @@ from ..logsys.perf_log import perf_log, perf_log_elapsed
 
 _item_prices_cache: Optional[Tuple[Dict[int, Any], List[Any]]] = None
 
-# 仅 ``not q14_grid_known``（低档 **q12+q3+q4** 总格未齐，见 ``event_stats_q12_q3_q4_grids_all_known``）早期回合：当 ``random_avg_price_min`` 超过本算 ``points`` 的 50% 时，
-# 用 ``(points + random_avg_price_min) / 2`` 与事件下界取中，缓和随机均价事件对总估价的拉扯。
+# 当 ``random_avg_price_min`` 超过参考 ``points`` 的 50% 时，用 ``random_avg_price_min + points/3`` 抬高估价
+# （早期 ``not q14_grid_known`` 三者合一；低档总格已齐时分别抬高 ``points`` / ``points_floor`` / ``points_ceiling``）。
 _RANDOM_AVG_MIN_DOMINANCE_RATIO = 0.5
+
+
+def _parse_random_avg_price_min(event_stats: Any) -> Optional[int]:
+    if not isinstance(event_stats, dict):
+        return None
+    rv = event_stats.get("random_avg_price_min")
+    if rv is None:
+        return None
+    try:
+        v = int(rv)
+    except (TypeError, ValueError):
+        return None
+    return v if v > 0 else None
+
+
+def _blend_points_with_random_avg_min_if_dominant(
+    pts: float,
+    pts_floor: float,
+    pts_ceiling: float,
+    event_stats: Any,
+    *,
+    collapse_floor_ceiling: bool,
+) -> tuple[float, float, float, bool]:
+    """
+    ``random_avg_price_min`` 明显高于参考 ``pts`` 时：``rnd_min + pts/3``（及 floor/ceiling 同源式）。
+
+    ``collapse_floor_ceiling``：早期单锚为真时三者同值；``q14_grid_known`` 时对 floor/ceiling 分别混合。
+    """
+    rnd_min = _parse_random_avg_price_min(event_stats)
+    if rnd_min is None or pts <= 0:
+        return pts, pts_floor, pts_ceiling, False
+    if float(rnd_min) <= _RANDOM_AVG_MIN_DOMINANCE_RATIO * float(pts):
+        return pts, pts_floor, pts_ceiling, False
+    blended_mid = float(rnd_min) + float(pts) / 3.0
+    if collapse_floor_ceiling:
+        return blended_mid, blended_mid, blended_mid, True
+    return (
+        blended_mid,
+        float(rnd_min) + float(pts_floor) / 3.0,
+        float(rnd_min) + float(pts_ceiling) / 3.0,
+        True,
+    )
 
 
 def _load_item_prices_db() -> Tuple[Dict[int, Any], List[Any]]:
@@ -152,6 +198,26 @@ def _event_stat_q4_grid_count_optional(st: Any) -> Optional[int]:
     return _event_stat_grid_count_optional(st, "q4_grid_count")
 
 
+def _event_stat_q4_grid_avg_optional(st: Any) -> Optional[float]:
+    """``event_stats`` 中 ``q4_grid_avg``（紫均格）：有值且非负时返回 float，否则视为紫均未公开。"""
+    if not isinstance(st, dict):
+        return None
+    v = st.get("q4_grid_avg")
+    if v is None:
+        return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if f >= 0 else None
+
+
+def _scan_q123_all_revealed(board_snapshot: Dict[str, Any]) -> bool:
+    """``scan_history`` / ``census_absent_qualities`` 已覆盖品质 1、2、3 的全图扫描（低档均已出过）。"""
+    hits = _scan_inference.quality_scan_hit_uids_by_value(board_snapshot)
+    return all(q in hits for q in (1, 2, 3))
+
+
 def _vacant_early_unit_excluding_q4_when_q4_total_known(
     *,
     board_snapshot: Dict[str, Any],
@@ -162,8 +228,9 @@ def _vacant_early_unit_excluding_q4_when_q4_total_known(
     扫描负向约束得到 ``(u0, qg0, pq0)`` 后按 ``event_stats`` 调整早单价：
 
     - 已公开 ``q4_grid_count`` 且 ``pq0`` 仍含品质 4：去掉 4 后按新组合键（如 ``q5+q6``）查 CSV；
-    - 仅有 ``q4_grid_min``、未公开 ``q4_grid_count``，且 ``pq0`` 仍含 4：取 CSV
-      ``q4+q5+q6`` 与 ``q5+q6`` 格均价的算术平均，避免 ``q4_grid_min`` 扣减后剩余空格仍乘紫金红混合单价。
+    - 在 q123 均已扫描且已给出 ``q4_grid_avg`` 的前提下，仅有 ``q4_grid_min``（且 ``> 10``）、
+      未公开 ``q4_grid_count``，且 ``pq0`` 仍含 4：取 CSV ``q4+q5+q6`` 与 ``q5+q6`` 格均价的算术平均，
+      避免 ``q4_grid_min`` 扣减后剩余空格仍乘紫金红混合单价。
     """
     t0 = time.perf_counter()
     u0, qg0, pq0 = _scan_inference.vacant_early_unit_from_exclusions(
@@ -182,8 +249,12 @@ def _vacant_early_unit_excluding_q4_when_q4_total_known(
         u = int(round(float(csv_cells_for_est[qg])))
         perf_log_elapsed("_vacant_early_unit_excluding_q4 (adjusted)", t0)
         return u, str(qg), pq_ex
+    q4_grid_min = _event_stat_grid_min_optional(event_stats, "q4_grid_min")
     if (
-        _event_stat_grid_min_optional(event_stats, "q4_grid_min") is not None
+        _scan_q123_all_revealed(board_snapshot)
+        and _event_stat_q4_grid_avg_optional(event_stats) is not None
+        and q4_grid_min is not None
+        and q4_grid_min > 10
         and 4 in pq0
         and csv_cells_for_est
     ):
@@ -934,24 +1005,15 @@ def build_snapshot_pricing_dict(
         pts = vacant_pts_base + float(vacant_adj) * float(u_early)
         pts_floor = pts
         pts_ceiling = pts
-        rnd_min: Optional[int] = None
-        if isinstance(st_ev, dict):
-            rv = st_ev.get("random_avg_price_min")
-            if rv is not None:
-                try:
-                    rnd_min = int(rv)
-                except (TypeError, ValueError):
-                    rnd_min = None
-        if (
-            rnd_min is not None
-            and rnd_min > 0
-            and pts > 0
-            and float(rnd_min) > _RANDOM_AVG_MIN_DOMINANCE_RATIO * float(pts)
-        ):
-            pts = rnd_min + pts/3
-            pts_floor = pts
-            pts_ceiling = pts
-            early_pts_blended_with_random_avg = True
+        pts, pts_floor, pts_ceiling, early_pts_blended_with_random_avg = (
+            _blend_points_with_random_avg_min_if_dominant(
+                pts,
+                pts_floor,
+                pts_ceiling,
+                st_ev,
+                collapse_floor_ceiling=True,
+            )
+        )
     else:
         # 低档总格已划定时：若仅公开金档总格，余下空置必为红格；若仅公开红档总格，余下必为金格。
         q5_gc = _event_stat_grid_count_optional(st_ev, "q5_grid_count")
@@ -984,6 +1046,15 @@ def build_snapshot_pricing_dict(
         pts = vacant_pts_base + float(vacant_adj) * u_mid
         pts_floor = vacant_pts_base + float(vacant_adj) * u_lo
         pts_ceiling = vacant_pts_base + float(vacant_adj) * u_hi
+        pts, pts_floor, pts_ceiling, early_pts_blended_with_random_avg = (
+            _blend_points_with_random_avg_min_if_dominant(
+                pts,
+                pts_floor,
+                pts_ceiling,
+                st_ev,
+                collapse_floor_ceiling=False,
+            )
+        )
     perf_log_elapsed("build_snapshot_pricing_dict: estimate_points", t0_est)
 
     t0_ahmad = time.perf_counter()

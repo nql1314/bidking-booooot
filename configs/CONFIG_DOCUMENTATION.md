@@ -59,6 +59,8 @@
 | `bot_runner` | string | `"fresh_aisha_bot"` | 使用的机器人运行器 |
 | `selected_mode` | string | `"aisha_premium"` | 选定的自动化模式 |
 | `tool_rounds` | array | `[]` | 使用道具的回合列表 |
+| `enable_aisha_round4_tool_vacant_gate` | bool | `false` | 艾莎且勾选第4回合用道具时，按空置格是否超过阈值决定是否实际使用道具；**开启后第5回合一律不用道具**（忽略 ``tool_rounds`` 勾选）。可写在主配置 ``automation`` 或当前地图 ``configs/pricing.maps/<地图>.json`` 的 ``automation`` 段（bot 会按对局 ``map_id`` 合并） |
+| `aisha_round4_tool_min_vacant` | int | `5` | 上项开启时：仅当 ``pricing.vacant`` **大于等于** 该值才在第4回合使用道具（否则跳过）；可与上项同样写在地图 JSON |
 | `default_map` | string | `"1"` | 默认地图ID |
 | `default_runs` | int | `1` | 默认运行次数 |
 | `selected_map` | string | `"440"` | 当前选定地图 |

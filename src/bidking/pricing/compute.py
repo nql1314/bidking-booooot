@@ -217,6 +217,8 @@ def compute_price(
                     forced = 886
                 if forced is not None:
                     fin = int(forced)
-    fin, payload = apply_bid_cap(effective_config, fin, payload)
+    fin, payload = apply_bid_cap(
+        effective_config, fin, payload, pricing_total=pricing.get("total")
+    )
     payload["final_round_used"] = effective_round
     return int(fin), payload

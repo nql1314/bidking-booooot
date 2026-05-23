@@ -101,12 +101,45 @@ def apply_early_round_fallback_floor(
     return fin, payload
 
 
-def apply_bid_cap(config: dict[str, Any], final_price: int, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+def apply_bid_cap(
+    config: dict[str, Any],
+    final_price: int,
+    payload: dict[str, Any],
+    *,
+    pricing_total: float | int | None = None,
+) -> tuple[int, dict[str, Any]]:
     automation = config.get("automation") or {}
     bid_cap = max(0, parse_int_config(automation.get("bid_cap_price"), 0))
     if bid_cap <= 0:
         payload["bid_cap"] = {"enabled": False, "cap_price": 0, "applied": False}
         return int(final_price), payload
+
+    skip_threshold = max(
+        0, parse_int_config(automation.get("bid_cap_skip_when_total_above"), 0)
+    )
+    if skip_threshold <= 0:
+        skip_threshold = bid_cap
+
+    total_f: float | None = None
+    if pricing_total is not None:
+        try:
+            total_f = float(pricing_total)
+        except (TypeError, ValueError):
+            total_f = None
+
+    if total_f is not None and total_f > float(skip_threshold):
+        payload["bid_cap"] = {
+            "enabled": True,
+            "cap_price": bid_cap,
+            "applied": False,
+            "skipped": True,
+            "reason": "pricing_total_above_skip_threshold",
+            "pricing_total": total_f,
+            "skip_threshold": skip_threshold,
+            "original_price": int(final_price),
+        }
+        return int(final_price), payload
+
     capped = min(int(final_price), bid_cap)
     payload["bid_cap"] = {
         "enabled": True,

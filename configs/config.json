@@ -24,7 +24,8 @@
     "tool_rounds": [
       1,
       2,
-      3
+      3,
+      4
     ],
     "default_map": "1",
     "default_runs": 1,
@@ -34,7 +35,9 @@
       "enabled": true
     },
     "run_cycles": 5,
-    "cycle_rest_minutes": 0.0
+    "cycle_rest_minutes": 0.0,
+    "enable_aisha_round4_tool_vacant_gate": false,
+    "aisha_round4_tool_min_vacant": 5
   },
   "timing": {
     "poll_seconds": 1,
