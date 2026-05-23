@@ -1418,6 +1418,30 @@ def _aisha_round4_tool_min_vacant(automation: dict[str, Any]) -> int:
     return int(automation.get("tool_skip_vacant_threshold", 5))
 
 
+def _aisha_round4_q5_grid_stats_known(
+    board_snapshot: dict[str, Any],
+) -> tuple[bool, str]:
+    """``raw_pricing.event_stats`` 中 ``q5_grid_count`` 或 ``q5_grid_avg`` 已公开。"""
+    from ..analysis._board_pricing import _event_stat_grid_count_optional
+
+    raw = board_snapshot.get("raw_pricing")
+    if not isinstance(raw, dict):
+        return False, ""
+    st = raw.get("event_stats")
+    if not isinstance(st, dict):
+        return False, ""
+    if _event_stat_grid_count_optional(st, "q5_grid_count") is not None:
+        return True, "q5_grid_count"
+    avg = st.get("q5_grid_avg")
+    if avg is not None:
+        try:
+            if float(avg) >= 0:
+                return True, "q5_grid_avg"
+        except (TypeError, ValueError):
+            pass
+    return False, ""
+
+
 def _self_hero_cid_from_snapshot(
     board_snapshot: dict[str, Any] | None,
     config: dict[str, Any],
@@ -1445,8 +1469,8 @@ def should_skip_tool_for_aisha_vacant_gate(
     返回 ``(skip_tool, reason)``：``True``=本回合不用道具，``False``=本函数不拦截
     （是否用道具仍由 ``tool_rounds`` 等决定）。
 
-    功能开关开启时：第5回合一律 ``skip``；第4回合艾莎且已勾选时仅
-    ``vacant >= min_vacant`` 时不 ``skip``。
+    功能开关开启时：第5回合一律 ``skip``；第4回合艾莎且已勾选时若已公开
+    ``q5_grid_count`` / ``q5_grid_avg`` 则 ``skip``；否则仅 ``vacant >= min_vacant`` 时不 ``skip``。
     """
     if not _aisha_round4_vacant_gate_enabled(config, board_snapshot):
         return False, ""
@@ -1463,6 +1487,9 @@ def should_skip_tool_for_aisha_vacant_gate(
     min_vacant = _aisha_round4_tool_min_vacant(auto)
     if not isinstance(board_snapshot, dict):
         return True, f"round {rn}: aisha round4 no board snapshot, skip tool"
+    q5_known, q5_key = _aisha_round4_q5_grid_stats_known(board_snapshot)
+    if q5_known:
+        return True, f"round {rn}: aisha round4 {q5_key} known, skip tool"
     pricing = board_snapshot.get("pricing") or {}
     vacant = pricing.get("vacant")
     if vacant is None:
