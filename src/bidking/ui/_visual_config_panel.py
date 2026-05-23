@@ -28,6 +28,7 @@ from ..config.visual_schema import (
     set_by_path,
     visual_config_schema_path,
 )
+from ._hover_tip import LabelHoverTip
 
 
 def _load_json(path: Path) -> dict:
@@ -105,7 +106,8 @@ class VisualConfigPanel:
             outer,
             text=(
                 "字段定义来自 configs/visual_config_schema.json；hide=true 的项不在本页显示。\n"
-                "左侧写入 configs/config.json；右侧写入 configs/pricing.maps/<地图>.json。"
+                "鼠标悬停字段名可查看说明。左侧写入 configs/config.json；"
+                "右侧写入 configs/pricing.maps/<地图>.json。"
                 "scope=both 的项在两区均可编辑，保存时各自写入对应文件。"
             ),
             foreground="#555577",
@@ -228,15 +230,18 @@ class VisualConfigPanel:
                 label = str(field.get("label") or path)
                 desc = str(field.get("description") or "").strip()
 
-                ttk.Label(grp, text=label, width=22).grid(
-                    row=gi, column=0, sticky="nw", pady=2,
-                )
+                label_widget = ttk.Label(grp, text=label, width=22)
+                label_widget.grid(row=gi, column=0, sticky="nw", pady=2)
+                if desc:
+                    LabelHoverTip(label_widget, desc)
+
                 var, widget = self._make_widget(grp, field)
                 ftype_w = str(field.get("type") or "str").strip().lower()
                 if ftype_w == "json":
-                    widget.grid(row=gi, column=1, columnspan=2, sticky="ew", padx=(4, 0), pady=2)
+                    widget.grid(row=gi, column=1, sticky="ew", padx=(4, 0), pady=2)
                 else:
                     widget.grid(row=gi, column=1, sticky="w", padx=(4, 0), pady=2)
+                grp.columnconfigure(1, weight=1)
 
                 val = get_by_path(data, path)
                 if val is None:
@@ -250,11 +255,6 @@ class VisualConfigPanel:
                 else:
                     var.set(format_field_value(val, field))
 
-                if desc:
-                    ttk.Label(grp, text=desc, foreground="#888899", wraplength=280).grid(
-                        row=gi, column=2, sticky="w", padx=(8, 0), pady=2,
-                    )
-                    grp.columnconfigure(2, weight=1)
                 bindings.append(_FieldBinding(field, var, widget))
                 gi += 1
 

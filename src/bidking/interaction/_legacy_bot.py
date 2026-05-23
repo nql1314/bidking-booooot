@@ -1255,7 +1255,7 @@ def _default_warehouse_auto_sort_settings() -> dict[str, Any]:
         # 客户区逻辑坐标（同 ``clicks``），非区域中心；旧档可用 ``warehouse_button_region`` 矩形兜底
         "warehouse_button_click": {"origin": "left_top", "x": 127, "y": 1019},
         # 自动排序按钮：客户区坐标；旧档可用 ``auto_sort_region`` 矩形兜底
-        "auto_sort_click": {"origin": "left_top", "x": 1601, "y": 1048},
+        "auto_sort_click": {"origin": "left_top", "x": 1510, "y": 1014},
     }
 
 
@@ -1419,7 +1419,7 @@ def _aisha_round4_tool_min_vacant(automation: dict[str, Any]) -> int:
     if "aisha_round4_tool_min_vacant" in automation:
         return int(automation["aisha_round4_tool_min_vacant"])
     # 兼容旧键：语义同为「空置格 >= n 才用道具」
-    return int(automation.get("tool_skip_vacant_threshold", 5))
+    return int(automation.get("tool_skip_vacant_threshold", 30))
 
 
 def _aisha_round4_q5_grid_stats_known(

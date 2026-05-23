@@ -2,29 +2,12 @@
   "version": 2,
   "description": "可视化配置字段表（仅策略/玩法可调项）。path=JSON 点路径；scope=config|map|both；hide=true 时不在「可视化配置」页展示。点击坐标、截图区域、窗口句柄、地图标定点等运行时数据不在此表，请改 configs/runtime.json 或 Bot 面板 JSON 编辑器。运行 tools/generate_visual_config_schema.py 可重新生成。",
   "fields": [
-    {
-      "path": "advisor.role",
-      "type": "str",
-      "label": "顾问角色",
-      "description": "advisor.role",
-      "scope": "config",
-      "group": "顾问",
-      "hide": false
-    },
-    {
-      "path": "automation.aisha_round4_tool_min_vacant",
-      "type": "int",
-      "label": "aisha round4 tool min vacant",
-      "description": "automation.aisha_round4_tool_min_vacant",
-      "scope": "both",
-      "group": "自动化",
-      "hide": false
-    },
+
     {
       "path": "automation.bid_cap_price",
       "type": "int",
       "label": "封顶价",
-      "description": "automation.bid_cap_price",
+      "description": "单局出价上限；计算价超过此值时截断到此价格。0 表示不启用封顶。",
       "scope": "map",
       "group": "自动化",
       "hide": false
@@ -32,8 +15,8 @@
     {
       "path": "automation.bid_cap_skip_when_total_above",
       "type": "int",
-      "label": "bid cap skip when total above",
-      "description": "automation.bid_cap_skip_when_total_above",
+      "label": "估价超限跳过封顶",
+      "description": "本局估价总额超过此值时不再应用封顶（高估值局保留策略出价）。0 表示始终封顶。",
       "scope": "config",
       "group": "自动化",
       "hide": false
@@ -42,7 +25,7 @@
       "path": "automation.bid_ratio_by_round.1",
       "type": "float",
       "label": "第1回合系数",
-      "description": "automation.bid_ratio_by_round.1",
+      "description": "第1回合最终出价 ≈ 基础估价 × 系数；可 >1 以抬高靠近天花板时的出价。",
       "scope": "map",
       "group": "自动化",
       "hide": false
@@ -51,7 +34,7 @@
       "path": "automation.bid_ratio_by_round.2",
       "type": "float",
       "label": "第2回合系数",
-      "description": "automation.bid_ratio_by_round.2",
+      "description": "第2回合最终出价 ≈ 基础估价 × 系数。",
       "scope": "map",
       "group": "自动化",
       "hide": false
@@ -60,7 +43,7 @@
       "path": "automation.bid_ratio_by_round.3",
       "type": "float",
       "label": "第3回合系数",
-      "description": "automation.bid_ratio_by_round.3",
+      "description": "第3回合最终出价 ≈ 基础估价 × 系数。",
       "scope": "map",
       "group": "自动化",
       "hide": false
@@ -69,7 +52,7 @@
       "path": "automation.bid_ratio_by_round.4",
       "type": "float",
       "label": "第4回合系数",
-      "description": "automation.bid_ratio_by_round.4",
+      "description": "第4回合最终出价 ≈ 基础估价 × 系数。",
       "scope": "map",
       "group": "自动化",
       "hide": false
@@ -78,52 +61,25 @@
       "path": "automation.bid_ratio_by_round.5",
       "type": "float",
       "label": "第5回合系数",
-      "description": "automation.bid_ratio_by_round.5",
+      "description": "第5回合最终出价 ≈ 基础估价 × 系数。",
       "scope": "map",
       "group": "自动化",
       "hide": false
     },
     {
-      "path": "automation.bot_runner",
-      "type": "str",
-      "label": "bot runner",
-      "description": "automation.bot_runner",
-      "scope": "config",
-      "group": "自动化",
-      "hide": false
-    },
-    {
-      "path": "automation.cycle_rest_minutes",
-      "type": "float",
-      "label": "cycle rest minutes",
-      "description": "automation.cycle_rest_minutes",
-      "scope": "config",
-      "group": "自动化",
-      "hide": false
-    },
-    {
-      "path": "automation.default_map",
-      "type": "str",
-      "label": "default map",
-      "description": "automation.default_map",
-      "scope": "config",
-      "group": "自动化",
-      "hide": false
-    },
-    {
-      "path": "automation.default_runs",
+      "path": "automation.aisha_round4_tool_min_vacant",
       "type": "int",
-      "label": "default runs",
-      "description": "automation.default_runs",
-      "scope": "config",
+      "label": "第4回合金道具空置门槛",
+      "description": "爱莎第4回合道具门控：棋盘上空置格数量须 ≥ 此值，且金统计未知时，才允许使用道具。",
+      "scope": "both",
       "group": "自动化",
       "hide": false
     },
     {
       "path": "automation.enable_aisha_round4_tool_vacant_gate",
       "type": "bool",
-      "label": "enable aisha round4 tool vacant gate",
-      "description": "automation.enable_aisha_round4_tool_vacant_gate",
+      "label": "爱莎第4回合空置门控",
+      "description": "开启后：第4回合仅在空置格≥门槛且 金统计未知时才使用道具。",
       "scope": "both",
       "group": "自动化",
       "hide": false
@@ -131,17 +87,8 @@
     {
       "path": "automation.game_start_timeout_seconds",
       "type": "float",
-      "label": "game start timeout seconds",
-      "description": "automation.game_start_timeout_seconds",
-      "scope": "config",
-      "group": "自动化",
-      "hide": false
-    },
-    {
-      "path": "automation.map_select_no_start_esc_after",
-      "type": "int",
-      "label": "map select no start esc after",
-      "description": "automation.map_select_no_start_esc_after",
+      "label": "开局等待超时（秒）",
+      "description": "选图后等待「开始」界面出现的最大秒数，超时则重试或放弃本局。",
       "scope": "config",
       "group": "自动化",
       "hide": false
@@ -149,53 +96,8 @@
     {
       "path": "automation.post_confirm_escape_block_seconds",
       "type": "float",
-      "label": "post confirm escape block seconds",
-      "description": "automation.post_confirm_escape_block_seconds",
-      "scope": "config",
-      "group": "自动化",
-      "hide": false
-    },
-    {
-      "path": "automation.run_cycles",
-      "type": "int",
-      "label": "run cycles",
-      "description": "automation.run_cycles",
-      "scope": "config",
-      "group": "自动化",
-      "hide": false
-    },
-    {
-      "path": "automation.selected_mode",
-      "type": "str",
-      "label": "selected mode",
-      "description": "automation.selected_mode",
-      "scope": "config",
-      "group": "自动化",
-      "hide": false
-    },
-    {
-      "path": "automation.tool_rounds",
-      "type": "int_list",
-      "label": "tool rounds",
-      "description": "automation.tool_rounds",
-      "scope": "config",
-      "group": "自动化",
-      "hide": false
-    },
-    {
-      "path": "automation.tool_skip_vacant_threshold",
-      "type": "int",
-      "label": "tool skip vacant threshold",
-      "description": "automation.tool_skip_vacant_threshold",
-      "scope": "config",
-      "group": "自动化",
-      "hide": false
-    },
-    {
-      "path": "automation.unknown_escape_cooldown_seconds",
-      "type": "float",
-      "label": "unknown escape cooldown seconds",
-      "description": "automation.unknown_escape_cooldown_seconds",
+      "label": "确认后禁 ESC（秒）",
+      "description": "出价确认后在此秒数内不响应 unknown 状态的 ESC 逃脱，防止误触打断流程。",
       "scope": "config",
       "group": "自动化",
       "hide": false
@@ -203,265 +105,35 @@
     {
       "path": "automation.warehouse_auto_sort.enabled",
       "type": "bool",
-      "label": "enabled",
-      "description": "automation.warehouse_auto_sort.enabled",
+      "label": "仓库自动整理",
+      "description": "每局开始前是否自动打开仓库并执行一键整理。",
       "scope": "config",
       "group": "自动化",
       "hide": false
-    },
-    {
-      "path": "automation.warehouse_auto_sort.wait_after_auto_sort_click_seconds",
-      "type": "float",
-      "label": "wait after auto sort click seconds",
-      "description": "automation.warehouse_auto_sort.wait_after_auto_sort_click_seconds",
-      "scope": "config",
-      "group": "自动化",
-      "hide": false
-    },
-    {
-      "path": "automation.warehouse_auto_sort.wait_after_warehouse_click_seconds",
-      "type": "float",
-      "label": "wait after warehouse click seconds",
-      "description": "automation.warehouse_auto_sort.wait_after_warehouse_click_seconds",
-      "scope": "config",
-      "group": "自动化",
-      "hide": false
-    },
-    {
-      "path": "board_snapshot.enabled",
-      "type": "bool",
-      "label": "enabled",
-      "description": "board_snapshot.enabled",
-      "scope": "config",
-      "group": "棋盘快照",
-      "hide": false
-    },
-    {
-      "path": "board_snapshot.self_user_uid",
-      "type": "str",
-      "label": "self user uid",
-      "description": "board_snapshot.self_user_uid",
-      "scope": "config",
-      "group": "棋盘快照",
-      "hide": false
-    },
-    {
-      "path": "grid_view.fraud_empty_cells_algorithm",
-      "type": "enum",
-      "label": "fraud empty cells algorithm",
-      "description": "grid_view.fraud_empty_cells_algorithm",
-      "scope": "config",
-      "group": "画板 UI",
-      "hide": false,
-      "choices": [
-        "tiling_strict",
-        "tiling",
-        "none"
-      ]
     },
     {
       "path": "grid_view.unknown_bg",
       "type": "str",
-      "label": "unknown bg",
-      "description": "grid_view.unknown_bg",
+      "label": "未知格背景色",
+      "description": "画板上未识别/未知格子的填充颜色，十六进制如 #1a7394。",
       "scope": "config",
       "group": "画板 UI",
       "hide": false
     },
     {
-      "path": "humanize.arc_strength_max",
-      "type": "float",
-      "label": "arc strength max",
-      "description": "humanize.arc_strength_max",
-      "scope": "config",
-      "group": "拟人化",
-      "hide": true
-    },
-    {
-      "path": "humanize.arc_strength_min",
-      "type": "float",
-      "label": "arc strength min",
-      "description": "humanize.arc_strength_min",
-      "scope": "config",
-      "group": "拟人化",
-      "hide": true
-    },
-    {
-      "path": "humanize.click_jitter_pixels",
-      "type": "int",
-      "label": "click jitter pixels",
-      "description": "humanize.click_jitter_pixels",
-      "scope": "config",
-      "group": "拟人化",
-      "hide": true
-    },
-    {
-      "path": "humanize.enabled",
-      "type": "bool",
-      "label": "enabled",
-      "description": "humanize.enabled",
-      "scope": "config",
-      "group": "拟人化",
-      "hide": false
-    },
-    {
-      "path": "humanize.move_duration_max",
-      "type": "float",
-      "label": "move duration max",
-      "description": "humanize.move_duration_max",
-      "scope": "config",
-      "group": "拟人化",
-      "hide": true
-    },
-    {
-      "path": "humanize.move_duration_min",
-      "type": "float",
-      "label": "move duration min",
-      "description": "humanize.move_duration_min",
-      "scope": "config",
-      "group": "拟人化",
-      "hide": true
-    },
-    {
-      "path": "humanize.move_steps_max",
-      "type": "int",
-      "label": "move steps max",
-      "description": "humanize.move_steps_max",
-      "scope": "config",
-      "group": "拟人化",
-      "hide": true
-    },
-    {
-      "path": "humanize.move_steps_min",
-      "type": "int",
-      "label": "move steps min",
-      "description": "humanize.move_steps_min",
-      "scope": "config",
-      "group": "拟人化",
-      "hide": true
-    },
-    {
-      "path": "humanize.post_select_all_delay_scale_max",
-      "type": "float",
-      "label": "post select all delay scale max",
-      "description": "humanize.post_select_all_delay_scale_max",
-      "scope": "config",
-      "group": "拟人化",
-      "hide": true
-    },
-    {
-      "path": "humanize.post_select_all_delay_scale_min",
-      "type": "float",
-      "label": "post select all delay scale min",
-      "description": "humanize.post_select_all_delay_scale_min",
-      "scope": "config",
-      "group": "拟人化",
-      "hide": true
-    },
-    {
-      "path": "humanize.pre_click_delay_max",
-      "type": "float",
-      "label": "pre click delay max",
-      "description": "humanize.pre_click_delay_max",
-      "scope": "config",
-      "group": "拟人化",
-      "hide": true
-    },
-    {
-      "path": "humanize.pre_click_delay_min",
-      "type": "float",
-      "label": "pre click delay min",
-      "description": "humanize.pre_click_delay_min",
-      "scope": "config",
-      "group": "拟人化",
-      "hide": true
-    },
-    {
-      "path": "humanize.pre_select_all_delay_max",
-      "type": "float",
-      "label": "pre select all delay max",
-      "description": "humanize.pre_select_all_delay_max",
-      "scope": "config",
-      "group": "拟人化",
-      "hide": true
-    },
-    {
-      "path": "humanize.pre_select_all_delay_min",
-      "type": "float",
-      "label": "pre select all delay min",
-      "description": "humanize.pre_select_all_delay_min",
-      "scope": "config",
-      "group": "拟人化",
-      "hide": true
-    },
-    {
-      "path": "humanize.price_char_interval_max",
-      "type": "float",
-      "label": "price char interval max",
-      "description": "humanize.price_char_interval_max",
-      "scope": "config",
-      "group": "拟人化",
-      "hide": true
-    },
-    {
-      "path": "humanize.price_char_interval_min",
-      "type": "float",
-      "label": "price char interval min",
-      "description": "humanize.price_char_interval_min",
-      "scope": "config",
-      "group": "拟人化",
-      "hide": true
-    },
-    {
-      "path": "humanize.price_stutter_extra_max",
-      "type": "float",
-      "label": "price stutter extra max",
-      "description": "humanize.price_stutter_extra_max",
-      "scope": "config",
-      "group": "拟人化",
-      "hide": true
-    },
-    {
-      "path": "humanize.price_stutter_extra_min",
-      "type": "float",
-      "label": "price stutter extra min",
-      "description": "humanize.price_stutter_extra_min",
-      "scope": "config",
-      "group": "拟人化",
-      "hide": true
-    },
-    {
-      "path": "humanize.price_stutter_probability",
-      "type": "float",
-      "label": "price stutter probability",
-      "description": "humanize.price_stutter_probability",
-      "scope": "config",
-      "group": "拟人化",
-      "hide": true
-    },
-    {
       "path": "pricing.enable_big_gold_adjustment",
       "type": "bool",
-      "label": "enable big gold adjustment",
-      "description": "pricing.enable_big_gold_adjustment",
+      "label": "启用大金调整",
+      "description": "是否对棋盘上的「大金」等高价值格应用额外出价调整逻辑。",
       "scope": "map",
-      "group": "出价",
-      "hide": false
-    },
-    {
-      "path": "pricing.enable_late_round_low_bid_surrender",
-      "type": "bool",
-      "label": "enable late round low bid surrender",
-      "description": "pricing.enable_late_round_low_bid_surrender",
-      "scope": "both",
       "group": "出价",
       "hide": false
     },
     {
       "path": "pricing.enable_opponent_bid_adjustment",
       "type": "bool",
-      "label": "enable opponent bid adjustment",
-      "description": "pricing.enable_opponent_bid_adjustment",
+      "label": "对手出价修正",
+      "description": "是否根据对手历史出价/排名对己方出价做修正。",
       "scope": "both",
       "group": "出价",
       "hide": false
@@ -469,26 +141,17 @@
     {
       "path": "pricing.enable_vacant_red_floor_ceiling_pick",
       "type": "bool",
-      "label": "enable vacant red floor ceiling pick",
-      "description": "pricing.enable_vacant_red_floor_ceiling_pick",
+      "label": "空置红格价格选取",
+      "description": "空置区存在红格时，是否在全橙和金红之间按模式选取价格。",
       "scope": "both",
-      "group": "出价",
-      "hide": false
-    },
-    {
-      "path": "pricing.fallback_bid_price",
-      "type": "int",
-      "label": "兜底价",
-      "description": "pricing.fallback_bid_price",
-      "scope": "map",
       "group": "出价",
       "hide": false
     },
     {
       "path": "pricing.grid_avg_infer_max_grid_count",
       "type": "int",
-      "label": "grid avg infer max grid count",
-      "description": "pricing.grid_avg_infer_max_grid_count",
+      "label": "网格均价最大格数",
+      "description": "用网格均价推断未知价值时，最多纳入多少个格子参与计算。",
       "scope": "config",
       "group": "出价",
       "hide": false
@@ -496,8 +159,8 @@
     {
       "path": "pricing.grid_avg_infer_max_item_count",
       "type": "int",
-      "label": "grid avg infer max item count",
-      "description": "pricing.grid_avg_infer_max_item_count",
+      "label": "网格均价最大物品数量",
+      "description": "网格均价推断时参与统计的物品数量上限。",
       "scope": "config",
       "group": "出价",
       "hide": false
@@ -505,17 +168,26 @@
     {
       "path": "pricing.infer_unknown_contour_shapes",
       "type": "bool",
-      "label": "infer unknown contour shapes",
-      "description": "pricing.infer_unknown_contour_shapes",
+      "label": "推断未知轮廓形状",
+      "description": "是否根据邻格与轮廓对未知形状格尝试形状/价值推断。",
       "scope": "config",
+      "group": "出价",
+      "hide": false
+    },
+    {
+      "path": "pricing.enable_late_round_low_bid_surrender",
+      "type": "bool",
+      "label": "后期低价认输",
+      "description": "开启后：超过指定回合且出价低于阈值时，强制改为认输价（默认 886）。",
+      "scope": "both",
       "group": "出价",
       "hide": false
     },
     {
       "path": "pricing.late_round_low_bid_surrender_after_round",
       "type": "int",
-      "label": "late round low bid surrender after round",
-      "description": "pricing.late_round_low_bid_surrender_after_round",
+      "label": "认输生效回合",
+      "description": "从第几回合起启用后期低价认输（含该回合）。",
       "scope": "both",
       "group": "出价",
       "hide": false
@@ -523,8 +195,8 @@
     {
       "path": "pricing.late_round_low_bid_surrender_below",
       "type": "int",
-      "label": "late round low bid surrender below",
-      "description": "pricing.late_round_low_bid_surrender_below",
+      "label": "认输出价阈值",
+      "description": "计算出价低于此值时触发认输价替换。",
       "scope": "both",
       "group": "出价",
       "hide": false
@@ -532,8 +204,8 @@
     {
       "path": "pricing.late_round_low_bid_surrender_bid",
       "type": "int",
-      "label": "late round low bid surrender bid",
-      "description": "pricing.late_round_low_bid_surrender_bid",
+      "label": "认输固定出价",
+      "description": "触发后期低价认输时强制使用的出价（常为 886）。",
       "scope": "both",
       "group": "出价",
       "hide": false
@@ -541,8 +213,8 @@
     {
       "path": "pricing.price_avg_infer_max_item_count",
       "type": "int",
-      "label": "price avg infer max item count",
-      "description": "pricing.price_avg_infer_max_item_count",
+      "label": "均价推断最大物品数量",
+      "description": "按物品均价推断未知价值时，参与统计的物品数量上限。",
       "scope": "config",
       "group": "出价",
       "hide": false
@@ -550,8 +222,8 @@
     {
       "path": "pricing.secret_auction_rank_opponent_multipliers.1",
       "type": "float",
-      "label": "第1",
-      "description": "pricing.secret_auction_rank_opponent_multipliers.1",
+      "label": "秘拍第1名对手系数",
+      "description": "隐秘拍卖地图：对手排名第1时的出价乘数。",
       "scope": "map",
       "group": "出价",
       "hide": false
@@ -559,8 +231,8 @@
     {
       "path": "pricing.secret_auction_rank_opponent_multipliers.2",
       "type": "float",
-      "label": "第2",
-      "description": "pricing.secret_auction_rank_opponent_multipliers.2",
+      "label": "秘拍第2名对手系数",
+      "description": "隐秘拍卖地图：对手排名第2时的出价乘数。",
       "scope": "map",
       "group": "出价",
       "hide": false
@@ -568,8 +240,8 @@
     {
       "path": "pricing.secret_auction_rank_opponent_multipliers.3",
       "type": "float",
-      "label": "第3",
-      "description": "pricing.secret_auction_rank_opponent_multipliers.3",
+      "label": "秘拍第3名对手系数",
+      "description": "隐秘拍卖地图：对手排名第3时的出价乘数。",
       "scope": "map",
       "group": "出价",
       "hide": false
@@ -577,8 +249,8 @@
     {
       "path": "pricing.secret_auction_rank_opponent_multipliers.4",
       "type": "float",
-      "label": "第4",
-      "description": "pricing.secret_auction_rank_opponent_multipliers.4",
+      "label": "秘拍第4名对手系数",
+      "description": "隐秘拍卖地图：对手排名第4时的出价乘数。",
       "scope": "map",
       "group": "出价",
       "hide": false
@@ -586,8 +258,8 @@
     {
       "path": "pricing.secret_auction_rank_opponent_multipliers.default",
       "type": "float",
-      "label": "default",
-      "description": "pricing.secret_auction_rank_opponent_multipliers.default",
+      "label": "秘拍默认对手系数",
+      "description": "隐秘拍卖地图：未匹配到具体名次时使用的默认乘数。",
       "scope": "map",
       "group": "出价",
       "hide": false
@@ -595,166 +267,21 @@
     {
       "path": "pricing.vacant_red_floor_ceiling_pick_mode",
       "type": "enum",
-      "label": "vacant red floor ceiling pick mode",
-      "description": "pricing.vacant_red_floor_ceiling_pick_mode",
+      "label": "空置红格选取模式",
+      "description": "normal / aggressive：红格在全橙和金红之间的参考价倾向。",
       "scope": "map",
       "group": "出价",
       "hide": false,
       "choices": [
         "normal",
-        "aggressive",
-        "conservative"
+        "aggressive"
       ]
-    },
-    {
-      "path": "safety.bring_window_to_front",
-      "type": "bool",
-      "label": "bring window to front",
-      "description": "safety.bring_window_to_front",
-      "scope": "config",
-      "group": "安全",
-      "hide": false
-    },
-    {
-      "path": "safety.confirm_after_type",
-      "type": "bool",
-      "label": "confirm after type",
-      "description": "safety.confirm_after_type",
-      "scope": "config",
-      "group": "安全",
-      "hide": false
-    },
-    {
-      "path": "safety.dry_run",
-      "type": "bool",
-      "label": "dry run",
-      "description": "safety.dry_run",
-      "scope": "config",
-      "group": "安全",
-      "hide": false
-    },
-    {
-      "path": "safety.failsafe",
-      "type": "bool",
-      "label": "failsafe",
-      "description": "safety.failsafe",
-      "scope": "config",
-      "group": "安全",
-      "hide": false
-    },
-    {
-      "path": "safety.move_pause_seconds",
-      "type": "float",
-      "label": "move pause seconds",
-      "description": "safety.move_pause_seconds",
-      "scope": "config",
-      "group": "安全",
-      "hide": false
-    },
-    {
-      "path": "safety.park_mouse_after_clicks",
-      "type": "bool",
-      "label": "park mouse after clicks",
-      "description": "safety.park_mouse_after_clicks",
-      "scope": "config",
-      "group": "安全",
-      "hide": false
-    },
-    {
-      "path": "safety.skip_round_bid_button_ocr_gate",
-      "type": "bool",
-      "label": "skip round bid button ocr gate",
-      "description": "safety.skip_round_bid_button_ocr_gate",
-      "scope": "config",
-      "group": "安全",
-      "hide": true
-    },
-    {
-      "path": "safety.stuck_after_handled_round.between_clicks_seconds",
-      "type": "float",
-      "label": "between clicks seconds",
-      "description": "safety.stuck_after_handled_round.between_clicks_seconds",
-      "scope": "config",
-      "group": "安全",
-      "hide": true
-    },
-    {
-      "path": "safety.stuck_after_handled_round.consecutive_poll_threshold",
-      "type": "int",
-      "label": "consecutive poll threshold",
-      "description": "safety.stuck_after_handled_round.consecutive_poll_threshold",
-      "scope": "config",
-      "group": "安全",
-      "hide": true
-    },
-    {
-      "path": "safety.stuck_after_handled_round.enabled",
-      "type": "bool",
-      "label": "enabled",
-      "description": "safety.stuck_after_handled_round.enabled",
-      "scope": "config",
-      "group": "安全",
-      "hide": true
-    },
-    {
-      "path": "safety.verify_bid_confirm_ocr",
-      "type": "bool",
-      "label": "verify bid confirm ocr",
-      "description": "safety.verify_bid_confirm_ocr",
-      "scope": "config",
-      "group": "安全",
-      "hide": false
-    },
-    {
-      "path": "timing.after_bid_confirm_wait_seconds",
-      "type": "float",
-      "label": "after bid confirm wait seconds",
-      "description": "timing.after_bid_confirm_wait_seconds",
-      "scope": "config",
-      "group": "时序",
-      "hide": false
     },
     {
       "path": "timing.after_map_select_wait_seconds",
       "type": "float",
-      "label": "after map select wait seconds",
-      "description": "timing.after_map_select_wait_seconds",
-      "scope": "config",
-      "group": "时序",
-      "hide": false
-    },
-    {
-      "path": "timing.bid_confirm_capture_delay_seconds",
-      "type": "int",
-      "label": "bid confirm capture delay seconds",
-      "description": "timing.bid_confirm_capture_delay_seconds",
-      "scope": "config",
-      "group": "时序",
-      "hide": false
-    },
-    {
-      "path": "timing.bid_confirm_retry_pause_seconds",
-      "type": "float",
-      "label": "bid confirm retry pause seconds",
-      "description": "timing.bid_confirm_retry_pause_seconds",
-      "scope": "config",
-      "group": "时序",
-      "hide": false
-    },
-    {
-      "path": "timing.bid_confirm_verify_max_seconds",
-      "type": "int",
-      "label": "bid confirm verify max seconds",
-      "description": "timing.bid_confirm_verify_max_seconds",
-      "scope": "config",
-      "group": "时序",
-      "hide": false
-    },
-    {
-      "path": "timing.click_pause_seconds",
-      "type": "float",
-      "label": "click pause seconds",
-      "description": "timing.click_pause_seconds",
+      "label": "选图后等待（秒）",
+      "description": "选择地图后等待加载/开局界面的秒数。",
       "scope": "config",
       "group": "时序",
       "hide": false
@@ -762,17 +289,8 @@
     {
       "path": "timing.poll_seconds",
       "type": "int",
-      "label": "poll seconds",
-      "description": "timing.poll_seconds",
-      "scope": "config",
-      "group": "时序",
-      "hide": false
-    },
-    {
-      "path": "timing.reward_continue_debounce_seconds",
-      "type": "float",
-      "label": "reward continue debounce seconds",
-      "description": "timing.reward_continue_debounce_seconds",
+      "label": "主循环轮询间隔（秒）",
+      "description": "Bot 主循环每次检测棋盘/界面状态的间隔。",
       "scope": "config",
       "group": "时序",
       "hide": false
@@ -780,26 +298,8 @@
     {
       "path": "timing.round1_extra_wait_seconds",
       "type": "float",
-      "label": "round1 extra wait seconds",
-      "description": "timing.round1_extra_wait_seconds",
-      "scope": "config",
-      "group": "时序",
-      "hide": false
-    },
-    {
-      "path": "timing.round_bid_button_gate_max_seconds",
-      "type": "float",
-      "label": "round bid button gate max seconds",
-      "description": "timing.round_bid_button_gate_max_seconds",
-      "scope": "config",
-      "group": "时序",
-      "hide": false
-    },
-    {
-      "path": "timing.round_bid_button_gate_poll_seconds",
-      "type": "float",
-      "label": "round bid button gate poll seconds",
-      "description": "timing.round_bid_button_gate_poll_seconds",
+      "label": "第1回合额外等待（秒）",
+      "description": "第1回合检测到可出价后额外等待，便于棋盘信息稳定。",
       "scope": "config",
       "group": "时序",
       "hide": false
@@ -807,28 +307,10 @@
     {
       "path": "timing.round_detect_wait_seconds",
       "type": "float",
-      "label": "round detect wait seconds",
-      "description": "timing.round_detect_wait_seconds",
+      "label": "回合检测等待（秒）",
+      "description": "检测到新回合后等待界面稳定的秒数。",
       "scope": "config",
       "group": "时序",
-      "hide": false
-    },
-    {
-      "path": "timing.transition_debounce_seconds",
-      "type": "float",
-      "label": "transition debounce seconds",
-      "description": "timing.transition_debounce_seconds",
-      "scope": "config",
-      "group": "时序",
-      "hide": false
-    },
-    {
-      "path": "viewer.show_bot_runner",
-      "type": "bool",
-      "label": "show bot runner",
-      "description": "viewer.show_bot_runner",
-      "scope": "config",
-      "group": "启动页",
       "hide": false
     }
   ]
