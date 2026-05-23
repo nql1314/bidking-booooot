@@ -20,6 +20,7 @@ from .postprocess import (
     apply_ceiling_points,
     apply_early_round_fallback_floor,
     apply_human_like_price_tail,
+    apply_late_round_low_bid_surrender,
 )
 from .price_config_load import load_price_config
 from .strategies import compute_role_base, resolve_strategy_role
@@ -38,7 +39,7 @@ def compute_price(
     读快照 ``pricing`` → ``compute_role_base``（艾莎在 ``compute_base_bid_points`` 内含空置红择优）→
     回合倍数 → 对手调整 →
     ``points_ceiling`` 锚（第 4 回合起；若倍数 ``ratio`` > 1 则封顶按 ``points_ceiling * ratio``）→
-    人性化尾数 → 前两回合兜底 → bid_cap。
+    人性化尾数 → 前两回合兜底 → 超回合低价放弃（886）→ bid_cap。
 
     当传入或从磁盘启用的画板快照中含有效 ``map_id`` 时，``pricing.maps`` 覆盖层按该局地图档键
     加载（与 grid_view / 日志对局一致）；否则仍按 ``automation.selected_map`` 等解析。
@@ -173,28 +174,39 @@ def compute_price(
         effective_round,
         bid_ratio=ratio,
     )
-     # 集装箱地图：非作者账号遇到作者账号时，价格乘以 0.88
-    mid_ct = map_id_from_board_snapshot(bs)
-    if mid_ct is not None and map_bundle_is_container_series(int(mid_ct)):
-        self_uid_ct, _ = board_snapshot_self_identity(effective_config, bs)
-        if self_uid_ct:
-            players_ct = (bs.get("game_state") or {}).get("players") or {}
-            if not isinstance(players_ct, dict):
-                players_ct = bs.get("players") if isinstance(bs.get("players"), dict) else {}
-            if isinstance(players_ct, dict):
-                _author_uid_large = "358372071974712"  # 大号
-                _author_uid_small = "941456831344888"  # 小号
-                author_uids = {_author_uid_large, _author_uid_small}
-                opp_uids_ct = {
-                    str(k) for k in players_ct if str(k) != str(self_uid_ct)
-                }
-                # 当前使用者非作者账号，且对手中包含作者账号
-                if self_uid_ct not in author_uids:
-                    if author_uids.intersection(opp_uids_ct):
-                        fin = int(round(fin * 0.88))
+    # 作者两号互排：小号 ×0.66、大号不变（全地图）
+    self_uid_auth, _ = board_snapshot_self_identity(effective_config, bs)
+    if self_uid_auth:
+        players_auth = (bs.get("game_state") or {}).get("players") or {}
+        if not isinstance(players_auth, dict):
+            players_auth = bs.get("players") if isinstance(bs.get("players"), dict) else {}
+        if isinstance(players_auth, dict):
+            _author_uid_large = "358372071974712"  # 大号
+            _author_uid_small = "941456831344888"  # 小号
+            author_uids = {_author_uid_large, _author_uid_small}
+            opp_uids_auth = {
+                str(k) for k in players_auth if str(k) != str(self_uid_auth)
+            }
+            if (
+                self_uid_auth == _author_uid_small
+                and _author_uid_large in opp_uids_auth
+            ):
+                fin = int(round(fin * 0.66))
+            else:
+                mid_ct = map_id_from_board_snapshot(bs)
+                if (
+                    mid_ct is not None
+                    and map_bundle_is_container_series(int(mid_ct))
+                    and self_uid_auth not in author_uids
+                    and author_uids.intersection(opp_uids_auth)
+                ):
+                    fin = int(round(fin * 0.88))
     fin, payload = apply_human_like_price_tail(fin, payload)
     fin, payload = apply_early_round_fallback_floor(
         fin, effective_round, int(fallback), payload
+    )
+    fin, payload = apply_late_round_low_bid_surrender(
+        effective_config, fin, effective_round, payload
     )
     # 快递站系列地图：与作者（两固定 UID）对局时的约定出价（早于 bid_cap）
     mid_sp = map_id_from_board_snapshot(bs)

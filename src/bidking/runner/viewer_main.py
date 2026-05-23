@@ -134,16 +134,18 @@ def _launch_bot_runner(start_root: tk.Tk) -> None:
 def _show_start_page(default_log: str, csv_path: str) -> None:
     root = tk.Tk()
     root.title(f"BidKing 鉴影可视化 v{__version__} - 启动")
-    root.geometry("780x720")
+    root.geometry("960x720")
 
     notebook = ttk.Notebook(root)
     notebook.pack(fill="both", expand=True)
 
     launch_tab = ttk.Frame(notebook)
     config_tab = ttk.Frame(notebook)
+    visual_config_tab = ttk.Frame(notebook)
     sponsor_tab = ttk.Frame(notebook)
     notebook.add(launch_tab, text="启动看板")
     notebook.add(config_tab, text="策略配置")
+    notebook.add(visual_config_tab, text="可视化配置")
 
     # ── 启动看板 tab ───────────────────────────────────────────────────────
     log_var = tk.StringVar(value=default_log)
@@ -355,7 +357,20 @@ def _show_start_page(default_log: str, csv_path: str) -> None:
             padding=20,
         ).pack(fill="both", expand=True)
 
-    # ── 赞助标签（Notebook 第三页，在「策略配置」右侧）────────────────────
+    # ── 可视化配置 tab（策略配置右侧）──────────────────────────────────────
+    try:
+        from ..ui._visual_config_panel import VisualConfigPanel
+
+        VisualConfigPanel(visual_config_tab)
+    except Exception as exc:  # noqa: BLE001
+        ttk.Label(
+            visual_config_tab,
+            text=f"可视化配置面板加载失败：{exc}",
+            foreground="#aa3333",
+            padding=20,
+        ).pack(fill="both", expand=True)
+
+    # ── 赞助标签（Notebook 第四页）────────────────────────────────────────
     try:
         from ..ui.grid._sponsor_column import populate_sponsor_notebook_tab
 
