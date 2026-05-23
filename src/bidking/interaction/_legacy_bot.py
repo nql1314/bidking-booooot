@@ -1374,6 +1374,124 @@ def run_warehouse_auto_sort(config: dict[str, Any]) -> None:
     log("warehouse auto_sort: 已 ESC 返回主界面", gui_verbose_only=True)
 
 
+AISHA_HERO_CID = 103
+AISHA_ROUND4_TOOL_ROUND = 4
+AISHA_ROUND5_TOOL_ROUND = 5
+
+
+def _automation_with_map_overlay(
+    config: dict[str, Any],
+    board_snapshot: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """合并 ``configs/pricing.maps/<地图>.json`` 的 ``automation``（与出价计算同源）。"""
+    from ..analysis._board_pricing import map_id_from_board_snapshot
+    from ..config.map_runtime_overlay import merged_runtime_with_map_pricing
+    from ..parsing.item_db import map_bundle_key_for_automation
+
+    map_bundle_key: str | None = None
+    if isinstance(board_snapshot, dict):
+        mid_snap = map_id_from_board_snapshot(board_snapshot)
+        if mid_snap is not None and int(mid_snap) > 0:
+            map_bundle_key = map_bundle_key_for_automation(int(mid_snap))
+    merged = merged_runtime_with_map_pricing(
+        config, map_bundle_key=map_bundle_key
+    )
+    auto = merged.get("automation")
+    return auto if isinstance(auto, dict) else {}
+
+
+def _aisha_round4_vacant_gate_enabled(
+    config: dict[str, Any],
+    board_snapshot: dict[str, Any] | None = None,
+) -> bool:
+    return bool(
+        _automation_with_map_overlay(config, board_snapshot).get(
+            "enable_aisha_round4_tool_vacant_gate", False
+        )
+    )
+
+
+def _aisha_round4_tool_min_vacant(automation: dict[str, Any]) -> int:
+    if "aisha_round4_tool_min_vacant" in automation:
+        return int(automation["aisha_round4_tool_min_vacant"])
+    # 兼容旧键：语义同为「空置格 >= n 才用道具」
+    return int(automation.get("tool_skip_vacant_threshold", 5))
+
+
+def _self_hero_cid_from_snapshot(
+    board_snapshot: dict[str, Any] | None,
+    config: dict[str, Any],
+) -> int | None:
+    if not isinstance(board_snapshot, dict):
+        return None
+    from ..analysis._board_pricing import _self_player_hero_cid
+
+    bs_cfg = config.get("board_snapshot") or {}
+    return _self_player_hero_cid(
+        board_snapshot,
+        board_snapshot_config=bs_cfg if isinstance(bs_cfg, dict) else None,
+    )
+
+
+def should_skip_tool_for_aisha_vacant_gate(
+    *,
+    config: dict[str, Any],
+    round_no: int,
+    tool_rounds: set[int],
+    board_snapshot: dict[str, Any] | None,
+) -> tuple[bool, str]:
+    """是否因艾莎空置格规则跳过道具。
+
+    返回 ``(skip_tool, reason)``：``True``=本回合不用道具，``False``=本函数不拦截
+    （是否用道具仍由 ``tool_rounds`` 等决定）。
+
+    功能开关开启时：第5回合一律 ``skip``；第4回合艾莎且已勾选时仅
+    ``vacant >= min_vacant`` 时不 ``skip``。
+    """
+    if not _aisha_round4_vacant_gate_enabled(config, board_snapshot):
+        return False, ""
+    rn = int(round_no)
+    if rn == AISHA_ROUND5_TOOL_ROUND:
+        return True, f"round {rn}: aisha vacant-gate enabled, round5 tool disabled"
+    if rn != AISHA_ROUND4_TOOL_ROUND:
+        return False, ""
+    if AISHA_ROUND4_TOOL_ROUND not in tool_rounds:
+        return False, ""
+    if _self_hero_cid_from_snapshot(board_snapshot, config) != AISHA_HERO_CID:
+        return False, ""
+    auto = _automation_with_map_overlay(config, board_snapshot)
+    min_vacant = _aisha_round4_tool_min_vacant(auto)
+    if not isinstance(board_snapshot, dict):
+        return True, f"round {rn}: aisha round4 no board snapshot, skip tool"
+    pricing = board_snapshot.get("pricing") or {}
+    vacant = pricing.get("vacant")
+    if vacant is None:
+        return True, f"round {rn}: aisha round4 vacant unknown, skip tool"
+    if int(vacant) < min_vacant:
+        return (
+            True,
+            f"round {rn}: aisha round4 vacant={vacant} < {min_vacant}, skip tool",
+        )
+    return False, ""
+
+
+def should_skip_aisha_round4_tool_by_vacant(
+    *,
+    config: dict[str, Any],
+    round_no: int,
+    tool_rounds: set[int],
+    board_snapshot: dict[str, Any] | None,
+) -> bool:
+    """兼容旧调用：仅返回是否跳过（见 :func:`should_skip_tool_for_aisha_vacant_gate`）。"""
+    skip, _ = should_skip_tool_for_aisha_vacant_gate(
+        config=config,
+        round_no=round_no,
+        tool_rounds=tool_rounds,
+        board_snapshot=board_snapshot,
+    )
+    return skip
+
+
 def run_aisha_loop(config_path: Path, **run_loop_kwargs: Any) -> None:
     """兼容入口：清快照、强制 ``aisha_premium`` 后进入 :func:`run_loop`。"""
     cfg0 = load_merged_bot_config(config_path)
@@ -1405,21 +1523,16 @@ def handle_round(
         sleep_interruptible(float(timing_cfg.get("round_detect_wait_seconds", 0.0) or 0.0))
     tool_rounds = {int(item) for item in config.get("automation", {}).get("tool_rounds", [1, 2])}
     ran_tool_this_round = int(round_no) in tool_rounds
-
-    # 当空置格 <= 配置阈值时，不使用道具
-    tool_skip_vacant_threshold = int(
-        config.get("automation", {}).get("tool_skip_vacant_threshold", 5)
-    )
     bs_data = load_board_snapshot_for_loop(config)
-    if bs_data is not None:
-        pricing = bs_data.get("pricing") or {}
-        vacant = pricing.get("vacant")
-        if vacant is not None and int(vacant) <= tool_skip_vacant_threshold:
-            log(
-                f"round {round_no}: vacant={vacant} <= {tool_skip_vacant_threshold}, skip tool",
-                gui_verbose_only=True,
-            )
-            ran_tool_this_round = False
+    skip_tool, skip_reason = should_skip_tool_for_aisha_vacant_gate(
+        config=config,
+        round_no=int(round_no),
+        tool_rounds=tool_rounds,
+        board_snapshot=bs_data,
+    )
+    if ran_tool_this_round and skip_tool:
+        log(skip_reason, gui_verbose_only=True)
+        ran_tool_this_round = False
 
     if ran_tool_this_round:
         run_tool_sequence(config)

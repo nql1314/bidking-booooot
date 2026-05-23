@@ -136,6 +136,8 @@ class BidKingApp:
         self.cycles_var = tk.StringVar()
         self.rest_minutes_var = tk.StringVar()
         self.tool_round_vars: dict[int, tk.BooleanVar] = {}
+        self.aisha_round4_vacant_gate_var = tk.BooleanVar(value=False)
+        self.aisha_round4_min_vacant_var = tk.StringVar(value="5")
         self.bot_runner_var = tk.StringVar(value=BOT_RUNNER_COMBO_VALUES[0])
 
         self.build_ui()
@@ -276,6 +278,21 @@ class BidKingApp:
                 tool_rounds_box, text=f"第{round_no}回合", variable=var,
             ).pack(side="left", padx=(0, 8))
 
+        aisha_tool_row = ttk.Frame(tool_rounds_box)
+        aisha_tool_row.pack(fill="x", pady=(8, 0))
+        ttk.Checkbutton(
+            aisha_tool_row,
+            text="艾莎第4回合：按空置格决定是否用道具",
+            variable=self.aisha_round4_vacant_gate_var,
+        ).pack(side="left")
+        ttk.Label(aisha_tool_row, text="（空置格 >=").pack(side="left", padx=(8, 0))
+        ttk.Entry(
+            aisha_tool_row, textvariable=self.aisha_round4_min_vacant_var, width=4,
+        ).pack(side="left", padx=(2, 0))
+        ttk.Label(
+            aisha_tool_row, text=" 才用；需勾选第4回合；开启后第5回合禁用道具）",
+        ).pack(side="left")
+
         log_box = ttk.LabelFrame(main, text="运行日志 / Debug", padding=10)
         log_box.pack(fill="both", expand=True, pady=(10, 0))
         self.log_text = tk.Text(log_box, height=20, wrap="word")
@@ -323,6 +340,13 @@ class BidKingApp:
         tool_rounds = {int(r) for r in auto.get("tool_rounds", [1, 2])}
         for round_no, var in self.tool_round_vars.items():
             var.set(round_no in tool_rounds)
+        self.aisha_round4_vacant_gate_var.set(
+            bool(auto.get("enable_aisha_round4_tool_vacant_gate", False))
+        )
+        min_vacant = auto.get("aisha_round4_tool_min_vacant")
+        if min_vacant is None:
+            min_vacant = auto.get("tool_skip_vacant_threshold", 5)
+        self.aisha_round4_min_vacant_var.set(str(min_vacant))
         self.bot_runner_var.set(_bot_runner_label_from_config(self.config))
 
     def _validate_disk_board_snapshot(self) -> None:
@@ -369,6 +393,13 @@ class BidKingApp:
         self.config["automation"]["run_cycles"] = cycles_value
         self.config["automation"]["cycle_rest_minutes"] = rest_minutes_value
         self.config["automation"]["tool_rounds"] = selected_tool_rounds
+        min_vacant_value = _parse_positive_int(
+            self.aisha_round4_min_vacant_var.get(), default=5,
+        )
+        self.config["automation"]["enable_aisha_round4_tool_vacant_gate"] = bool(
+            self.aisha_round4_vacant_gate_var.get()
+        )
+        self.config["automation"]["aisha_round4_tool_min_vacant"] = min_vacant_value
         self.config.setdefault("advisor", {})["role"] = advisor_role
 
         self.overlay.setdefault("automation", {})
@@ -379,6 +410,10 @@ class BidKingApp:
         self.overlay["automation"]["run_cycles"] = cycles_value
         self.overlay["automation"]["cycle_rest_minutes"] = rest_minutes_value
         self.overlay["automation"]["tool_rounds"] = selected_tool_rounds
+        self.overlay["automation"]["enable_aisha_round4_tool_vacant_gate"] = bool(
+            self.aisha_round4_vacant_gate_var.get()
+        )
+        self.overlay["automation"]["aisha_round4_tool_min_vacant"] = min_vacant_value
         self.overlay.setdefault("advisor", {})["role"] = advisor_role
 
         self.save_json(CONFIG_OVERLAY_PATH, self.overlay)
