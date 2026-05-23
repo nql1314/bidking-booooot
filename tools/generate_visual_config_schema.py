@@ -5,11 +5,16 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIGS = ROOT / "configs"
+_TOOLS = Path(__file__).resolve().parent
+if str(_TOOLS) not in sys.path:
+    sys.path.insert(0, str(_TOOLS))
+from visual_field_meta import FIELD_META  # noqa: E402
 
 
 def deep_merge(a: dict, b: dict) -> dict:
@@ -232,6 +237,14 @@ def path_label(path: str) -> str:
     return leaf.replace("_", " ")
 
 
+def field_label_and_description(path: str) -> tuple[str, str]:
+    meta = FIELD_META.get(path)
+    if meta:
+        return meta["label"], meta["description"]
+    label = LABEL_OVERRIDES.get(path, path_label(path))
+    return label, f"配置路径：{path}"
+
+
 def main() -> None:
     runtime = load_json(CONFIGS / "runtime.json")
     overlay = load_json(CONFIGS / "config.json")
@@ -301,11 +314,12 @@ def main() -> None:
             continue
         val = all_paths[path]
         typ = infer_type(val, path) if val is not None else infer_type(None, path)
+        label, description = field_label_and_description(path)
         field: dict[str, Any] = {
             "path": path,
             "type": typ,
-            "label": LABEL_OVERRIDES.get(path, path_label(path)),
-            "description": path,
+            "label": label,
+            "description": description,
             "scope": resolve_scope(path, config_paths, map_paths),
             "group": path_group(path),
             "hide": default_hide(path, typ),
