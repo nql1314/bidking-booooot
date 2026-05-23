@@ -1429,58 +1429,53 @@ class GridWindow:
             "其中「空置」与 ``pricing.vacant``、图例「估算总价」悬浮里所述空置同源（橘红候选区几何计数 / 200009 总格减占位）。"
         )
 
-    def _info_summary_text(self) -> str:
-        """第二行信息栏：总格、画板格（含空置）、均格；金/红与品质未知格（与 merged_items_dict 一致）。"""
-        snap = self._make_board_snapshot(raw_pricing=self._last_raw_pricing)
-        (
-            total_cells,
-            item_count,
-            q5_count,
-            q5_cells,
-            q6_count,
-            q6_cells,
-            unknown_cells,
-        ) = self._stats_from_merged_items(snap)
-
-        avg_cells = total_cells / item_count if item_count else 0.0
-        empty_zone = self._compute_empty_zone_count()
-        vacant_slots = empty_zone if empty_zone is not None else 0
-        board_cells = total_cells + vacant_slots
-        top_cats = ""
-        category_ratios = map_category_ratios(self.state.map_id)
-        if not category_ratios and self._map_category_weights:
-            # 回退：若没有地图根图数据，则使用传入的类别倍率入口。
-            total_weight = sum(w for w in self._map_category_weights.values() if w > 0)
-            if total_weight > 0:
-                category_ratios = {
-                    cid: w / total_weight
-                    for cid, w in self._map_category_weights.items()
-                    if w > 0
-                }
-        if category_ratios:
-            ranked = sorted(
-                category_ratios.items(),
-                key=lambda kv: kv[1],
-                reverse=True,
-            )
+    def _top_cats_text(self) -> str:
+        """第 1 行类别TOP3 标签文本。"""
+        try:
+            category_ratios = map_category_ratios(self.state.map_id)
+            if not category_ratios and self._map_category_weights:
+                total_weight = sum(w for w in self._map_category_weights.values() if w > 0)
+                if total_weight > 0:
+                    category_ratios = {
+                        cid: w / total_weight
+                        for cid, w in self._map_category_weights.items()
+                        if w > 0
+                    }
+            if not category_ratios:
+                return ""
+            ranked = sorted(category_ratios.items(), key=lambda kv: kv[1], reverse=True)
             top_parts: List[str] = []
             for cid, ratio in ranked[:3]:
                 pct = ratio * 100.0
                 cat_short = _CAT_SHORT.get(cid, CATEGORY_NAMES.get(cid, str(cid))[:2])
                 top_parts.append(f"{cat_short}{pct:.0f}%")
-            top_cats = "   类别TOP3: " + " / ".join(top_parts)
-        return (
-            f"地图: {self.state.map_id}   第 {self.state.current_round} 回合   "
-            f"已知物品: {len(self.state.items)} 件   "
-            f"当前物品总格数: {total_cells}   "
-            f"当前画板格数: {board_cells}   "
-            f"平均格数: {avg_cells:.2f}   "
-            f"金(Q5): {q5_count} 件 {q5_cells}格   "
-            f"红(Q6): {q6_count} 件 {q6_cells}格   "
-            f"未知: {unknown_cells}格"
-            f"{top_cats}"
-            f"{self._board_mode_info_suffix()}"
-        )
+            return "类别TOP3: " + " / ".join(top_parts)
+        except Exception:
+            return ""
+
+    def _info_summary_text(self) -> str:
+        """第 2 行摘要：画板总格、已知物品件数、总格数、平均格数。"""
+        try:
+            snap = self._make_board_snapshot(raw_pricing=self._last_raw_pricing)
+            (
+                total_cells,
+                item_count,
+                *_rest,
+            ) = self._stats_from_merged_items(snap)
+
+            avg_cells = total_cells / item_count if item_count else 0.0
+            board_cells = getattr(self, "_last_board_cells", None)
+            board_prefix = f"画板总格 {board_cells}格   " if board_cells is not None else ""
+            result = (
+                f"{board_prefix}"
+                f"已知物品: {len(self.state.items)} 件   "
+                f"当前物品总格数: {total_cells}   "
+                f"平均格数: {avg_cells:.2f}"
+                f"{self._board_mode_info_suffix()}"
+            )
+            return result
+        except Exception as _e:
+            return f"（摘要暂不可用... {_e}）"
 
     def _exclude_from_empty_zone_estimate(
         self,
@@ -2106,6 +2101,12 @@ class GridWindow:
                 snapshot_path_hint=self._snapshot_path,
             ),
         }
+        try:
+            from ...pricing.self_bid_cache import merge_self_bid_history_for_snapshot
+
+            merge_self_bid_history_for_snapshot(payload, game_uid=str(gs.get("uid") or ""))
+        except Exception:
+            pass
         go = base.get("grid_overlay") or {}
         if self._snapshot_export_overlay:
             payload["grid_overlay"] = go
@@ -2255,7 +2256,8 @@ class GridWindow:
             f"第 {self.state.current_round} 回合  ● LIVE"
             f"{self._board_mode_title_suffix()}"
         )
-        self._info_text.set(self._info_summary_text())
+        if hasattr(self, "_info_bar_label"):
+            self._info_bar_label.config(text=self._info_summary_text())
         cw = GRID_COLS * CELL_W + 1
         ch = GRID_ROWS * CELL_H + 1
         self.canvas.config(
@@ -2669,19 +2671,23 @@ class GridWindow:
             vac_n = int(p.get("vacant") or 0)
         except (TypeError, ValueError):
             vac_n = 0
-        if hasattr(self, "_map_merged_stats_label"):
-            _tc, _ic, q5c, q5g, q6c, q6g, unk_cells = self._stats_from_merged_items(base)
+        if hasattr(self, "_map_round_label"):
             mid = int(self.state.map_id or 0)
+            rnd = int(self.state.current_round or 1)
+            self._map_round_label.config(text=f"地图 {mid}   第 {rnd} 回合")
+        if hasattr(self, "_map_quality_stats_label"):
+            _tc, _ic, q5c, q5g, q6c, q6g, unk_cells = self._stats_from_merged_items(base)
             board_cells = int(_tc) + int(vac_n)
-            self._map_merged_stats_label.config(
+            self._last_board_cells = board_cells
+            self._map_quality_stats_label.config(
                 text=(
-                    f"地图 {mid}   "
                     f"金 {q5c}件·{q5g}格   "
                     f"红 {q6c}件·{q6g}格   "
-                    f"未知 {unk_cells}格   "
-                    f"当前画板{board_cells}格=物品占位{_tc}格+空置{vac_n}格"
+                    f"未知 {unk_cells}格"
                 )
             )
+            if hasattr(self, "_map_board_stats_label"):
+                self._map_board_stats_label.config(text=f"空置 {vac_n}格")
         pts_bar = _display_position_estimate_pts(p)
         mult = _instant_win_multiplier_for_round(self.state.current_round)
         if pts_bar is not None:
@@ -2841,7 +2847,7 @@ class GridWindow:
         except tk.TclError:
             pass
 
-        self._build_info_bar()
+        self._build_top_header()
         self._build_vacant_estimate_bar()
         self._build_legend()
         self._build_canvas()
@@ -2878,75 +2884,30 @@ class GridWindow:
             except tk.TclError:
                 pass
 
-    def _build_info_bar(self) -> None:
-        """底栏：左起为地图金红未知 + 当局数据；中间长说明可伸缩；右为置顶/返回主页。"""
-        bar = tk.Frame(self.root, bg="#1a1a2e", pady=4)
+    def _build_top_header(self) -> None:
+        """
+        顶部信息头：3 行独立 Frame，均直接 pack 进 bar，保证每行都可见。
+
+        第 1 行：地图/回合 + 金红未知统计 + 右侧置顶/返回主页/LIVE
+        第 2 行：对局摘要（已知物品件数、总格数、平均格数、类别TOP3 等）
+        第 3 行：当前画板格数（物品占位 + 空置）+ 当局数据
+        """
+        BG = "#1a1a2e"
+        bar = tk.Frame(self.root, bg=BG, pady=4)
         bar.pack(fill="x", padx=8)
-        # 0=地图/当局（贴左）；1=长文案（吃宽）；2=置顶/主页（贴右）
-        bar.columnconfigure(0, weight=0)
-        bar.columnconfigure(1, weight=1)
-        bar.columnconfigure(2, weight=0)
 
-        self._stats_inline_wrap = tk.Frame(bar, bg="#1a1a2e")
-        self._map_merged_stats_wrap = tk.Frame(self._stats_inline_wrap, bg="#1a1a2e")
-        self._map_merged_stats_label = tk.Label(
-            self._map_merged_stats_wrap,
-            text="",
-            bg="#1a1a2e",
-            fg="#e8d0ff",
-            font=("微软雅黑", 10),
-            cursor="hand2",
-        )
-        self._map_merged_stats_label.pack(side="left")
-        self._map_merged_stats_wrap.pack(side="left", padx=(0, 12))
-        _PricingHoverTip(
-            self._map_merged_stats_label,
-            self._tooltip_text_map_merged_stats,
-        )
-        self._event_stats_wrap = tk.Frame(self._stats_inline_wrap, bg="#1a1a2e")
-        self._event_stats_label = tk.Label(
-            self._event_stats_wrap,
-            text="当局数据",
-            bg="#1a1a2e",
-            fg="#9fd9ff",
-            font=("微软雅黑", 10),
-            cursor="hand2",
-        )
-        self._event_stats_label.pack(side="left")
-        self._event_stats_wrap.pack(side="left", padx=(0, 4))
-        _PricingHoverTip(self._event_stats_label, self._tooltip_text_event_stats)
-        self._stats_inline_wrap.grid(row=0, column=0, sticky="w", padx=(10, 8))
+        # ── 第 1 行 ───────────────────────────────────────────────────────
+        row1 = tk.Frame(bar, bg=BG)
+        row1.pack(fill="x", padx=10, pady=(2, 0))
 
-        self._info_text = tk.StringVar(value=self._info_summary_text())
-        self._info_bar_label = tk.Label(
-            bar,
-            textvariable=self._info_text,
-            bg="#1a1a2e",
-            fg="#ccccdd",
-            font=("微软雅黑", 10),
-            justify="left",
-            anchor="nw",
-            wraplength=320,
-        )
-        self._info_bar_label.grid(row=0, column=1, sticky="nw", padx=(0, 6))
-
-        def _on_info_bar_label_configure(evt: tk.Event) -> None:
-            try:
-                w = int(evt.width)
-            except (TypeError, ValueError):
-                return
-            if w > 8:
-                self._info_bar_label.config(wraplength=max(80, w - 4))
-
-        self._info_bar_label.bind("<Configure>", _on_info_bar_label_configure)
-
-        right = tk.Frame(bar, bg="#1a1a2e")
-        right.grid(row=0, column=2, sticky="e", padx=(4, 0))
+        # 右侧按钮必须先 pack，才能在 side="left" 占满剩余宽度前留出位置
+        right = tk.Frame(row1, bg=BG)
+        right.pack(side="right", padx=(4, 0))
         self._topmost_pin_photo = self._create_topmost_pin_photo()
         pin_kw: Dict[str, Any] = {
             "master": right,
             "command": self._toggle_topmost_pin,
-            "bg": "#1a1a2e",
+            "bg": BG,
             "activebackground": "#2a3550",
             "relief": "flat",
             "borderwidth": 0,
@@ -2966,7 +2927,6 @@ class GridWindow:
         self._btn_topmost.pack(side="left", padx=(0, 6))
         if self._topmost_pin_photo is not None:
             self._btn_topmost.image = self._topmost_pin_photo  # type: ignore[attr-defined]
-
         if self._home_shell is not None:
             tk.Button(
                 right,
@@ -2980,7 +2940,6 @@ class GridWindow:
                 pady=2,
                 cursor="hand2",
             ).pack(side="left", padx=(0, 8))
-
         if self._log_path:
             tk.Label(
                 right,
@@ -2992,19 +2951,78 @@ class GridWindow:
                 padx=4,
             ).pack(side="left")
 
-        def _lock_info_bar_side_columns(_evt: Optional[tk.Event] = None) -> None:
-            """左列地图统计、右列置顶/主页设 minsize，避免缩窗时被压没。"""
-            try:
-                bar.update_idletasks()
-                sw = int(self._stats_inline_wrap.winfo_reqwidth()) + 12
-                rw = int(right.winfo_reqwidth()) + 12
-                bar.columnconfigure(0, minsize=max(160, sw))
-                bar.columnconfigure(2, minsize=max(72, rw))
-            except tk.TclError:
-                pass
+        # 地图/回合
+        mid = int(self.state.map_id or 0)
+        rnd = int(self.state.current_round or 1)
+        self._map_round_label = tk.Label(
+            row1,
+            text=f"地图 {mid}   第 {rnd} 回合",
+            bg=BG,
+            fg="#e8d0ff",
+            font=("微软雅黑", 10, "bold"),
+            anchor="w",
+        )
+        self._map_round_label.pack(side="left", anchor="w")
 
-        bar.bind("<Configure>", lambda e: _lock_info_bar_side_columns(e))
-        self.root.after_idle(_lock_info_bar_side_columns)
+        # 类别TOP3（紧跟回合信息）
+        self._top_cats_label = tk.Label(
+            row1,
+            text=self._top_cats_text(),
+            bg=BG,
+            fg="#b8d8ff",
+            font=("微软雅黑", 10),
+            anchor="w",
+        )
+        self._top_cats_label.pack(side="left", padx=(20, 0), anchor="w")
+
+        # ── 第 2 行：对局摘要 ─────────────────────────────────────────────
+        row2 = tk.Frame(bar, bg=BG)
+        row2.pack(fill="x", padx=10, pady=(3, 0))
+
+        self._info_bar_label = tk.Label(
+            row2,
+            text="摘要加载中",
+            bg=BG,
+            fg="#ccccdd",
+            font=("微软雅黑", 10),
+            justify="left",
+            anchor="w",
+        )
+        self._info_bar_label.pack(anchor="w", fill="x")
+
+        # ── 第 3 行：金红未知 + 画板格数 + 当局数据 ───────────────────────
+        row3 = tk.Frame(bar, bg=BG)
+        row3.pack(fill="x", padx=10, pady=(3, 4))
+
+        stat_lbl = dict(bg=BG, fg="#e8d0ff", font=("微软雅黑", 10), cursor="hand2", anchor="w")
+
+        # 金/红/未知格统计
+        self._map_quality_stats_label = tk.Label(row3, text="", **stat_lbl)
+        self._map_quality_stats_label.pack(side="left", anchor="w")
+        _PricingHoverTip(self._map_quality_stats_label, self._tooltip_text_map_merged_stats)
+
+        # 当前画板格数
+        self._map_board_stats_label = tk.Label(row3, text="", **stat_lbl)
+        self._map_board_stats_label.pack(side="left", padx=(20, 0), anchor="w")
+        _PricingHoverTip(self._map_board_stats_label, self._tooltip_text_map_merged_stats)
+
+        self._event_stats_label = tk.Label(
+            row3,
+            text="当局数据",
+            bg=BG,
+            fg="#9fd9ff",
+            font=("微软雅黑", 10),
+            cursor="hand2",
+        )
+        self._event_stats_label.pack(side="left", padx=(20, 0))
+        _PricingHoverTip(self._event_stats_label, self._tooltip_text_event_stats)
+
+        # 空闲后刷新一次，确保初始数据填入
+        def _after_idle_refresh() -> None:
+            self._info_bar_label.config(text=self._info_summary_text())
+            self._top_cats_label.config(text=self._top_cats_text())
+
+        self.root.after_idle(_after_idle_refresh)
 
     def _build_vacant_estimate_bar(self) -> None:
         """窗口最上方：①仓位估价（``points_ceiling``）、推荐出价、扫描单价；②全红/全橙/金红/区间。"""
@@ -3565,8 +3583,10 @@ class GridWindow:
                     self._update_vacant_estimate_bar()
                 if hasattr(self, "_total_label"):
                     self._update_total_label()
-                if hasattr(self, "_info_text"):
-                    self._info_text.set(self._info_summary_text())
+                if hasattr(self, "_info_bar_label"):
+                    self._info_bar_label.config(text=self._info_summary_text())
+                if hasattr(self, "_top_cats_label"):
+                    self._top_cats_label.config(text=self._top_cats_text())
                 if perf:
                     header_ms = (time.perf_counter() - _hd0) * 1000.0
         finally:

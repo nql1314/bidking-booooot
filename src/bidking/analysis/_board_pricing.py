@@ -31,6 +31,9 @@ UID 推断（``inferred_self_user_uid``，见 :mod:`bidking.pricing._self_uid_in
 早单价可能品质集合中不再保留 q4，改用去掉 q4 后的 CSV 组合键（如 ``q5+q6``）查格均价，
 避免剩余空格再乘含紫档权重的混合单价。
 
+当仅有 ``q4_grid_min``、未公开 ``q4_grid_count`` 时，紫最少格已从空置扣减并按 ``q4`` 单档计价，
+剩余空格若仍用扫描 ``q4+q5+q6`` 混合单价会偏高；早单价改为 CSV ``q4+q5+q6`` 与 ``q5+q6`` 格均价的算术平均。
+
 合并物品上 **仍无 ``shape``、品质已知且已确认占位** 时，几何占位按锚格计；``pricing.total`` 已为该档
 CSV 权重期望价。对 ``max(0, 加权等效格数 − 1)`` 之和从有效空置 ``vacant_adj`` 中扣减（见
 :func:`unknown_value.unknown_contour_vacant_weighted_excess`），使 ``空置格 × 早/金红单价`` 不因多计空格外扩。
@@ -156,8 +159,11 @@ def _vacant_early_unit_excluding_q4_when_q4_total_known(
     event_stats: Any,
 ) -> Tuple[int, str, frozenset[int]]:
     """
-    扫描负向约束得到 ``(u0, qg0, pq0)`` 后：若事件已公开 ``q4_grid_count``，且 ``pq0`` 仍含
-    品质 4，则从可能集合去掉 4 并按新组合键查 CSV；缺键则退回原扫描早单价。
+    扫描负向约束得到 ``(u0, qg0, pq0)`` 后按 ``event_stats`` 调整早单价：
+
+    - 已公开 ``q4_grid_count`` 且 ``pq0`` 仍含品质 4：去掉 4 后按新组合键（如 ``q5+q6``）查 CSV；
+    - 仅有 ``q4_grid_min``、未公开 ``q4_grid_count``，且 ``pq0`` 仍含 4：取 CSV
+      ``q4+q5+q6`` 与 ``q5+q6`` 格均价的算术平均，避免 ``q4_grid_min`` 扣减后剩余空格仍乘紫金红混合单价。
     """
     t0 = time.perf_counter()
     u0, qg0, pq0 = _scan_inference.vacant_early_unit_from_exclusions(
@@ -165,18 +171,29 @@ def _vacant_early_unit_excluding_q4_when_q4_total_known(
         csv_cells_raw=csv_cells_for_est if csv_cells_for_est else None,
         pricing={},
     )
-    if _event_stat_q4_grid_count_optional(event_stats) is None:
-        return u0, qg0, pq0
-    if 4 not in pq0:
-        return u0, qg0, pq0
-    pq_ex = frozenset(q for q in pq0 if int(q) != 4)
-    qg = _scan_inference.csv_quality_group_from_possible_set(pq_ex)
-    if qg is None or not csv_cells_for_est or qg not in csv_cells_for_est:
-        perf_log_elapsed("_vacant_early_unit_excluding_q4 (fallback)", t0)
-        return u0, qg0, pq0
-    u = int(round(float(csv_cells_for_est[qg])))
-    perf_log_elapsed("_vacant_early_unit_excluding_q4 (adjusted)", t0)
-    return u, str(qg), pq_ex
+    if _event_stat_q4_grid_count_optional(event_stats) is not None:
+        if 4 not in pq0:
+            return u0, qg0, pq0
+        pq_ex = frozenset(q for q in pq0 if int(q) != 4)
+        qg = _scan_inference.csv_quality_group_from_possible_set(pq_ex)
+        if qg is None or not csv_cells_for_est or qg not in csv_cells_for_est:
+            perf_log_elapsed("_vacant_early_unit_excluding_q4 (fallback)", t0)
+            return u0, qg0, pq0
+        u = int(round(float(csv_cells_for_est[qg])))
+        perf_log_elapsed("_vacant_early_unit_excluding_q4 (adjusted)", t0)
+        return u, str(qg), pq_ex
+    if (
+        _event_stat_grid_min_optional(event_stats, "q4_grid_min") is not None
+        and 4 in pq0
+        and csv_cells_for_est
+    ):
+        u456 = csv_cells_for_est.get("q4+q5+q6")
+        u56 = csv_cells_for_est.get("q5+q6")
+        if u456 is not None and u56 is not None:
+            u = int(round((float(u456) + float(u56)) / 2))
+            perf_log_elapsed("_vacant_early_unit_q4_min_blend (adjusted)", t0)
+            return u, "q4+q5+q6~q5+q6", pq0
+    return u0, qg0, pq0
 
 
 def _confirmed_tier_footprint_q456(
@@ -945,6 +962,10 @@ def build_snapshot_pricing_dict(
             u_hi = u_mid
         elif q6_gc is not None and q5_gc is None:
             u_mid = float(u_orange)
+            u_lo = u_mid
+            u_hi = u_mid
+        elif q6_gc is not None and q5_gc is not None:
+            u_mid = float(u_red)
             u_lo = u_mid
             u_hi = u_mid
         else:

@@ -9,6 +9,7 @@ from unittest.mock import patch
 from bidking.config.map_runtime_overlay import merged_runtime_with_map_pricing
 from bidking.pricing import compute as compute_mod
 from bidking.pricing.compute import compute_price
+from bidking.pricing.snapshot_io import resolve_effective_round
 
 
 class TestPricingComputeSmoke(unittest.TestCase):
@@ -156,6 +157,42 @@ class TestPricingComputeSmoke(unittest.TestCase):
             "snapshot_pricing.points",
         )
         self.assertGreater(p, 1000)
+
+    def test_resolve_effective_round_prefers_ocr_when_snapshot_lags(self) -> None:
+        snap = {"current_round": 3, "game_state": {"current_round": 3}}
+        self.assertEqual(resolve_effective_round(4, snap), 4)
+
+    def test_resolve_effective_round_prefers_snapshot_when_ocr_lags(self) -> None:
+        snap = {"current_round": 4, "game_state": {"current_round": 4}}
+        self.assertEqual(resolve_effective_round(3, snap), 4)
+
+    def test_compute_effective_round_when_snapshot_lags_ocr(self) -> None:
+        cfg: dict = {
+            "board_snapshot": {"enabled": False},
+            "pricing": {"fallback_bid_price": 11111},
+            "automation": {"selected_mode": "aisha_premium"},
+        }
+        snap = {
+            "schema_version": 2,
+            "current_round": 3,
+            "game_state": {"current_round": 3, "players": {}},
+            "pricing": {
+                "total": 1000.0,
+                "points": 50000,
+                "points_floor": 40000,
+                "points_ceiling": 90000,
+                "vacant": 8,
+                "ahmad_points": 100,
+            },
+        }
+        _, det = compute_price(
+            cfg,
+            config_path=Path(__file__).resolve(),
+            round_no=4,
+            board_snapshot=snap,
+            price_config={"enable_opponent_bid_adjustment": False},
+        )
+        self.assertEqual(det.get("effective_round"), 4)
 
 
 if __name__ == "__main__":

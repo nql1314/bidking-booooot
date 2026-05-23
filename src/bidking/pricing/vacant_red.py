@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..analysis.raw_pricing import event_stats_q12_q3_q4_grids_all_known
 from .opponent_adjust import board_map_bundle_key, board_snapshot_is_secret_auction
 from .snapshot_players import (
     board_snapshot_self_identity,
@@ -247,7 +248,18 @@ def board_snapshot_aggressive_dark_map(
 
 
 def _reference_round_for_vacant_red_pick(current_round: int) -> int:
-    return 3 if int(current_round) == 4 else 4
+    """返回用于参考对手出价的回合号。
+
+    - 第3回合参考第2回合
+    - 第4回合参考第3回合
+    - 第5回合参考第4回合
+    """
+    r = int(current_round)
+    if r == 3:
+        return 2
+    if r == 4:
+        return 3
+    return 4  # 第5回合及以后参考第4回合
 
 
 def _max_opponent_bid_for_vacant_red_pick(
@@ -299,17 +311,8 @@ def _aggressive_floor_ceiling_choice(
         if mo >= float(red_i):
             return red_i, "aggressive_opp_ge_red", detail
 
-    if 5 <= vac_i <= 12:
+    if 5 <= vac_i <= 15:
         return avg_i, "aggressive_vac_5_12_avg", detail
-
-    if vac_i >= 12:
-        if dark_map:
-            return avg_i, "aggressive_dark_map_avg", detail
-        return red_i, "aggressive_vac_ge_12_red", detail
-
-    if dark_map:
-        return avg_i, "aggressive_dark_map_avg", detail
-
     return red_i, "aggressive_vac_ge_12_red", detail
 
 
@@ -320,9 +323,24 @@ def apply_vacant_red_floor_ceiling_pick(
     round_no: int,
     fin: int,
 ) -> tuple[int, dict[str, Any]]:
-    """第 4–5 回合：若 ``points_floor`` ≠ ``points_ceiling``，在倍数前先择优锚定价。"""
-    if int(round_no) not in (4, 5):
-        return int(fin), {"applied": False, "reason": "not_round_4_or_5"}
+    """第 3–5 回合：若 ``points_floor`` ≠ ``points_ceiling``，在倍数前先择优锚定价。
+
+    第3回合仅在低档总格已划定 (q14_grid_known) 且启用激进模式时生效。
+    """
+    r = int(round_no)
+    if r not in (3, 4, 5):
+        return int(fin), {"applied": False, "reason": "not_round_3_4_or_5"}
+
+    # 第3回合：仅在低档总格已划定且激进模式下启用
+    if r == 3:
+        pick_mode = resolve_vacant_red_floor_ceiling_pick_mode(config)
+        if pick_mode != _VACANT_RED_PICK_MODE_AGGRESSIVE:
+            return int(fin), {"applied": False, "reason": "round_3_requires_aggressive_mode"}
+        # 检查低档总格是否已划定 (q12+q3+q4)
+        raw = board_snapshot.get("raw_pricing") if isinstance(board_snapshot, dict) else None
+        q14_known = event_stats_q12_q3_q4_grids_all_known(raw)
+        if not q14_known:
+            return int(fin), {"applied": False, "reason": "round_3_requires_q14_grid_known"}
     if not config.get("pricing", {}).get("enable_vacant_red_floor_ceiling_pick", True):
         return int(fin), {"applied": False, "reason": "vacant_red_floor_ceiling_pick_disabled"}
     cfg_map_key = _automation_selected_map_config_key(config)

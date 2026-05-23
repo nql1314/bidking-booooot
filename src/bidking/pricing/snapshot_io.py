@@ -36,3 +36,21 @@ def current_round_from_snapshot(snapshot: dict[str, Any]) -> int | None:
     except (TypeError, ValueError):
         return None
     return v if v >= 1 else None
+
+
+def resolve_effective_round(
+    requested_round: int,
+    board_snapshot: dict[str, Any] | None,
+) -> int:
+    """合并 loop/OCR 回合与快照 ``current_round``。
+
+    Grid 写盘常晚于 OCR 一拍；若只采信滞后快照会按旧回合算价。
+    取两者较大值：快照已超前时用快照，OCR 已超前时用 OCR。
+    """
+    r = max(1, int(requested_round))
+    if not isinstance(board_snapshot, dict):
+        return r
+    snap_r = current_round_from_snapshot(board_snapshot)
+    if snap_r is None:
+        return r
+    return max(r, int(snap_r))

@@ -39,7 +39,7 @@ def apply_ceiling_points(
     ceil_cap = int(ceiling_pts)
     if float(bid_ratio) > 1.0:
         ceil_cap = int(round(ceiling_pts * float(bid_ratio)))
-    if int(fin) <= int(ceil_cap * 1.1):
+    if int(fin) <= int(ceil_cap * 1.15):
         ce: dict[str, Any] = {
             "applied": True,
             "q5_q6_ceiling": int(ceil_cap),
