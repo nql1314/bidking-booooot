@@ -169,7 +169,6 @@ def _fraud_truthy(v: Any) -> bool:
 
 def _fraud_algo_and_trim_from_grid_view(gv: dict) -> Tuple[str, int]:
     """解析 ``grid_view`` 中的诈骗格算法与 trim 整数 n（``tiling_n`` 用）。"""
-    legacy_n = _fraud_int_trim(gv.get("fraud_empty_cells_tiling_n", 0))
     v = gv.get("fraud_empty_cells_algorithm", "tiling_strict")
 
     if isinstance(v, (list, tuple)) and len(v) >= 1:
@@ -180,7 +179,7 @@ def _fraud_algo_and_trim_from_grid_view(gv: dict) -> Tuple[str, int]:
         if head in ("none", "off", "disabled", "false", "0"):
             return ("none", 0)
         if head in ("tiling_n", "tilingn"):
-            nn = n_opt if len(v) >= 2 else legacy_n
+            nn = n_opt if len(v) >= 2 else 0
             return ("tiling_n", nn)
         if head in ("tiling_strict", "tilingstrict"):
             return ("tiling_strict", 0)
@@ -206,7 +205,7 @@ def _fraud_algo_and_trim_from_grid_view(gv: dict) -> Tuple[str, int]:
     if s in ("none", "off", "disabled", "false", "0"):
         return ("none", 0)
     if s in ("tiling_n", "tilingn"):
-        return ("tiling_n", legacy_n)
+        return ("tiling_n", 0)
     if s in (
         "tiling_strict",
         "tilingstrict",
@@ -238,12 +237,11 @@ def infer_fraud_empty_cells_algorithm_and_trim(
     ``algorithm`` 为 ``tiling_strict`` / ``tiling_n`` / ``none``；``n`` 仅在 ``tiling_n`` 时传给
     :func:`bidking.analysis.fraud_empty_cells.fraud_empty_cells_for_algorithm`。
 
-    推荐写法（不再使用独立键 ``fraud_empty_cells_tiling_n``）：
+    推荐写法：
 
-    - 列表：``["tiling", 20]`` —— 铺板可解释性基底上再按 ``n=20`` 做 BoxId 裁剪（原 ``tiling_n``）；
-    - 对象：``{"tiling": 20}`` —— 同上；``{"tiling": 0}`` 或 ``{}`` 中与 ``tiling`` 等价为严格铺板；
-    - 字符串：``"tiling_strict"`` / ``"none"`` 等，与旧版一致；若写 ``"tiling_n"``，则 ``n`` 仍可读
-      兼容键 ``fraud_empty_cells_tiling_n``。
+    - 列表：``["tiling", 20]`` —— 铺板可解释性基底上再按 ``n=20`` 做 BoxId 裁剪；
+    - 对象：``{"tiling": 20}`` —— 同上；``{"tiling": 0}`` 或缺省 ``tiling`` 为严格铺板；
+    - 字符串：``"tiling_strict"`` / ``"none"`` 等；单独写 ``"tiling_n"`` 时 ``n`` 视为 ``0``（请用 ``["tiling", n]``）。
     """
     raw = _fraud_raw_for_infer(cfg)
     gv = raw.get("grid_view")
@@ -270,8 +268,7 @@ def infer_fraud_empty_cells_tiling_n(
     """
     ``tiling_n`` 诈骗格算法所用的整数 ``n``。
 
-    优先来自与 ``fraud_empty_cells_algorithm`` 合并的写法（如 ``["tiling", 20]`` 的第二项）；
-    若 ``algorithm`` 为字符串 ``tiling_n``，则仍可读兼容键 ``grid_view.fraud_empty_cells_tiling_n``。
+    来自 :func:`infer_fraud_empty_cells_algorithm_and_trim` 的第二项（如 ``["tiling", 20]`` 中的 ``20``）。
 
     仅在算法为 ``tiling_n`` 时参与计算；否则返回值可忽略。恒为非负整数。
     """

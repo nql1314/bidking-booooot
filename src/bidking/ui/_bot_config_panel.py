@@ -404,6 +404,7 @@ class BotConfigPanel:
             if isinstance(au_doc, dict):
                 au_doc.pop("safe_guard_enabled", None)
                 au_doc.pop("safe_guard_max_increase_ratio", None)
+                au_doc.pop("default_map", None)
             _save_json(path, merged)
             self.pricing_status_var.set(f"已保存到 {path.name}")
             self._refresh_map_overlay_editor_from_disk()

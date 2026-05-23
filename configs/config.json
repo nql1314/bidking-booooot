@@ -41,13 +41,12 @@
     "run_cycles": 5,
     "cycle_rest_minutes": 0.0,
     "enable_aisha_round4_tool_vacant_gate": false,
-    "aisha_round4_tool_min_vacant": 5
+    "aisha_round4_tool_min_vacant": 30
   },
   "timing": {
     "poll_seconds": 1,
     "round_detect_wait_seconds": 5.0,
     "round1_extra_wait_seconds": 5.0,
-    "tool_after_wait_seconds": 5.0,
     "click_pause_seconds": 0.12,
     "after_map_select_wait_seconds": 2.0,
     "after_bid_confirm_wait_seconds": 1.0,

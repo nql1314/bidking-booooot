@@ -20,6 +20,16 @@
 
 > **注意**: `runtime.json` 是 Runtime 配置，记录运行时状态（窗口句柄、点击坐标等），不在本文档讨论范围内。
 
+### 已废弃（勿再写入配置）
+
+| 配置项 | 说明 |
+|--------|------|
+| `timing.tool_after_wait_seconds` | 代码中无读取，已删除 |
+| `automation.safe_guard_enabled` / `safe_guard_max_increase_ratio` | 旧版保护逻辑，已删除（保存时仍会剔除残留） |
+| `board_snapshot.self_name_substring` | 已由 `self_user_uid` / 跨局推断替代，已删除 |
+| `grid_view.fraud_empty_cells_tiling_n` | 已删除；请用 `fraud_empty_cells_algorithm`: `["tiling", n]` 或 `{"tiling": n}` |
+| `pricing.maps` 内的 `automation.default_map` | 误写项，应只在 `config.json` 的 `automation.default_map` |
+
 ---
 
 ## 1. 主配置文件 (config.json)
@@ -61,7 +71,7 @@
 | `tool_rounds` | array | `[]` | 使用道具的回合列表 |
 | `enable_aisha_round4_tool_vacant_gate` | bool | `false` | 艾莎且勾选第4回合用道具时，按空置格是否超过阈值决定是否实际使用道具；**已公开** ``raw_pricing.event_stats`` 的 ``q5_grid_count`` 或 ``q5_grid_avg`` 时第4回合不用道具；**开启后第5回合一律不用道具**（忽略 ``tool_rounds`` 勾选）。可写在主配置 ``automation`` 或当前地图 ``configs/pricing.maps/<地图>.json`` 的 ``automation`` 段（bot 会按对局 ``map_id`` 合并） |
 | `aisha_round4_tool_min_vacant` | int | `5` | 上项开启时：仅当 ``pricing.vacant`` **大于等于** 该值才在第4回合使用道具（否则跳过）；可与上项同样写在地图 JSON |
-| `default_map` | string | `"1"` | 默认地图ID |
+| `default_map` | string | `"1"` | 默认地图ID（仅写在 `config.json`，勿写入 `pricing.maps`） |
 | `default_runs` | int | `1` | 默认运行次数 |
 | `selected_map` | string | `"440"` | 当前选定地图 |
 | `selected_runs` | int | `10` | 当前选定运行次数 |
@@ -76,7 +86,6 @@
 | `poll_seconds` | float | `1` | 轮询间隔秒数 |
 | `round_detect_wait_seconds` | float | `5.0` | 回合检测等待时间 |
 | `round1_extra_wait_seconds` | float | `5.0` | 第1回合额外等待时间 |
-| `tool_after_wait_seconds` | float | `5.0` | 使用道具后等待时间 |
 | `click_pause_seconds` | float | `0.12` | 点击间隔暂停时间 |
 | `after_bid_confirm_wait_seconds` | float | `1.0` | 出价确认后等待时间 |
 | `bid_confirm_verify_max_seconds` | int | `30` | 出价确认验证最大等待秒数 |
@@ -164,7 +173,6 @@
 
 | 配置项 | 类型 | 常见值 | 说明 |
 |--------|------|--------|------|
-| `default_map` | string | `"1"` | 默认地图ID |
 | `bid_cap_price` | int | `200000~5000000` | 出价上限（封顶价格） |
 | `bid_ratio_by_round` | object | 见下方 | 各回合出价比例系数 |
 

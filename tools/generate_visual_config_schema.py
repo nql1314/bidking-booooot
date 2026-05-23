@@ -50,6 +50,39 @@ for _r in range(1, 6):
 for _k in ("1", "2", "3", "4", "default"):
     TYPE_OVERRIDES[f"pricing.secret_auction_rank_opponent_multipliers.{_k}"] = "float"
 
+# 已从代码/配置中淘汰：生成 schema 时跳过（若旧档仍残留，保存地图/主配置时也会被 bot 面板剔除）。
+DEPRECATED_PATHS: frozenset[str] = frozenset({
+    "timing.tool_after_wait_seconds",
+    "automation.safe_guard_enabled",
+    "automation.safe_guard_max_increase_ratio",
+    "board_snapshot.self_name_substring",
+    "grid_view.fraud_empty_cells_tiling_n",
+})
+
+# 运行时/本机缓存：不进 visual schema（仍在 runtime.json，由 JSON 编辑器或标定流程维护）。
+EXCLUDED_PREFIXES: tuple[str, ...] = (
+    "clicks.",
+    "capture.",
+    "window.",
+    "debug.",
+    "input.",
+    "ocr.",
+    "automation.maps.",
+    "automation.map_entry_ticket_by_map_id.",
+)
+
+EXCLUDED_PATHS: frozenset[str] = frozenset({
+    *DEPRECATED_PATHS,
+    "automation.selected_map",
+    "automation.selected_runs",
+    "board_snapshot.path",
+    "board_snapshot.write_mode",
+    "board_snapshot.schema_version_min",
+    "board_snapshot.ahmad_abde_scale",
+    "safety.stuck_after_handled_round.first_click_screen",
+    "safety.stuck_after_handled_round.second_click_screen",
+})
+
 LABEL_OVERRIDES: dict[str, str] = {
     "automation.bid_ratio_by_round.1": "第1回合系数",
     "automation.bid_ratio_by_round.2": "第2回合系数",
@@ -106,46 +139,31 @@ def path_group(path: str) -> str:
     return labels.get(top, top)
 
 
+def should_include_in_schema(path: str) -> bool:
+    """仅策略/玩法相关字段进入 visual schema。"""
+    if path in EXCLUDED_PATHS:
+        return False
+    for prefix in EXCLUDED_PREFIXES:
+        if path.startswith(prefix):
+            return False
+    if path.startswith("automation.warehouse_auto_sort."):
+        if ".warehouse_button_click." in path or ".auto_sort_click." in path:
+            return False
+    return True
+
+
 def default_hide(path: str, typ: str) -> bool:
     """hide=true 表示不在可视化页展示（仍保留在 schema 中）。"""
     if typ == "json":
         return True
-    if path.startswith("clicks."):
-        return True
-    if path.startswith("capture."):
-        return True
-    if path.startswith("automation.maps."):
-        return True
-    if path.startswith("automation.warehouse_auto_sort.") and (
-        "click" in path or path.endswith("_seconds")
-    ):
+    if path.startswith("humanize."):
+        return path != "humanize.enabled"
+    if path.startswith("automation.warehouse_auto_sort."):
         return path not in (
             "automation.warehouse_auto_sort.enabled",
             "automation.warehouse_auto_sort.wait_after_warehouse_click_seconds",
             "automation.warehouse_auto_sort.wait_after_auto_sort_click_seconds",
         )
-    if path.startswith("safety.stuck_after_handled_round."):
-        return path not in (
-            "safety.stuck_after_handled_round.enabled",
-            "safety.stuck_after_handled_round.consecutive_poll_threshold",
-            "safety.stuck_after_handled_round.between_clicks_seconds",
-        )
-    if path.startswith("window.reference_client_size."):
-        return True
-    if path == "window.hwnd":
-        return True
-    if path.startswith("humanize."):
-        return path != "humanize.enabled"
-    if path.startswith("input."):
-        return True
-    if path.startswith("ocr."):
-        return True
-    if path.startswith("automation.map_entry_ticket_by_map_id."):
-        return True
-    if path in ("board_snapshot.path", "board_snapshot.write_mode", "board_snapshot.schema_version_min"):
-        return True
-    if path.startswith("debug.") and path != "debug.gui_verbose":
-        return True
     visible_prefixes = (
         "pricing.enable_",
         "pricing.late_round",
@@ -198,6 +216,9 @@ def resolve_scope(
 ) -> str:
     in_cfg = path in config_paths
     in_map = path in map_paths
+    # 主配置专用项：地图 overlay 里出现视为误写，不按 map 区展示
+    if path == "automation.default_map":
+        return "config"
     if in_cfg and in_map:
         return "both"
     if in_map:
@@ -276,6 +297,8 @@ def main() -> None:
 
     fields: list[dict[str, Any]] = []
     for path in sorted(all_paths.keys()):
+        if not should_include_in_schema(path):
+            continue
         val = all_paths[path]
         typ = infer_type(val, path) if val is not None else infer_type(None, path)
         field: dict[str, Any] = {
@@ -303,9 +326,11 @@ def main() -> None:
     doc = {
         "version": 2,
         "description": (
-            "可视化配置字段表。path=JSON 点路径；scope=config|map|both；"
-            "hide=true 时不在「可视化配置」页展示（仍可在 JSON 编辑器中改）。"
-            "运行 tools/generate_visual_config_schema.py 可从 configs 目录重新生成。"
+            "可视化配置字段表（仅策略/玩法可调项）。path=JSON 点路径；"
+            "scope=config|map|both；hide=true 时不在「可视化配置」页展示。"
+            "点击坐标、截图区域、窗口句柄、地图标定点等运行时数据不在此表，"
+            "请改 configs/runtime.json 或 Bot 面板 JSON 编辑器。"
+            "运行 tools/generate_visual_config_schema.py 可重新生成。"
         ),
         "fields": fields,
     }
