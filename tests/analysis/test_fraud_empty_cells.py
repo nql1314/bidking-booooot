@@ -72,12 +72,7 @@ class FraudEmptyCellsTests(unittest.TestCase):
         )
         self.assertEqual(
             infer_fraud_empty_cells_algorithm_and_trim(
-                {
-                    "grid_view": {
-                        "fraud_empty_cells_algorithm": "tiling_n",
-                        "fraud_empty_cells_tiling_n": 9,
-                    }
-                }
+                {"grid_view": {"fraud_empty_cells_algorithm": ["tiling_n", 9]}}
             ),
             ("tiling_n", 9),
         )
@@ -86,9 +81,9 @@ class FraudEmptyCellsTests(unittest.TestCase):
         self.assertEqual(infer_fraud_empty_cells_tiling_n({"grid_view": {}}), 0)
         self.assertEqual(
             infer_fraud_empty_cells_tiling_n(
-                {"grid_view": {"fraud_empty_cells_tiling_n": -3}}
+                {"grid_view": {"fraud_empty_cells_algorithm": ["tiling", 12]}}
             ),
-            0,
+            12,
         )
 
     def test_fraud_empty_cells_for_algorithm_tiling_n_strips_low_bids(self) -> None:

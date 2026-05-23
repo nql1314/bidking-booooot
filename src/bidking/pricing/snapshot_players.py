@@ -9,7 +9,7 @@ from ._self_uid_inference import (
 
 
 def _self_identity_from_board_snapshot(board_snapshot: dict[str, Any] | None) -> tuple[str, str]:
-    """快照根级 ``self_user_uid``（``self_name_substring`` 已废弃，恒为空）。"""
+    """快照根级 ``self_user_uid``；第二项保留为兼容旧调用方，恒为空字符串。"""
     if not board_snapshot:
         return "", ""
     return (
@@ -78,10 +78,8 @@ def max_other_player_bid_from_snapshot_players(
     bid_round: int,
     *,
     self_user_uid: str,
-    self_name_substring: str = "",
     board_snapshot: dict[str, Any] | None = None,
 ) -> int | None:
-    del self_name_substring  # 已废弃，仅保留参数以兼容旧调用
     self_uid = effective_self_user_uid_on_snapshot(
         board_snapshot, fallback_uid=self_user_uid
     )

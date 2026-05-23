@@ -420,6 +420,11 @@ class VisualConfigPanel:
             prior = _load_json(path) if path.is_file() else {}
             doc = dict(prior)
             self._apply_bindings(doc, self._map_bindings)
+            au_doc = doc.get("automation")
+            if isinstance(au_doc, dict):
+                au_doc.pop("safe_guard_enabled", None)
+                au_doc.pop("safe_guard_max_increase_ratio", None)
+                au_doc.pop("default_map", None)
             _save_json(path, doc)
             self.map_doc = doc
             self.status_var.set(f"地图 {mk} 已保存")

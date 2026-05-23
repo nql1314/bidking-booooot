@@ -12,7 +12,7 @@ from bidking.pricing.self_bid_cache import (
 
 
 def _minimal_config(self_uid: str) -> dict:
-    return {"board_snapshot": {"self_user_uid": self_uid, "self_name_substring": ""}}
+    return {"board_snapshot": {"self_user_uid": self_uid}}
 
 
 def test_get_self_gold_bid_from_snapshot_history(tmp_path, monkeypatch) -> None:

@@ -3,7 +3,6 @@
     "fallback_bid_price": 33334
   },
   "automation": {
-    "default_map": "1",
     "bid_cap_price": 400000,
     "bid_ratio_by_round": {
       "1": 0.6,

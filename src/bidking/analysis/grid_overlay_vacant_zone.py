@@ -136,7 +136,7 @@ def compute_overlay_vacant_dict(
     - **几何前缀区**：否则数 0..max(BoxId) 内空格；
     - ``board_snapshot``：须含 ``raw_pricing``（200009 总格数）；``game_state`` 供合并物品表等。
     - ``placed_items``：非空时用于诈骗格判定（须与 ``occupied`` 同源）；缺省则从 ``board_snapshot`` 合并物品表构造。
-    - ``fraud_empty_cells_algorithm`` / ``fraud_empty_cells_tiling_n``：见 :func:`bidking.analysis.fraud_empty_cells.fraud_empty_cells_for_algorithm`；运行时默认自 :func:`bidking.config.runtime.infer_fraud_empty_cells_algorithm_and_trim` 读取。
+    - ``fraud_empty_cells_algorithm`` 与 trim ``n``：见 :func:`bidking.analysis.fraud_empty_cells.fraud_empty_cells_for_algorithm`；默认自 :func:`bidking.config.runtime.infer_fraud_empty_cells_algorithm_and_trim` 读取。
     """
     total_h = map_skill_total_hidden_for_overlay(board_snapshot)
     if total_h is not None:

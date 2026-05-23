@@ -31,7 +31,7 @@ def test_board_map_bundle_key_2306_not_secret() -> None:
 
 
 def _minimal_config(self_uid: str) -> dict:
-    return {"board_snapshot": {"self_user_uid": self_uid, "self_name_substring": ""}}
+    return {"board_snapshot": {"self_user_uid": self_uid}}
 
 
 def test_secret_rank_multipliers_configurable() -> None:
@@ -133,7 +133,7 @@ def test_opponent_bid_adjustment_disabled_skips_all() -> None:
 
 def test_opponent_bid_adjustment_enabled_from_config_pricing() -> None:
     cfg = {
-        "board_snapshot": {"self_user_uid": "1", "self_name_substring": ""},
+        "board_snapshot": {"self_user_uid": "1"},
         "pricing": {"enable_opponent_bid_adjustment": False},
     }
     assert opponent_bid_adjustment_enabled(cfg, {}) is False
