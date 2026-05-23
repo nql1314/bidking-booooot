@@ -531,15 +531,10 @@ def compute_price(
     """出价计算：调用 ``bidking.pricing``（读画板快照等均在 pricing 层完成）。"""
     bs_cfg = config.get("board_snapshot") or {}
     bs_data = load_board_snapshot_for_loop(config) if bool(bs_cfg.get("enabled")) else None
-    effective_round = int(round_no)
-    if bs_data is not None:
-        sr = current_round_from_snapshot(bs_data)
-        if sr is not None:
-            effective_round = int(sr)
     return pricing_compute_price(
         config,
         config_path=config_path,
-        round_no=effective_round,
+        round_no=int(round_no),
         board_snapshot=bs_data,
     )
 
@@ -1451,6 +1446,18 @@ def handle_round(
         final_price=price,
     )
     input_bid(config, price, config_path=config_path)
+    try:
+        from ..pricing.self_bid_cache import record_self_gold_bid
+
+        bs_rec = load_board_snapshot_for_loop(config)
+        record_self_gold_bid(
+            config,
+            round_no=int(round_no),
+            bid_amount=int(price),
+            board_snapshot=bs_rec,
+        )
+    except Exception:
+        pass
 
 
 def handle_end_transition(

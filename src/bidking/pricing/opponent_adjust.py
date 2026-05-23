@@ -4,43 +4,105 @@ from typing import Any
 
 from ..analysis._board_pricing import map_id_from_board_snapshot
 from ..parsing.item_db import map_bundle_key_for_automation
+from .self_bid_cache import get_self_gold_bid
 from .snapshot_players import (
     board_snapshot_self_identity,
     max_other_player_bid_from_snapshot_players,
     player_round_price_bid,
     self_round_bid_from_snapshot,
 )
+from ._multipliers import resolve_round_multiplier
 
 # ``automation.maps`` 档键：幽静别墅 / 沉船密封舱；快照 ``players.*.prices`` 为排名而非金币。
 SECRET_AUCTION_MAP_BUNDLE_KEYS: frozenset[str] = frozenset({"440", "450"})
 
-# 隐秘拍卖按「名次差 behind」缩放估价；可被 ``configs/pricing.maps/<档键>.json`` 内
-# ``pricing.secret_auction_rank_opponent_multipliers`` 覆盖。
-_DEFAULT_SECRET_AUCTION_RANK_MULTIPLIERS: dict[str, float] = {
-    "behind_ge_2": 1.08,
-    "behind_1": 1.045,
-    "behind_0": 1.012,
-    "behind_lt_0": 0.994,
-    "no_opponent_bid": 1.0,
+# 隐秘图：上回合己方排位 → 对手预估出价 = bid_pre * 系数（可被配置覆盖）
+DEFAULT_SECRET_AUCTION_RANK_OPPONENT_MULTIPLIERS: dict[int, float] = {
+    1: 1.0,
+    2: 1.1,
+    3: 1.2,
 }
+DEFAULT_SECRET_AUCTION_RANK_OPPONENT_MULT_FALLBACK: float = 1.3
 
 
-def _secret_auction_rank_multipliers(config: dict[str, Any]) -> dict[str, float]:
-    out = dict(_DEFAULT_SECRET_AUCTION_RANK_MULTIPLIERS)
+def _parse_rank_multiplier_value(raw: Any) -> float | None:
+    if raw is None:
+        return None
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return v if v > 0 else None
+
+
+def resolve_secret_auction_rank_opponent_multipliers(
+    config: dict[str, Any],
+    price_config: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    解析 ``secret_auction_rank_opponent_multipliers``。
+
+    读取顺序：``price_config`` → ``config["pricing"]`` → 内置默认。
+    键支持 ``"1"``…``"4"``、``rank_1``…``rank_4``；``"default"`` / ``rank_default`` / ``"4+"`` 为第 4 名及以后。
+    """
+    raw: Any = None
+    if isinstance(price_config, dict) and "secret_auction_rank_opponent_multipliers" in price_config:
+        raw = price_config.get("secret_auction_rank_opponent_multipliers")
     pr = config.get("pricing") if isinstance(config, dict) else None
-    if not isinstance(pr, dict):
-        return out
-    raw = pr.get("secret_auction_rank_opponent_multipliers")
-    if not isinstance(raw, dict):
-        return out
-    for key in out:
-        if key not in raw:
-            continue
-        try:
-            out[key] = float(raw[key])
-        except (TypeError, ValueError):
-            pass
-    return out
+    if raw is None and isinstance(pr, dict) and "secret_auction_rank_opponent_multipliers" in pr:
+        raw = pr.get("secret_auction_rank_opponent_multipliers")
+
+    by_rank: dict[int, float] = dict(DEFAULT_SECRET_AUCTION_RANK_OPPONENT_MULTIPLIERS)
+    fallback = DEFAULT_SECRET_AUCTION_RANK_OPPONENT_MULT_FALLBACK
+
+    if isinstance(raw, dict):
+        alias_to_rank = (
+            ("1", 1),
+            ("rank_1", 1),
+            ("2", 2),
+            ("rank_2", 2),
+            ("3", 3),
+            ("rank_3", 3),
+            ("4", 4),
+            ("rank_4", 4),
+            ("4+", 4),
+            ("default", 0),
+            ("rank_default", 0),
+        )
+        for key, rank_slot in alias_to_rank:
+            if key not in raw:
+                continue
+            parsed = _parse_rank_multiplier_value(raw.get(key))
+            if parsed is None:
+                continue
+            if rank_slot == 0:
+                fallback = parsed
+            else:
+                by_rank[rank_slot] = parsed
+
+    return {"by_rank": by_rank, "fallback": fallback}
+
+
+def _estimate_opponent_bid_by_rank(
+    bid_pre: int,
+    my_rank_ordinal: int,
+    *,
+    rank_multipliers: dict[str, Any] | None = None,
+) -> float:
+    """基于上回合己方 1-based 排位预估对手本回合出价：``bid_pre * mult``。"""
+    cfg = rank_multipliers or {}
+    by_rank: dict[int, float] = cfg.get("by_rank") or DEFAULT_SECRET_AUCTION_RANK_OPPONENT_MULTIPLIERS
+    fallback = float(
+        cfg.get("fallback")
+        if cfg.get("fallback") is not None
+        else DEFAULT_SECRET_AUCTION_RANK_OPPONENT_MULT_FALLBACK
+    )
+    r = int(my_rank_ordinal)
+    if r >= 1:
+        mult = float(by_rank.get(r, fallback))
+    else:
+        mult = fallback
+    return float(bid_pre) * mult
 
 
 def _parse_enable_opponent_bid_adjustment_flag(value: Any) -> bool:
@@ -57,10 +119,10 @@ def opponent_bid_adjustment_enabled(
     config: dict[str, Any], price_config: dict[str, Any]
 ) -> bool:
     """
-    是否执行对手价调整。读取顺序：``price_config`` → ``config[\"pricing\"]``；
+    是否执行对手价调整。读取顺序：``price_config`` → ``config["pricing"]``；
     均未配置时默认 ``True``（保持历史行为）。
 
-    配置键：``enable_opponent_bid_adjustment``（``false`` / ``0`` / ``\"off\"`` 等关闭）。
+    配置键：``enable_opponent_bid_adjustment``（``false`` / ``0`` / ``"off"`` 等关闭）。
     """
     if isinstance(price_config, dict) and "enable_opponent_bid_adjustment" in price_config:
         return _parse_enable_opponent_bid_adjustment_flag(
@@ -76,10 +138,10 @@ def opponent_bid_adjustment_enabled(
 
 def board_map_bundle_key(board_snapshot: dict[str, Any] | None) -> str | None:
     """
-    快照内**原始** ``MapId`` 的档键（如 ``4402`` → ``\"440\"``）。
+    快照内**原始** ``MapId`` 的档键（如 ``4402`` → ``"440"``）。
 
     注意：不得先做 ``normalize_map_id``；否则 ``4402`` 会归一成 ``2402``，
-    档键误为 ``\"240\"``，无法识别幽静别墅/沉船密封舱（隐秘拍卖）族。
+    档键误为 ``"240"``，无法识别幽静别墅/沉船密封舱（隐秘拍卖）族。
     """
     if not isinstance(board_snapshot, dict):
         return None
@@ -92,6 +154,37 @@ def board_map_bundle_key(board_snapshot: dict[str, Any] | None) -> str | None:
 def board_snapshot_is_secret_auction(board_snapshot: dict[str, Any] | None) -> bool:
     k = board_map_bundle_key(board_snapshot)
     return bool(k) and k in SECRET_AUCTION_MAP_BUNDLE_KEYS
+
+
+def _secret_auction_ordinal_rank(
+    config: dict[str, Any],
+    board_snapshot: dict[str, Any],
+    ref_round: int,
+) -> int | None:
+    """由 ``prices`` 名次信号（越小越靠前）换算 1-based 排位。"""
+    players = (board_snapshot.get("game_state") or {}).get("players") or {}
+    if not isinstance(players, dict) or not players:
+        return None
+    self_uid, _ = board_snapshot_self_identity(config, board_snapshot)
+    my_signal: int | None = None
+    signals: list[int] = []
+    for p_uid, pdata in players.items():
+        if not isinstance(pdata, dict):
+            continue
+        rk = player_round_price_bid(pdata, ref_round)
+        if rk is None:
+            continue
+        iv = int(rk)
+        signals.append(iv)
+        if self_uid and str(p_uid) == self_uid:
+            my_signal = iv
+    if my_signal is None or not signals:
+        return None
+    ordered = sorted(signals)
+    try:
+        return ordered.index(my_signal) + 1
+    except ValueError:
+        return len(ordered) + 1
 
 
 def _secret_auction_prev_round_rank_detail(
@@ -122,10 +215,12 @@ def _secret_auction_prev_round_rank_detail(
     behind: int | None = None
     if my_rank is not None and opp_best is not None:
         behind = int(my_rank) - int(opp_best)
+    ordinal = _secret_auction_ordinal_rank(config, board_snapshot, ref_r)
     return {
         "mode": "secret_rank",
         "ref_round_no": ref_r,
         "my_rank_prev": my_rank,
+        "my_rank_ordinal": ordinal,
         "opponent_ranks_prev": opp_ranks,
         "opponent_best_rank_prev": opp_best,
         "behind_by": behind,
@@ -138,68 +233,89 @@ def apply_secret_auction_rank_opponent_adjustment(
     round_no: int,
     *,
     board_snapshot: dict[str, Any],
-    pricing: dict[str, Any] | None = None,
+    price_config: dict[str, Any],
 ) -> tuple[int, str | None, dict[str, Any]]:
     """
     隐秘拍卖图：``prices`` 为名次（越小越靠前），缺失表示该轮未出价。
-    在无法还原对手金币价时，按「我方相对最优对手名次差」对当前估价做轻量缩放。
 
-    缩放系数来自 ``config[\"pricing\"][\"secret_auction_rank_opponent_multipliers\"]``
-    （由 ``configs/pricing.maps/<档键>.json`` 深合并写入）；缺省与历史硬编码一致。
+    基于上回合自己的出价 (bid_pre) 与 1-based 排位预估对手出价：
+    ``bid_pre * secret_auction_rank_opponent_multipliers[rank]``（默认 1→1.0, 2→1.1, 3→1.2, 4+→1.3；
+    见 ``pricing.secret_auction_rank_opponent_multipliers``）。
+
+    出价策略（类似aisha逻辑，无r3_protect）：
+    - r5+: 取max((bid+o_est)/2*1.05, o_est*1.05) + 1000
+    - bid > o_est * 1.05 + 1000: 出 (bid + adj) / 2
+    - bid > o_est: 出 o_est
+    - bid > bid_pre: 出 min(o_est, (bid + bid_pre) / 2)
+    - 其他: 出 (bid + o_est) / 2
     """
     bid_i = int(bid)
     r_no = int(round_no)
-    pricing_d = pricing if isinstance(pricing, dict) else {}
     detail = _secret_auction_prev_round_rank_detail(config, board_snapshot, r_no)
 
-    if r_no <= 1:
+    if r_no <= 2:
         detail["skip"] = "round_lte_1"
         return bid_i, None, detail
 
-    my_rank = detail.get("my_rank_prev")
-    if my_rank is None:
+    my_rank_signal = detail.get("my_rank_prev")
+    if my_rank_signal is None:
         detail["skip"] = "no_self_rank_prev"
         return bid_i, None, detail
 
-    mults = _secret_auction_rank_multipliers(config)
-    detail["secret_auction_rank_multipliers"] = dict(mults)
+    rank_ord = detail.get("my_rank_ordinal")
+    if rank_ord is None:
+        detail["skip"] = "no_self_rank_ordinal"
+        return bid_i, None, detail
 
-    opp_best = detail.get("opponent_best_rank_prev")
-    behind = detail.get("behind_by")
-    if opp_best is None:
-        fin = int(round(bid_i * mults["no_opponent_bid"]))
-        tag = "secret_rank_no_opp_bid"
-    elif behind is not None:
-        if behind >= 2:
-            fin = int(round(bid_i * mults["behind_ge_2"]))
-            tag = "secret_rank_behind_far"
-        elif behind == 1:
-            fin = int(round(bid_i * mults["behind_1"]))
-            tag = "secret_rank_behind_1"
-        elif behind == 0:
-            fin = int(round(bid_i * mults["behind_0"]))
-            tag = "secret_rank_tied"
-        else:
-            fin = int(round(bid_i * mults["behind_lt_0"]))
-            tag = "secret_rank_ahead"
-    else:
-        fin = bid_i
-        tag = None
+    # 获取上回合自己的金币出价（隐秘图读缓存，不读 players.prices）
+    ref_r = max(1, r_no - 1)
+    bid_pre = get_self_gold_bid(config, board_snapshot, ref_r)
+    if bid_pre is None or bid_pre <= 0:
+        detail["skip"] = "no_self_bid_prev"
+        detail["bid_pre_source"] = "self_bid_history"
+        return bid_i, None, detail
 
-    ceiling_raw = pricing_d.get("points_ceiling")
-    if ceiling_raw is not None:
-        try:
-            ceiling_pts = int(ceiling_raw)
-            if ceiling_pts > 0 and fin > ceiling_pts:
-                fin = ceiling_pts
-                detail["ceiling_clamped"] = ceiling_pts
-        except (TypeError, ValueError):
-            pass
+    rank_mult_cfg = resolve_secret_auction_rank_opponent_multipliers(config, price_config)
+    # 基于排名预估对手这回合出价（乘数用 1–4 排位，非 prices 原始值）
+    o_estimated = _estimate_opponent_bid_by_rank(
+        bid_pre, int(rank_ord), rank_multipliers=rank_mult_cfg
+    )
+    detail["bid_pre"] = bid_pre
+    detail["bid_pre_source"] = "self_bid_history"
+    detail["my_rank_prev"] = my_rank_signal
+    detail["my_rank_ordinal"] = int(rank_ord)
+    detail["secret_auction_rank_multipliers"] = rank_mult_cfg
+    detail["o_estimated_raw"] = o_estimated
 
-    fin = max(1, int(fin))
-    if fin != bid_i and tag is None:
-        tag = "secret_rank"
-    return fin, tag, detail
+    # r5+ 特殊处理：最终轮激进出价
+    if r_no >= 5:
+        out = int((bid_i + o_estimated) / 2.0 + 1000)
+        detail["final_round"] = True
+        return out, "secret_opp_final", detail
+    mult = resolve_round_multiplier(round_no, price_config)
+    # 调价阈值（类似aisha的adj）
+    adj = o_estimated * mult + 1000
+    detail["adj_threshold"] = adj
+
+    # 出价决策逻辑（类似aisha，但用bid_pre替代o_prev）
+    if bid_i > adj:
+        # 当前估价远高于预估对手价+缓冲，折中出价
+        out = int(round((bid_i + adj) / 2))
+        return out, "secret_opp_low", detail
+
+    if bid_i > o_estimated:
+        # 当前估价高于预估对手价，压低到预估价附近
+        out = int(o_estimated)
+        return out, "secret_opp_est", detail
+
+    if bid_i > bid_pre:
+        # 当前估价高于上回合自己出价，折中但不超过预估对手价
+        out = int(min(o_estimated, (bid_i + bid_pre) / 2))
+        return out, "secret_opp_pre", detail
+
+    # 其他情况：保守跟进，取当前估价与预估对手价的均值
+    out = int(round((bid_i + o_estimated) / 2))
+    return out, "secret_opp_sticky", detail
 
 
 def opponent_last_bid_default_from_snapshot(
@@ -232,7 +348,10 @@ def evaluate_opponent_bid_possibilities(
     prev_col_round = max(1, int(round_no) - 1)
     s_prev: int | None = None
     if board_snapshot:
-        s_prev = self_round_bid_from_snapshot(config, board_snapshot, prev_col_round)
+        if board_snapshot_is_secret_auction(board_snapshot):
+            s_prev = get_self_gold_bid(config, board_snapshot, prev_col_round)
+        else:
+            s_prev = self_round_bid_from_snapshot(config, board_snapshot, prev_col_round)
     if s_prev is None or s_prev <= int(o_prev):
         return 1.05 * float(o_prev)
     return 1.05 * float(s_prev)
@@ -414,7 +533,7 @@ def apply_opponent_bid_adjustment(
             fin_before_opp,
             int(round_no),
             board_snapshot=board_snapshot,
-            pricing=pricing,
+            price_config=price_config,
         )
         o_prev: int | None = None
     else:

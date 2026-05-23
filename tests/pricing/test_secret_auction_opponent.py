@@ -7,7 +7,9 @@ from bidking.pricing.opponent_adjust import (
     board_map_bundle_key,
     board_snapshot_is_secret_auction,
     opponent_bid_adjustment_enabled,
+    resolve_secret_auction_rank_opponent_multipliers,
 )
+from bidking.pricing.self_bid_cache import SELF_BID_HISTORY_SNAPSHOT_KEY
 
 
 def test_board_map_bundle_key_4402_is_440() -> None:
@@ -32,14 +34,19 @@ def _minimal_config(self_uid: str) -> dict:
     return {"board_snapshot": {"self_user_uid": self_uid, "self_name_substring": ""}}
 
 
-def test_secret_rank_behind_1_respects_map_pricing_multipliers() -> None:
-    """``pricing.secret_auction_rank_opponent_multipliers`` 覆盖 behind==1 系数。"""
+def test_secret_rank_multipliers_configurable() -> None:
     cfg = {
         **_minimal_config("941456831344888"),
         "pricing": {
-            "secret_auction_rank_opponent_multipliers": {"behind_1": 1.1}
+            "secret_auction_rank_opponent_multipliers": {
+                "2": 1.25,
+                "default": 1.5,
+            }
         },
     }
+    resolved = resolve_secret_auction_rank_opponent_multipliers(cfg, {})
+    assert resolved["by_rank"][2] == 1.25
+    assert resolved["fallback"] == 1.5
     snap = {
         "game_state": {
             "map_id": 4402,
@@ -47,19 +54,17 @@ def test_secret_rank_behind_1_respects_map_pricing_multipliers() -> None:
                 "941456831344888": {"name": "self", "prices": {"0": 2, "1": 2}},
                 "111": {"name": "a", "prices": {"0": 3, "1": 1}},
             },
-        }
+        },
+        SELF_BID_HISTORY_SNAPSHOT_KEY: {"2": 400_000},
     }
-    out, tag, detail = apply_secret_auction_rank_opponent_adjustment(
-        cfg, 100_000, 3, board_snapshot=snap, pricing={}
+    _out, _tag, detail = apply_secret_auction_rank_opponent_adjustment(
+        cfg, 100_000, 3, board_snapshot=snap, price_config={}
     )
-    assert detail.get("behind_by") == 1
-    assert detail.get("secret_auction_rank_multipliers", {}).get("behind_1") == 1.1
-    assert tag == "secret_rank_behind_1"
-    assert out == 110_000
+    assert detail.get("o_estimated_raw") == 400_000 * 1.25
 
 
-def test_secret_rank_behind_1_scales_bid() -> None:
-    """上一轮名次：我方 2、最优对手 1 → behind_by=1 → 约 +4.5%（默认系数）。"""
+def test_secret_opponent_skips_without_cached_bid_pre() -> None:
+    """无 ``self_bid_history`` 时不应把 prices 名次误当金币出价。"""
     cfg = _minimal_config("941456831344888")
     snap = {
         "game_state": {
@@ -71,11 +76,33 @@ def test_secret_rank_behind_1_scales_bid() -> None:
         }
     }
     out, tag, detail = apply_secret_auction_rank_opponent_adjustment(
-        cfg, 100_000, 3, board_snapshot=snap, pricing={}
+        cfg, 100_000, 3, board_snapshot=snap, price_config={}
     )
-    assert detail.get("behind_by") == 1
-    assert tag == "secret_rank_behind_1"
-    assert out == int(round(100_000 * 1.045))
+    assert tag is None
+    assert out == 100_000
+    assert detail.get("skip") == "no_self_bid_prev"
+
+
+def test_secret_opponent_uses_ordinal_rank_for_multiplier() -> None:
+    cfg = _minimal_config("941456831344888")
+    snap = {
+        "game_state": {
+            "map_id": 4402,
+            "players": {
+                "941456831344888": {"name": "self", "prices": {"0": 2, "1": 2}},
+                "111": {"name": "a", "prices": {"0": 3, "1": 1}},
+            },
+        },
+        SELF_BID_HISTORY_SNAPSHOT_KEY: {"2": 400_000},
+    }
+    out, tag, detail = apply_secret_auction_rank_opponent_adjustment(
+        cfg, 100_000, 3, board_snapshot=snap, price_config={}
+    )
+    assert detail.get("my_rank_ordinal") == 2
+    assert detail.get("bid_pre") == 400_000
+    assert detail.get("o_estimated_raw") == 400_000 * 1.1
+    assert tag is not None
+    assert out == int(round((100_000 + 400_000 * 1.1) / 2))
 
 
 def test_opponent_bid_adjustment_disabled_skips_all() -> None:
@@ -122,7 +149,8 @@ def test_apply_opponent_bid_adjustment_secret_branch() -> None:
                 "941456831344888": {"name": "AIR", "prices": {"0": 2, "1": 1}},
                 "882289365978943": {"name": "opp", "prices": {"0": 3, "1": 3}},
             },
-        }
+        },
+        SELF_BID_HISTORY_SNAPSHOT_KEY: {"2": 300_000},
     }
     fin, ob, before = apply_opponent_bid_adjustment(
         cfg,
@@ -136,5 +164,6 @@ def test_apply_opponent_bid_adjustment_secret_branch() -> None:
     assert before == 200_000
     assert ob["o_prev"] is None
     assert ob["applied"] is True
-    assert ob["tag"] == "secret_rank_ahead"
-    assert fin == int(round(200_000 * 0.994))
+    assert ob["tag"] is not None
+    assert ob["detail"]["bid_pre"] == 300_000
+    assert fin != before

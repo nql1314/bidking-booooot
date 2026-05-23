@@ -10,7 +10,7 @@ from ..analysis.strategy.ahmad import (
 )
 from ..config.map_runtime_overlay import merged_runtime_with_map_pricing
 from ..parsing.item_db import map_bundle_key_for_automation
-from .snapshot_io import current_round_from_snapshot, load_board_snapshot_if_enabled
+from .snapshot_io import load_board_snapshot_if_enabled, resolve_effective_round
 from .snapshot_players import board_snapshot_self_identity
 from ._multipliers import resolve_automation_bid_ratio
 from ._numeric import parse_int_config
@@ -75,8 +75,7 @@ def compute_price(
     if price_config is None:
         price_config = load_price_config(effective_config, config_path)
 
-    snap_round = current_round_from_snapshot(bs) if isinstance(bs, dict) else None
-    effective_round = int(snap_round) if snap_round is not None else int(round_no)
+    effective_round = resolve_effective_round(int(round_no), bs if isinstance(bs, dict) else None)
 
     if strategy_role is not None:
         r = str(strategy_role).strip().lower()

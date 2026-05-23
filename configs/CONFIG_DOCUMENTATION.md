@@ -136,15 +136,27 @@
 | `enable_big_gold_adjustment` | bool | `true`/`false` | 是否启用大金物品调整 |
 | `secret_auction_rank_opponent_multipliers` | object | 见下方 | 隐秘拍卖档对手排名乘数 |
 
-**secret_auction_rank_opponent_multipliers 结构:**
+**secret_auction_rank_opponent_multipliers 结构:**（上回合己方 **1-based 排位** → 对手预估 = `bid_pre × 系数`）
 
-| 键 | 说明 |
-|----|------|
-| `behind_ge_2` | 落后2名或以上时的乘数 |
-| `behind_1` | 落后1名时的乘数 |
-| `behind_0` | 排名相当时的乘数 |
-| `behind_lt_0` | 排名领先时的乘数 |
-| `no_opponent_bid` | 无对手出价时的乘数 |
+| 键 | 说明 | 默认 |
+|----|------|------|
+| `"1"` / `rank_1` | 上回合第 1 名 | `1.0` |
+| `"2"` / `rank_2` | 上回合第 2 名 | `1.1` |
+| `"3"` / `rank_3` | 上回合第 3 名 | `1.2` |
+| `"4"` / `rank_4` / `"4+"` | 上回合第 4 名 | `1.3` |
+| `default` / `rank_default` | 第 5 名及以后或未单独配置的排位 | `1.3` |
+
+示例（`configs/pricing.maps/450.json`）：
+
+```json
+"secret_auction_rank_opponent_multipliers": {
+  "1": 1.0,
+  "2": 1.1,
+  "3": 1.2,
+  "4": 1.3,
+  "default": 1.3
+}
+```
 
 ### 2.4 automation 配置项
 
