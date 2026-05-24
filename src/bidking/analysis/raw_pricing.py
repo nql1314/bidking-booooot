@@ -912,6 +912,26 @@ def build_raw_pricing_dict(
         for k, v in sorted(csv_groups_full.items())
     }
 
+    map_quality_unit_override_keys: list[str] = []
+    if normalized_mid is not None:
+        from .map_quality_unit_config import (
+            apply_map_quality_unit_per_cell_overrides,
+            merge_config_overrides_into_runtime,
+        )
+
+        try:
+            from ..config.runtime import load_runtime
+
+            _ov = merge_config_overrides_into_runtime(load_runtime().raw, int(normalized_mid))
+        except Exception:
+            _ov = {}
+        if _ov:
+            csv_groups_per_cell, csv_groups_per_item, map_quality_unit_override_keys = (
+                apply_map_quality_unit_per_cell_overrides(
+                    csv_groups_per_cell, csv_groups_per_item, _ov
+                )
+            )
+
     # ── 1) 随机均价下界（多地图技能聚合推理）────────────────────────────
     random_avg_price_min: Optional[int] = None
     for _rnd_cid in (
@@ -1058,6 +1078,7 @@ def build_raw_pricing_dict(
         "csv_quality_groups_avg_per_item": csv_groups_per_item,
         "map_quality_avg_csv": map_quality_csv_path_resolved(snapshot_path_hint),
         "map_quality_avg_hit": bool(csv_groups_full),
+        "map_quality_unit_override_keys": map_quality_unit_override_keys,
         "event_stats": direct,
         "census_absent_qualities": census_absent_qualities,
     }

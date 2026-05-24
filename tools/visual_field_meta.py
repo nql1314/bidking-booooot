@@ -58,6 +58,10 @@ FIELD_META: dict[str, dict[str, str]] = {
         "label": "默认局数",
         "description": "单次启动默认连续对局数（与 Bot 面板「局数」一致时的默认值）。",
     },
+    "automation.enable_map_entry_money_check": {
+        "label": "主界面资产准入检查",
+        "description": "回到主界面时 OCR 当前资产并与 map_entry_money_by_map_id 比对；不足则自动停止 bot。关闭后跳过资产校验（UID 仍仅在会话首次回主界面时同步）。",
+    },
     "automation.enable_aisha_round4_tool_vacant_gate": {
         "label": "爱莎第4回合空置门控",
         "description": "开启后：第4回合仅在空置格≥门槛且 Q5 网格统计已知时才使用道具。",

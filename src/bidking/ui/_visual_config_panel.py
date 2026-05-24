@@ -19,6 +19,8 @@ from ..config.paths import (
     runtime_path,
 )
 from ..config.runtime import apply_board_snapshot_env_overrides
+from ..analysis.map_avg_csv import load_prefix3_to_min_map_id
+from ..analysis.map_quality_unit_config import CONFIG_KEYS, load_map_quality_unit_price_refs
 from ..config.visual_schema import (
     coerce_field_value,
     format_field_value,
@@ -29,6 +31,12 @@ from ..config.visual_schema import (
     visual_config_schema_path,
 )
 from ._hover_tip import LabelHoverTip
+
+_MAP_QUALITY_UNIT_LABELS: dict[str, str] = {
+    "q5": "金 (Q5) 格单价",
+    "q6": "红 (Q6) 格单价",
+    "q56": "金+红 (Q56) 格单价",
+}
 
 
 def _load_json(path: Path) -> dict:
@@ -67,6 +75,7 @@ class VisualConfigPanel:
 
         self._config_bindings: list[_FieldBinding] = []
         self._map_bindings: list[_FieldBinding] = []
+        self._map_quality_unit_vars: dict[str, tk.StringVar] = {}
 
         self._reload_config_sources()
         self._build_ui(parent)
@@ -340,6 +349,120 @@ class VisualConfigPanel:
             self.map_doc,
             map_merged,
         )
+        self._populate_map_quality_unit_section(self._map_canvas_frame, self.map_doc)
+
+    def _representative_map_id_for_editor(self) -> int:
+        mk = self._effective_map_key()
+        if not mk:
+            return 0
+        try:
+            return int(load_prefix3_to_min_map_id().get(mk, int(mk) if mk.isdigit() else 0))
+        except (TypeError, ValueError):
+            return 0
+
+    @staticmethod
+    def _fmt_ref_price(v: object) -> str:
+        if v is None:
+            return "—"
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return "—"
+        if f <= 0 or f != f:
+            return "—"
+        if f >= 1000:
+            return f"{f:,.0f}"
+        return f"{f:.2f}".rstrip("0").rstrip(".")
+
+    def _guidance_text_for_unit_key(self, refs: dict, cfg_key: str) -> str:
+        row = refs.get(cfg_key) if isinstance(refs, dict) else None
+        if not isinstance(row, dict):
+            return "（无 CSV 参考，请先运行 tools/map_quality_*_prices.py）"
+        avg = self._fmt_ref_price(row.get("avg_per_cell"))
+        p25 = self._fmt_ref_price(row.get("p25_per_cell"))
+        p50 = self._fmt_ref_price(row.get("p50_per_cell"))
+        return f"CSV 指导价（格）：均价 {avg}　P25 {p25}　P50 {p50}"
+
+    def _populate_map_quality_unit_section(
+        self,
+        box: ttk.Frame,
+        map_doc: dict[str, Any],
+    ) -> None:
+        inner: ttk.Frame = box._inner_frame  # type: ignore[attr-defined]
+        rep_mid = self._representative_map_id_for_editor()
+        refs = load_map_quality_unit_price_refs(rep_mid) if rep_mid > 0 else {}
+
+        grp = ttk.LabelFrame(
+            inner,
+            text="金/红格单价覆盖（优先于 CSV，用于估价）",
+            padding=8,
+        )
+        grp.grid(row=999, column=0, sticky="ew", pady=(0, 8))
+        inner.columnconfigure(0, weight=1)
+
+        hint = (
+            f"代表 map_id={rep_mid or '—'}（与同档 CSV 行一致）。"
+            "留空或 0 表示使用 CSV 均价；填写后覆盖 q5/q6/q5+q6 格单价。"
+        )
+        ttk.Label(grp, text=hint, foreground="#555577", wraplength=520, justify="left").grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(0, 6)
+        )
+
+        pricing = map_doc.get("pricing") if isinstance(map_doc.get("pricing"), dict) else {}
+        overrides = pricing.get("map_quality_unit_per_cell")
+        if not isinstance(overrides, dict):
+            overrides = {}
+
+        self._map_quality_unit_vars.clear()
+        gi = 1
+        for cfg_key in CONFIG_KEYS:
+            label = _MAP_QUALITY_UNIT_LABELS.get(cfg_key, cfg_key)
+            ttk.Label(grp, text=label, width=22).grid(row=gi, column=0, sticky="nw", pady=3)
+            var = tk.StringVar()
+            cur = overrides.get(cfg_key)
+            if cur is not None:
+                try:
+                    f = float(cur)
+                    if f > 0:
+                        var.set(str(int(f)) if f == int(f) else str(f))
+                except (TypeError, ValueError):
+                    pass
+            entry = ttk.Entry(grp, textvariable=var, width=14)
+            entry.grid(row=gi, column=1, sticky="w", padx=(4, 0), pady=3)
+            self._map_quality_unit_vars[cfg_key] = var
+
+            gtxt = self._guidance_text_for_unit_key(refs, cfg_key)
+            gl = ttk.Label(grp, text=gtxt, foreground="#666688", wraplength=480, justify="left")
+            gl.grid(row=gi + 1, column=0, columnspan=2, sticky="w", padx=(0, 0), pady=(0, 6))
+            gi += 2
+
+    def _apply_map_quality_unit_to_doc(self, doc: dict[str, Any]) -> None:
+        if not self._map_quality_unit_vars:
+            return
+        pricing = doc.get("pricing")
+        if not isinstance(pricing, dict):
+            pricing = {}
+            doc["pricing"] = pricing
+        bucket = pricing.get("map_quality_unit_per_cell")
+        if not isinstance(bucket, dict):
+            bucket = {}
+        for cfg_key, var in self._map_quality_unit_vars.items():
+            raw = var.get().strip()
+            if not raw:
+                bucket.pop(cfg_key, None)
+                continue
+            try:
+                val = float(raw.replace(",", ""))
+            except ValueError as exc:
+                raise ValueError(f"{_MAP_QUALITY_UNIT_LABELS.get(cfg_key, cfg_key)}: 无效数字") from exc
+            if val <= 0:
+                bucket.pop(cfg_key, None)
+            else:
+                bucket[cfg_key] = val
+        if bucket:
+            pricing["map_quality_unit_per_cell"] = bucket
+        else:
+            pricing.pop("map_quality_unit_per_cell", None)
 
     def _on_map_combo_selected(self, _event: object = None) -> None:
         self._reload_map_doc()
@@ -420,6 +543,7 @@ class VisualConfigPanel:
             prior = _load_json(path) if path.is_file() else {}
             doc = dict(prior)
             self._apply_bindings(doc, self._map_bindings)
+            self._apply_map_quality_unit_to_doc(doc)
             au_doc = doc.get("automation")
             if isinstance(au_doc, dict):
                 au_doc.pop("safe_guard_enabled", None)

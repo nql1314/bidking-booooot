@@ -56,11 +56,29 @@ def board_snapshot_self_identity(
 
 
 def player_round_price_bid(pdata: dict[str, Any], round_no: int) -> int | None:
-    """``prices`` 键为 ``str(round_no - 1)``（与快照 ``players.*.prices`` 一致）。"""
+    """非隐秘图：``prices`` 为金币出价，键 ``str(round_no - 1)``（拍卖列 0 起）。"""
     prices = pdata.get("prices") or {}
     if not isinstance(prices, dict):
         return None
     key_int = int(round_no) - 1
+    raw = prices.get(str(key_int))
+    if raw is None:
+        raw = prices.get(key_int)
+    if raw is None:
+        return None
+    try:
+        iv = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return iv if iv > 0 else None
+
+
+def player_round_rank_signal(pdata: dict[str, Any], game_round: int) -> int | None:
+    """隐秘拍卖：``prices`` 键为 PriceLog ``Round``（0 起），值为名次 1–4（1 最好）。"""
+    prices = pdata.get("prices") or {}
+    if not isinstance(prices, dict):
+        return None
+    key_int = int(game_round)
     raw = prices.get(str(key_int))
     if raw is None:
         raw = prices.get(key_int)
@@ -140,3 +158,19 @@ def iter_opponent_round_bids_from_snapshot(
         if b is not None:
             out.append(b)
     return out
+
+
+def self_round_rank_from_snapshot(
+    config: dict[str, Any], board_snapshot: dict[str, Any], game_round: int
+) -> int | None:
+    """隐秘拍卖：读取己方在指定 ``game_round`` 的名次信号（1–4）。"""
+    self_uid, _ = board_snapshot_self_identity(config, board_snapshot)
+    if not self_uid:
+        return None
+    players = (board_snapshot.get("game_state") or {}).get("players") or {}
+    if not isinstance(players, dict):
+        return None
+    pdata = players.get(self_uid)
+    if not isinstance(pdata, dict):
+        return None
+    return player_round_rank_signal(pdata, game_round)

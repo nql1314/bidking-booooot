@@ -2,8 +2,8 @@
   "pricing": {
     "enable_late_round_low_bid_surrender": false,
     "late_round_low_bid_surrender_after_round": 4,
-    "late_round_low_bid_surrender_below": 5000,
-    "late_round_low_bid_surrender_bid": 886,
+    "late_round_low_bid_surrender_below": 555555,
+    "late_round_low_bid_surrender_bid": 88888,
     "enable_vacant_red_floor_ceiling_pick": true,
     "enable_opponent_bid_adjustment": true,
     "infer_unknown_contour_shapes": true,
@@ -38,8 +38,11 @@
     },
     "run_cycles": 5,
     "cycle_rest_minutes": 10.0,
+    "enable_map_entry_money_check": false,
     "enable_aisha_round4_tool_vacant_gate": false,
-    "aisha_round4_tool_min_vacant": 30
+    "aisha_round4_tool_min_vacant": 30,
+    "bid_cap_skip_when_total_above": 0,
+    "game_start_timeout_seconds": 0.0
   },
   "timing": {
     "poll_seconds": 1,
