@@ -405,39 +405,54 @@ def is_ahmad_pricing_active(
     if not map_bundle_is_express_station_series(map_id):
         return False
 
-    from ...pricing._self_uid_inference import (
-        apply_self_uid_inference_to_board_snapshot,
-        resolve_effective_self_user_uid,
+    from . import common as _common
+
+    self_hc = _common.self_player_hero_cid(
+        board_snapshot, board_snapshot_config=board_snapshot_config
+    )
+    return self_hc == _AHMAD_HERO_CID
+
+
+def enrich_ahmad_pricing(ctx, pricing: Dict[str, Any]) -> Dict[str, Any]:
+    """写入 Ahmad 候选分解；激活时用 ``ahmad_points`` 覆盖主价。"""
+    import time
+
+    from ...logsys.perf_log import perf_log_elapsed
+    from . import generic as _generic
+
+    t0_ahmad = time.perf_counter()
+    ahmad_abde_scale = resolve_ahmad_abde_scale(
+        ctx.snap_full, board_snapshot_config=ctx.board_snapshot_config
+    )
+    ahmad_detail = ahmad_pricing_detail_from_raw_pricing(
+        ctx.raw,
+        items_total=float(ctx.vacant_pts_base),
+        vacant_adj=int(ctx.vacant_adj),
+        board_items_total=float(ctx.total_f),
+        ahmad_abde_scale=float(ahmad_abde_scale),
+    )
+    ahmad_points = int(ahmad_detail.get("ahmad_points") or 0)
+    perf_log_elapsed("build_snapshot_pricing_dict: ahmad_pricing", t0_ahmad)
+
+    generic_pts = int(round(ctx.pts))
+    generic_floor = int(round(ctx.pts_floor))
+    generic_ceil = int(round(ctx.pts_ceiling))
+    ahmad_pricing_active = is_ahmad_pricing_active(
+        ctx.snap_full,
+        ctx.map_id,
+        board_snapshot_config=ctx.board_snapshot_config,
     )
 
-    gs = board_snapshot.get("game_state")
-    if not isinstance(gs, dict):
-        return False
-    players = gs.get("players")
-    if not isinstance(players, dict) or not players:
-        return False
+    if ahmad_pricing_active:
+        pricing["points"] = pricing["points_floor"] = pricing["points_ceiling"] = ahmad_points
+        pricing["generic_points"] = generic_pts
+        pricing["generic_points_floor"] = generic_floor
+        pricing["generic_points_ceiling"] = generic_ceil
+    elif "points" not in pricing:
+        _generic.apply_generic_points(pricing, ctx)
 
-    branch = (
-        board_snapshot_config
-        if board_snapshot_config is not None
-        else _local_board_snapshot_branch()
-    )
-    cfg_u = str(branch.get("self_user_uid") or "").strip()
-    apply_self_uid_inference_to_board_snapshot(
-        board_snapshot, config_self_user_uid=cfg_u
-    )
-    self_uid = resolve_effective_self_user_uid(
-        board_snapshot, config_self_user_uid=cfg_u
-    )
-    pdata: Any = None
-    if self_uid and self_uid in players:
-        pdata = players.get(self_uid)
-    if pdata is None and len(players) == 1:
-        pdata = next(iter(players.values()))
-    if not isinstance(pdata, dict):
-        return False
-    try:
-        hc = int(pdata.get("hero_cid") or 0)
-    except (TypeError, ValueError):
-        return False
-    return hc == _AHMAD_HERO_CID
+    pricing["ahmad_points"] = ahmad_points
+    pricing["ahmad_points_detail"] = ahmad_detail
+    pricing["ahmad_abde_scale"] = float(ahmad_abde_scale)
+    pricing["ahmad_pricing_active"] = bool(ahmad_pricing_active)
+    return pricing

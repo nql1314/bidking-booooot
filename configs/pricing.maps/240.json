@@ -5,9 +5,9 @@
     "enable_vacant_red_floor_ceiling_pick": true,
     "enable_big_gold_adjustment": true,
     "fallback_bid_price": 155555,
-    "enable_late_round_low_bid_surrender": false,
+    "enable_late_round_low_bid_surrender": true,
     "late_round_low_bid_surrender_after_round": 4,
-    "late_round_low_bid_surrender_below": 222222,
+    "late_round_low_bid_surrender_below": 255555,
     "late_round_low_bid_surrender_bid": 88888,
     "secret_auction_rank_opponent_multipliers": {
       "1": 0.0,
@@ -17,19 +17,19 @@
       "default": 0.0
     },
     "map_quality_unit_per_cell": {
-      "q56": 22000.0
+      "q56": 20000.0
     }
   },
   "automation": {
-    "bid_cap_price": 1500000,
+    "bid_cap_price": 1280000,
     "bid_ratio_by_round": {
-      "1": 0.55,
+      "1": 0.65,
       "2": 0.65,
       "3": 0.75,
       "4": 0.85,
-      "5": 0.9
+      "5": 0.85
     },
-    "aisha_round4_tool_min_vacant": 30,
-    "enable_aisha_round4_tool_vacant_gate": false
+    "aisha_round4_tool_min_vacant": 38,
+    "enable_aisha_round4_tool_vacant_gate": true
   }
 }
