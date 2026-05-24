@@ -51,8 +51,8 @@ def test_secret_rank_multipliers_configurable() -> None:
         "game_state": {
             "map_id": 4402,
             "players": {
-                "941456831344888": {"name": "self", "prices": {"0": 2, "1": 2}},
-                "111": {"name": "a", "prices": {"0": 3, "1": 1}},
+                "941456831344888": {"name": "self", "prices": {"0": 2, "1": 2, "2": 2}},
+                "111": {"name": "a", "prices": {"0": 3, "1": 1, "2": 1}},
             },
         },
         SELF_BID_HISTORY_SNAPSHOT_KEY: {"2": 400_000},
@@ -60,6 +60,7 @@ def test_secret_rank_multipliers_configurable() -> None:
     _out, _tag, detail = apply_secret_auction_rank_opponent_adjustment(
         cfg, 100_000, 3, board_snapshot=snap, price_config={}
     )
+    assert detail.get("rank_slot_for_multiplier") == 2
     assert detail.get("o_estimated_raw") == 400_000 * 1.25
 
 
@@ -70,8 +71,8 @@ def test_secret_opponent_skips_without_cached_bid_pre() -> None:
         "game_state": {
             "map_id": 4402,
             "players": {
-                "941456831344888": {"name": "self", "prices": {"0": 2, "1": 2}},
-                "111": {"name": "a", "prices": {"0": 3, "1": 1}},
+                "941456831344888": {"name": "self", "prices": {"0": 2, "1": 2, "2": 2}},
+                "111": {"name": "a", "prices": {"0": 3, "1": 1, "2": 1}},
             },
         }
     }
@@ -89,8 +90,8 @@ def test_secret_opponent_uses_ordinal_rank_for_multiplier() -> None:
         "game_state": {
             "map_id": 4402,
             "players": {
-                "941456831344888": {"name": "self", "prices": {"0": 2, "1": 2}},
-                "111": {"name": "a", "prices": {"0": 3, "1": 1}},
+                "941456831344888": {"name": "self", "prices": {"0": 2, "1": 2, "2": 2}},
+                "111": {"name": "a", "prices": {"0": 3, "1": 1, "2": 1}},
             },
         },
         SELF_BID_HISTORY_SNAPSHOT_KEY: {"2": 400_000},
@@ -98,11 +99,36 @@ def test_secret_opponent_uses_ordinal_rank_for_multiplier() -> None:
     out, tag, detail = apply_secret_auction_rank_opponent_adjustment(
         cfg, 100_000, 3, board_snapshot=snap, price_config={}
     )
-    assert detail.get("my_rank_ordinal") == 2
+    assert detail.get("my_rank_prev") == 2
+    assert detail.get("rank_slot_for_multiplier") == 2
     assert detail.get("bid_pre") == 400_000
     assert detail.get("o_estimated_raw") == 400_000 * 1.1
     assert tag is not None
     assert out == int(round((100_000 + 400_000 * 1.1) / 2))
+
+
+def test_secret_opponent_round4_uses_round3_rank_and_cache() -> None:
+    """第 4 回合：``bid_pre``=cache[3]，名次=prices[3]（1 最好 ×1.0）。"""
+    cfg = _minimal_config("941456831344888")
+    snap = {
+        "game_state": {
+            "map_id": 4508,
+            "players": {
+                "941456831344888": {"name": "self", "prices": {"0": 3, "1": 3, "2": 2, "3": 1}},
+                "111": {"name": "a", "prices": {"0": 1, "1": 2, "2": 3, "3": 4}},
+            },
+        },
+        SELF_BID_HISTORY_SNAPSHOT_KEY: {"1": 900_000, "2": 1_000_000, "3": 1_336_333},
+    }
+    _out, tag, detail = apply_secret_auction_rank_opponent_adjustment(
+        cfg, 2_000_000, 4, board_snapshot=snap, price_config={}
+    )
+    assert detail.get("ref_round_no") == 3
+    assert detail.get("bid_pre") == 1_336_333
+    assert detail.get("my_rank_prev") == 1
+    assert detail.get("rank_slot_for_multiplier") == 1
+    assert detail.get("o_estimated_raw") == 1_336_333 * 1.0
+    assert tag is not None
 
 
 def test_opponent_bid_adjustment_disabled_skips_all() -> None:
@@ -146,8 +172,8 @@ def test_apply_opponent_bid_adjustment_secret_branch() -> None:
         "game_state": {
             "map_id": 4402,
             "players": {
-                "941456831344888": {"name": "AIR", "prices": {"0": 2, "1": 1}},
-                "882289365978943": {"name": "opp", "prices": {"0": 3, "1": 3}},
+                "941456831344888": {"name": "AIR", "prices": {"0": 2, "1": 1, "2": 1}},
+                "882289365978943": {"name": "opp", "prices": {"0": 3, "1": 3, "2": 3}},
             },
         },
         SELF_BID_HISTORY_SNAPSHOT_KEY: {"2": 300_000},

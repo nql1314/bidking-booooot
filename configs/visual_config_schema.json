@@ -85,19 +85,19 @@
       "hide": false
     },
     {
-      "path": "automation.game_start_timeout_seconds",
-      "type": "float",
-      "label": "开局等待超时（秒）",
-      "description": "选图后等待「开始」界面出现的最大秒数，超时则重试或放弃本局。",
+      "path": "automation.enable_map_entry_money_check",
+      "type": "bool",
+      "label": "主界面资产准入检查",
+      "description": "回到主界面时 OCR 当前资产并与 map_entry_money_by_map_id 比对；不足则自动停止 bot。关闭后跳过资产校验（UID 仍仅在会话首次回主界面时同步）。",
       "scope": "config",
       "group": "自动化",
       "hide": false
     },
     {
-      "path": "automation.post_confirm_escape_block_seconds",
+      "path": "automation.game_start_timeout_seconds",
       "type": "float",
-      "label": "确认后禁 ESC（秒）",
-      "description": "出价确认后在此秒数内不响应 unknown 状态的 ESC 逃脱，防止误触打断流程。",
+      "label": "开局等待超时（秒）",
+      "description": "选图后等待「开始」界面出现的最大秒数，超时则重试或放弃本局。",
       "scope": "config",
       "group": "自动化",
       "hide": false
@@ -150,8 +150,8 @@
     {
       "path": "pricing.grid_avg_infer_max_grid_count",
       "type": "int",
-      "label": "网格均价最大格数",
-      "description": "用网格均价推断未知价值时，最多纳入多少个格子参与计算。",
+      "label": "网格均格推断最大格数",
+      "description": "用网格均格推断总格时，最多纳入多少个格子参与计算。",
       "scope": "config",
       "group": "出价",
       "hide": false
@@ -159,8 +159,8 @@
     {
       "path": "pricing.grid_avg_infer_max_item_count",
       "type": "int",
-      "label": "网格均价最大物品数量",
-      "description": "网格均价推断时参与统计的物品数量上限。",
+      "label": "网格均格推断最大物品数量",
+      "description": "网格均格推断时参与统计的物品数量上限。",
       "scope": "config",
       "group": "出价",
       "hide": false

@@ -9,6 +9,7 @@ from .snapshot_players import (
     board_snapshot_self_identity,
     max_other_player_bid_from_snapshot_players,
     player_round_price_bid,
+    player_round_rank_signal,
     self_round_bid_from_snapshot,
 )
 from ._multipliers import resolve_round_multiplier
@@ -23,6 +24,10 @@ DEFAULT_SECRET_AUCTION_RANK_OPPONENT_MULTIPLIERS: dict[int, float] = {
     3: 1.2,
 }
 DEFAULT_SECRET_AUCTION_RANK_OPPONENT_MULT_FALLBACK: float = 1.3
+
+# 隐秘图 ``players.*.prices`` 在有效对局中为名次 1–4（1 最好），与 ``self_bid_cache`` 回合键一致。
+_SECRET_RANK_MIN = 1
+_SECRET_RANK_MAX = 4
 
 
 def _parse_rank_multiplier_value(raw: Any) -> float | None:
@@ -83,13 +88,24 @@ def resolve_secret_auction_rank_opponent_multipliers(
     return {"by_rank": by_rank, "fallback": fallback}
 
 
+def _is_secret_rank_signal(value: int) -> bool:
+    return _SECRET_RANK_MIN <= int(value) <= _SECRET_RANK_MAX
+
+
+def _secret_rank_slot(my_rank_signal: int | None) -> int | None:
+    """隐秘图 ``prices`` 已是名次 1–4（1 最好），直接用作乘数档位。"""
+    if my_rank_signal is not None and _is_secret_rank_signal(my_rank_signal):
+        return int(my_rank_signal)
+    return None
+
+
 def _estimate_opponent_bid_by_rank(
     bid_pre: int,
-    my_rank_ordinal: int,
+    rank_slot: int,
     *,
     rank_multipliers: dict[str, Any] | None = None,
 ) -> float:
-    """基于上回合己方 1-based 排位预估对手本回合出价：``bid_pre * mult``。"""
+    """基于上回合己方名次（1–4）预估对手本回合出价：``bid_pre * mult``。"""
     cfg = rank_multipliers or {}
     by_rank: dict[int, float] = cfg.get("by_rank") or DEFAULT_SECRET_AUCTION_RANK_OPPONENT_MULTIPLIERS
     fallback = float(
@@ -97,7 +113,7 @@ def _estimate_opponent_bid_by_rank(
         if cfg.get("fallback") is not None
         else DEFAULT_SECRET_AUCTION_RANK_OPPONENT_MULT_FALLBACK
     )
-    r = int(my_rank_ordinal)
+    r = int(rank_slot)
     if r >= 1:
         mult = float(by_rank.get(r, fallback))
     else:
@@ -156,37 +172,6 @@ def board_snapshot_is_secret_auction(board_snapshot: dict[str, Any] | None) -> b
     return bool(k) and k in SECRET_AUCTION_MAP_BUNDLE_KEYS
 
 
-def _secret_auction_ordinal_rank(
-    config: dict[str, Any],
-    board_snapshot: dict[str, Any],
-    ref_round: int,
-) -> int | None:
-    """由 ``prices`` 名次信号（越小越靠前）换算 1-based 排位。"""
-    players = (board_snapshot.get("game_state") or {}).get("players") or {}
-    if not isinstance(players, dict) or not players:
-        return None
-    self_uid, _ = board_snapshot_self_identity(config, board_snapshot)
-    my_signal: int | None = None
-    signals: list[int] = []
-    for p_uid, pdata in players.items():
-        if not isinstance(pdata, dict):
-            continue
-        rk = player_round_price_bid(pdata, ref_round)
-        if rk is None:
-            continue
-        iv = int(rk)
-        signals.append(iv)
-        if self_uid and str(p_uid) == self_uid:
-            my_signal = iv
-    if my_signal is None or not signals:
-        return None
-    ordered = sorted(signals)
-    try:
-        return ordered.index(my_signal) + 1
-    except ValueError:
-        return len(ordered) + 1
-
-
 def _secret_auction_prev_round_rank_detail(
     config: dict[str, Any],
     board_snapshot: dict[str, Any],
@@ -203,7 +188,7 @@ def _secret_auction_prev_round_rank_detail(
     for p_uid, pdata in players.items():
         if not isinstance(pdata, dict):
             continue
-        rk = player_round_price_bid(pdata, ref_r)
+        rk = player_round_rank_signal(pdata, ref_r)
         if rk is None:
             continue
         is_self = bool(self_uid and str(p_uid) == self_uid)
@@ -215,12 +200,10 @@ def _secret_auction_prev_round_rank_detail(
     behind: int | None = None
     if my_rank is not None and opp_best is not None:
         behind = int(my_rank) - int(opp_best)
-    ordinal = _secret_auction_ordinal_rank(config, board_snapshot, ref_r)
     return {
         "mode": "secret_rank",
         "ref_round_no": ref_r,
         "my_rank_prev": my_rank,
-        "my_rank_ordinal": ordinal,
         "opponent_ranks_prev": opp_ranks,
         "opponent_best_rank_prev": opp_best,
         "behind_by": behind,
@@ -236,9 +219,9 @@ def apply_secret_auction_rank_opponent_adjustment(
     price_config: dict[str, Any],
 ) -> tuple[int, str | None, dict[str, Any]]:
     """
-    隐秘拍卖图：``prices`` 为名次（越小越靠前），缺失表示该轮未出价。
+    隐秘拍卖图：``prices`` 为名次 1–4（1 最好），缺失表示该轮未出价。
 
-    基于上回合自己的出价 (bid_pre) 与 1-based 排位预估对手出价：
+    基于上回合自己的出价 (bid_pre) 与 ``prices`` 内名次预估对手出价：
     ``bid_pre * secret_auction_rank_opponent_multipliers[rank]``（默认 1→1.0, 2→1.1, 3→1.2, 4+→1.3；
     见 ``pricing.secret_auction_rank_opponent_multipliers``）。
 
@@ -262,9 +245,9 @@ def apply_secret_auction_rank_opponent_adjustment(
         detail["skip"] = "no_self_rank_prev"
         return bid_i, None, detail
 
-    rank_ord = detail.get("my_rank_ordinal")
-    if rank_ord is None:
-        detail["skip"] = "no_self_rank_ordinal"
+    rank_slot = _secret_rank_slot(detail.get("my_rank_prev"))
+    if rank_slot is None:
+        detail["skip"] = "invalid_self_rank_prev"
         return bid_i, None, detail
 
     # 获取上回合自己的金币出价（隐秘图读缓存，不读 players.prices）
@@ -276,14 +259,14 @@ def apply_secret_auction_rank_opponent_adjustment(
         return bid_i, None, detail
 
     rank_mult_cfg = resolve_secret_auction_rank_opponent_multipliers(config, price_config)
-    # 基于排名预估对手这回合出价（乘数用 1–4 排位，非 prices 原始值）
+    # 基于上回合名次（1–4）预估对手出价；``bid_pre`` 来自 ``self_bid_cache[ref_r]``
     o_estimated = _estimate_opponent_bid_by_rank(
-        bid_pre, int(rank_ord), rank_multipliers=rank_mult_cfg
+        bid_pre, int(rank_slot), rank_multipliers=rank_mult_cfg
     )
+    detail["rank_slot_for_multiplier"] = int(rank_slot)
     detail["bid_pre"] = bid_pre
     detail["bid_pre_source"] = "self_bid_history"
     detail["my_rank_prev"] = my_rank_signal
-    detail["my_rank_ordinal"] = int(rank_ord)
     detail["secret_auction_rank_multipliers"] = rank_mult_cfg
     detail["o_estimated_raw"] = o_estimated
 

@@ -733,16 +733,43 @@ def enforce_map_entry_money_on_home_screen(
     *,
     selected_map: str,
     full_window_text: str,
-) -> None:
-    """主界面整窗 OCR：``BidKing`` 下资产、``UID:`` 行；不足准入则停止 bot。"""
-    _sync_home_screen_uid_to_config(config, config_path, full_window_text)
-    current = parse_asset_amount_from_bidking_home(full_window_text)
+    sync_home_uid: bool = True,
+) -> bool:
+    """主界面整窗 OCR：``BidKing`` 下资产、``UID:`` 行。
+
+    返回 ``True`` 表示因资产不足应停止 bot；未能识别或解析异常时返回 ``False``（不抛异常，继续运行）。
+
+    ``sync_home_uid`` 为 ``True`` 时从整窗 OCR 解析 ``UID:`` 并写入配置；bot 仅在会话内首次回到主界面时应传入 ``True``。
+
+    ``automation.enable_map_entry_money_check`` 默认 ``True``；设为 ``False`` 时不做资产 OCR 与地图准入校验。
+    """
+    auto = config.get("automation") or {}
+    if sync_home_uid:
+        try:
+            _sync_home_screen_uid_to_config(config, config_path, full_window_text)
+        except Exception as exc:
+            log(f"主界面 UID：同步异常（已忽略）：{exc}")
+    if not bool(auto.get("enable_map_entry_money_check", True)):
+        log(
+            "主界面资产准入：已关闭（automation.enable_map_entry_money_check=false），跳过检查",
+            gui_verbose_only=True,
+        )
+        return False
+
+    try:
+        current = parse_asset_amount_from_bidking_home(full_window_text)
+    except Exception as exc:
+        log(f"主界面当前资产：检查异常（已跳过准入检查，继续运行）：{exc}")
+        return False
+
     if current is None:
         preview = "\n".join((full_window_text or "").splitlines()[:6])
-        log(f"主界面当前资产：未能识别（未找到 BidKing 下方金额；OCR 前几行=\n{preview})")
-        return
+        log(
+            f"主界面当前资产：未能识别（未找到 BidKing 下方金额；OCR 前几行=\n{preview}）"
+            "；跳过准入检查，继续运行"
+        )
+        return False
 
-    auto = config.get("automation") or {}
     required = map_entry_money_by_map_key(auto, selected_map)
     if required > 0:
         log(f"主界面当前资产：{current:,}（地图 {selected_map} 准入 {required:,}）")
@@ -750,13 +777,13 @@ def enforce_map_entry_money_on_home_screen(
         log(f"主界面当前资产：{current:,}")
 
     if required <= 0:
-        return
+        return False
     if current < required:
         log(
             f"资产不足：当前 {current:,} < 地图 {selected_map} 准入 {required:,}，自动停止 bot"
         )
-        request_stop()
-        raise StopRequested()
+        return True
+    return False
 
 
 def has_ingame_bid_button_label_visible(text: str) -> bool:
@@ -1722,6 +1749,7 @@ def run_loop(
     pending_game_start_deadline: float | None = None
     map_select_no_start_streak = 0
     startup_warehouse_sort_done = False
+    home_uid_sync_done = False
     warehouse_sort_milestones_done: set[int] = set()
     completed_runs = 0
     last_end_at = 0.0
@@ -1971,15 +1999,18 @@ def run_loop(
 
             if observation.home_bid_button:
                 if time.monotonic() - last_home_bid_at >= transition_debounce:
-                    try:
-                        enforce_map_entry_money_on_home_screen(
-                            config,
-                            config_path,
-                            selected_map=selected_map,
-                            full_window_text=observation.capture.text,
-                        )
-                    except StopRequested:
+                    sync_home_uid = not home_uid_sync_done
+                    if enforce_map_entry_money_on_home_screen(
+                        config,
+                        config_path,
+                        selected_map=selected_map,
+                        full_window_text=observation.capture.text,
+                        sync_home_uid=sync_home_uid,
+                    ):
+                        request_stop()
                         return
+                    if sync_home_uid:
+                        home_uid_sync_done = True
                     wc = merge_warehouse_auto_sort_settings(config)
                     if bool(wc.get("enabled", True)):
                         need_wh_sort = False
