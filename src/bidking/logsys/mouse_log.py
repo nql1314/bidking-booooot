@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from .app_log import append_app_log, log_timestamp
+from .app_log import log_timestamp
 
 _MOUSE_LOG_ENABLED = False
 
@@ -24,4 +24,3 @@ def mouse_log(message: str) -> None:
         return
     line = f"[{log_timestamp()}] [mouse] {message}"
     print(line, flush=True)
-    append_app_log(line)

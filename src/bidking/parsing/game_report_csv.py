@@ -486,7 +486,7 @@ def backfill_history_game_reports_csv(
         if event_type == "S2C_33_game_start_notify":
             state = GameState()
             game_active = True
-            handle_s2c33(data, state, csv_index, csv_items, silent)
+            handle_s2c33(data, state, csv_index, csv_items, silent, clear_bid_cache=False)
             state.match_started_at = ts
             pending_start_ts = ts
         elif event_type == "S2C_37_game_next_round_notify" and game_active:

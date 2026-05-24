@@ -186,8 +186,8 @@ class EndPromptDetected(RuntimeError):
 
 def log(message: str, *, gui_verbose_only: bool = False) -> None:
     line = f"[{log_timestamp()}] {message}"
-    append_app_log(line)
     if gui_verbose_only and not _GUI_LOG_VERBOSE:
+        append_app_log(line)
         return
     print(line, flush=True)
 
@@ -1867,13 +1867,14 @@ def run_loop(
                 and game_uid != cached_game_uid
             ):
                 log(
-                    f"loop {loop_index}: 新局 game_uid {cached_game_uid!r} -> {game_uid!r}；重置回合状态"
+                    f"loop {loop_index}: 新局 game_uid {cached_game_uid!r} -> {game_uid!r}；"
+                    "重置回合状态并清空 self_bid_cache"
                 )
                 handled_rounds.clear()
                 try:
                     from ..pricing.self_bid_cache import clear_self_bid_disk_cache
 
-                    clear_self_bid_disk_cache()
+                    clear_self_bid_disk_cache(reason="bot_loop_new_game_uid")
                 except Exception:
                     pass
             if game_uid is not None:

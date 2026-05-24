@@ -133,7 +133,7 @@ def apply_late_round_low_bid_surrender(
         meta["reason"] = "disabled"
         payload[key] = meta
         return fin, payload
-    if r <= after_round:
+    if r < after_round:
         meta["applied"] = False
         meta["reason"] = "round_not_past_threshold"
         payload[key] = meta

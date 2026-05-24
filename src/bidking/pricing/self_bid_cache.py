@@ -65,8 +65,9 @@ def _save_disk_cache(data: dict[str, Any]) -> None:
     tmp.replace(path)
 
 
-def clear_self_bid_disk_cache() -> None:
-    """新对局开始时清空磁盘缓存（仅保留当前局后续写入的记录）。"""
+def clear_self_bid_disk_cache(*, reason: str = "") -> None:
+    """新对局开始时清空整盘 ``games``（对局结束、结算流程不调用）。"""
+    _ = reason  # 供调用方在日志中说明触发源
     _save_disk_cache({"games": {}})
 
 

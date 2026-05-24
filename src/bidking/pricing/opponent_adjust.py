@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from ..analysis._board_pricing import map_id_from_board_snapshot
@@ -177,18 +178,23 @@ def _secret_auction_prev_round_rank_detail(
     board_snapshot: dict[str, Any],
     round_no: int,
 ) -> dict[str, Any]:
-    """上一拍卖列（与 ``opponent_last_bid_default_from_snapshot`` 的 ``grid_round`` 一致）的排名信号。"""
+    """上一拍卖列排名信号。
+
+    ``ref_round_no``：与 ``self_bid_history`` / ``get_self_gold_bid`` 一致的 1-based 回合（``round_no - 1``）。
+    ``rank_signal_round``：PriceLog ``Round`` 键（0 起）；第 N 回合出价前仅 0..N-2 已写入，故用 ``ref_round_no - 1``。
+    """
     players = (board_snapshot.get("game_state") or {}).get("players") or {}
     if not isinstance(players, dict) or not players:
         return {"skip": "no_players"}
     ref_r = max(1, int(round_no) - 1)
+    rank_signal_round = max(0, ref_r - 1)
     self_uid, _ = board_snapshot_self_identity(config, board_snapshot)
     my_rank: int | None = None
     opp_ranks: list[int] = []
     for p_uid, pdata in players.items():
         if not isinstance(pdata, dict):
             continue
-        rk = player_round_rank_signal(pdata, ref_r)
+        rk = player_round_rank_signal(pdata, rank_signal_round)
         if rk is None:
             continue
         is_self = bool(self_uid and str(p_uid) == self_uid)
@@ -203,11 +209,46 @@ def _secret_auction_prev_round_rank_detail(
     return {
         "mode": "secret_rank",
         "ref_round_no": ref_r,
+        "rank_signal_round": rank_signal_round,
         "my_rank_prev": my_rank,
         "opponent_ranks_prev": opp_ranks,
         "opponent_best_rank_prev": opp_best,
         "behind_by": behind,
     }
+
+
+def _log_secret_auction_opponent_debug(
+    *,
+    round_no: int,
+    bid_i: int,
+    detail: dict[str, Any],
+    bid_pre: int | None = None,
+    rank_mult_cfg: dict[str, Any] | None = None,
+    o_estimated: float | None = None,
+    tag: str | None = None,
+    out: int | None = None,
+) -> None:
+    """隐秘对手调整：将 bid_pre / 乘数配置 / o_estimated / detail 打到控制台。"""
+    from ..logsys.app_log import log_info
+
+    parts: list[str] = [f"round={round_no}", f"bid_i={bid_i}"]
+    if bid_pre is not None:
+        parts.append(f"bid_pre={bid_pre}")
+    if o_estimated is not None:
+        parts.append(f"o_estimated={int(round(o_estimated))}")
+    if rank_mult_cfg is not None:
+        parts.append(
+            "rank_mult_cfg="
+            + json.dumps(rank_mult_cfg, ensure_ascii=False, separators=(",", ":"))
+        )
+    if tag:
+        parts.append(f"tag={tag}")
+    if out is not None:
+        parts.append(f"out={out}")
+    parts.append(
+        "detail=" + json.dumps(detail, ensure_ascii=False, separators=(",", ":"))
+    )
+    log_info(" ".join(parts), tag="secret_opp")
 
 
 def apply_secret_auction_rank_opponent_adjustment(
@@ -238,16 +279,25 @@ def apply_secret_auction_rank_opponent_adjustment(
 
     if r_no <= 2:
         detail["skip"] = "round_lte_1"
+        _log_secret_auction_opponent_debug(
+            round_no=r_no, bid_i=bid_i, detail=detail, tag=None, out=bid_i
+        )
         return bid_i, None, detail
 
     my_rank_signal = detail.get("my_rank_prev")
     if my_rank_signal is None:
         detail["skip"] = "no_self_rank_prev"
+        _log_secret_auction_opponent_debug(
+            round_no=r_no, bid_i=bid_i, detail=detail, tag=None, out=bid_i
+        )
         return bid_i, None, detail
 
     rank_slot = _secret_rank_slot(detail.get("my_rank_prev"))
     if rank_slot is None:
         detail["skip"] = "invalid_self_rank_prev"
+        _log_secret_auction_opponent_debug(
+            round_no=r_no, bid_i=bid_i, detail=detail, tag=None, out=bid_i
+        )
         return bid_i, None, detail
 
     # 获取上回合自己的金币出价（隐秘图读缓存，不读 players.prices）
@@ -256,6 +306,9 @@ def apply_secret_auction_rank_opponent_adjustment(
     if bid_pre is None or bid_pre <= 0:
         detail["skip"] = "no_self_bid_prev"
         detail["bid_pre_source"] = "self_bid_history"
+        _log_secret_auction_opponent_debug(
+            round_no=r_no, bid_i=bid_i, detail=detail, bid_pre=bid_pre, tag=None, out=bid_i
+        )
         return bid_i, None, detail
 
     rank_mult_cfg = resolve_secret_auction_rank_opponent_multipliers(config, price_config)
@@ -270,11 +323,24 @@ def apply_secret_auction_rank_opponent_adjustment(
     detail["secret_auction_rank_multipliers"] = rank_mult_cfg
     detail["o_estimated_raw"] = o_estimated
 
+    def _finish(tag: str, out: int) -> tuple[int, str, dict[str, Any]]:
+        _log_secret_auction_opponent_debug(
+            round_no=r_no,
+            bid_i=bid_i,
+            bid_pre=int(bid_pre),
+            rank_mult_cfg=rank_mult_cfg,
+            o_estimated=o_estimated,
+            detail=detail,
+            tag=tag,
+            out=out,
+        )
+        return out, tag, detail
+
     # r5+ 特殊处理：最终轮激进出价
     if r_no >= 5:
         out = int((bid_i + o_estimated) / 2.0 + 1000)
         detail["final_round"] = True
-        return out, "secret_opp_final", detail
+        return _finish("secret_opp_final", out)
     mult = resolve_round_multiplier(round_no, price_config)
     # 调价阈值（类似aisha的adj）
     adj = o_estimated * mult + 1000
@@ -284,21 +350,21 @@ def apply_secret_auction_rank_opponent_adjustment(
     if bid_i > adj:
         # 当前估价远高于预估对手价+缓冲，折中出价
         out = int(round((bid_i + adj) / 2))
-        return out, "secret_opp_low", detail
+        return _finish("secret_opp_low", out)
 
     if bid_i > o_estimated:
         # 当前估价高于预估对手价，压低到预估价附近
         out = int(o_estimated)
-        return out, "secret_opp_est", detail
+        return _finish("secret_opp_est", out)
 
     if bid_i > bid_pre:
         # 当前估价高于上回合自己出价，折中但不超过预估对手价
         out = int(min(o_estimated, (bid_i + bid_pre) / 2))
-        return out, "secret_opp_pre", detail
+        return _finish("secret_opp_pre", out)
 
     # 其他情况：保守跟进，取当前估价与预估对手价的均值
     out = int(round((bid_i + o_estimated) / 2))
-    return out, "secret_opp_sticky", detail
+    return _finish("secret_opp_sticky", out)
 
 
 def opponent_last_bid_default_from_snapshot(

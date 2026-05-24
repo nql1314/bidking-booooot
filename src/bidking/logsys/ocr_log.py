@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from .app_log import append_app_log, log_timestamp
+from .app_log import log_timestamp
 
 _OCR_LOG_ENABLED = False
 
@@ -25,4 +25,3 @@ def ocr_log(message: str) -> None:
         return
     line = f"[{log_timestamp()}] [ocr] {message}"
     print(line, flush=True)
-    append_app_log(line)

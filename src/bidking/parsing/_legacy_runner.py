@@ -115,7 +115,7 @@ def run(
         if event_type == 'S2C_33_game_start_notify':
             state = GameState()
             game_active = True
-            handle_s2c33(data, state, csv_index, csv_items, cur_out)
+            handle_s2c33(data, state, csv_index, csv_items, cur_out, clear_bid_cache=False)
 
         elif event_type == 'S2C_37_game_next_round_notify' and game_active:
             handle_s2c37(data, state, csv_index, csv_items, cur_out)
@@ -161,7 +161,7 @@ def parse_last_game(
         if event_type == 'S2C_33_game_start_notify':
             cur_state = GameState()
             game_active = True
-            handle_s2c33(data, cur_state, csv_index, csv_items, silent)
+            handle_s2c33(data, cur_state, csv_index, csv_items, silent, clear_bid_cache=False)
 
         elif event_type == 'S2C_37_game_next_round_notify' and game_active:
             handle_s2c37(data, cur_state, csv_index, csv_items, silent)
@@ -238,7 +238,7 @@ def parse_last_game_rounds(
             cur_snapshots = []
             skill_logs = []
             game_active = True
-            handle_s2c33(data, cur_state, csv_index, csv_items, silent)
+            handle_s2c33(data, cur_state, csv_index, csv_items, silent, clear_bid_cache=False)
             skill_logs.append(skill_log_entry_for_raw_pricing(event_type, data))
             cur_snapshots.append(
                 ("第 1 回合", copy.deepcopy(cur_state), list(skill_logs))

@@ -34,6 +34,8 @@ def handle_s2c33(
     csv_index: Dict[int, CsvItem],
     csv_items: List[CsvItem],
     out,
+    *,
+    clear_bid_cache: bool = True,
 ) -> None:
     """
     S2C_33_game_start_notify — 游戏开始（第 1 回合）。
@@ -50,12 +52,13 @@ def handle_s2c33(
     state.match_started_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     state.match_ended_at = ""
 
-    try:
-        from ..pricing.self_bid_cache import clear_self_bid_disk_cache
+    if clear_bid_cache:
+        try:
+            from ..pricing.self_bid_cache import clear_self_bid_disk_cache
 
-        clear_self_bid_disk_cache()
-    except Exception:
-        pass
+            clear_self_bid_disk_cache(reason="S2C_33_game_start_notify")
+        except Exception:
+            pass
 
     print(f"\n{SEP}", file=out)
     print(f"  第 1 回合  [游戏开始]", file=out)
