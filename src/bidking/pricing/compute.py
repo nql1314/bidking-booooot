@@ -193,12 +193,10 @@ def compute_price(
             ):
                 fin = int(round(fin * 0.66))
             else:
-                mid_ct = map_id_from_board_snapshot(bs)
                 if (
-                    mid_ct is not None
-                    and map_bundle_is_container_series(int(mid_ct))
-                    and self_uid_auth not in author_uids
+                    self_uid_auth not in author_uids
                     and author_uids.intersection(opp_uids_auth)
+                    and effective_round >= 4
                 ):
                     fin = int(round(fin * 0.88))
     fin, payload = apply_human_like_price_tail(fin, payload)
