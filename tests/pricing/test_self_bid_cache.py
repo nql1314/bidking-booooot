@@ -70,8 +70,8 @@ def test_secret_opponent_uses_cached_bid_pre_not_rank_signal(tmp_path, monkeypat
         "game_state": {
             "map_id": 4501,
             "players": {
-                "941456831344888": {"name": "self", "prices": {"0": 2, "1": 3, "2": 3}},
-                "111": {"name": "a", "prices": {"0": 3, "1": 1, "2": 1}},
+                "941456831344888": {"name": "self", "prices": {"0": 2, "1": 3}},
+                "111": {"name": "a", "prices": {"0": 3, "1": 1}},
             },
         },
         SELF_BID_HISTORY_SNAPSHOT_KEY: {"2": 500_000},
@@ -79,6 +79,7 @@ def test_secret_opponent_uses_cached_bid_pre_not_rank_signal(tmp_path, monkeypat
     out, tag, detail = apply_secret_auction_rank_opponent_adjustment(
         cfg, 800_000, 3, board_snapshot=snap, price_config={}
     )
+    assert detail.get("rank_signal_round") == 1
     assert detail.get("bid_pre") == 500_000
     assert detail.get("rank_slot_for_multiplier") == 3
     assert detail.get("my_rank_prev") == 3

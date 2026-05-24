@@ -240,7 +240,7 @@ FIELD_META: dict[str, dict[str, str]] = {
     },
     "pricing.late_round_low_bid_surrender_after_round": {
         "label": "认输生效回合",
-        "description": "从第几回合起启用后期低价认输（含该回合）。",
+        "description": "从第几回合起（含该回合）启用后期低价认输。",
     },
     "pricing.late_round_low_bid_surrender_below": {
         "label": "认输出价阈值",

@@ -187,7 +187,7 @@
       "path": "pricing.late_round_low_bid_surrender_after_round",
       "type": "int",
       "label": "认输生效回合",
-      "description": "从第几回合起启用后期低价认输（含该回合）。",
+      "description": "从第几回合起（含该回合）启用后期低价认输。",
       "scope": "both",
       "group": "出价",
       "hide": false

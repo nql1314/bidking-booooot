@@ -2703,12 +2703,35 @@ class GridWindow:
             self._est_label_aisha.config(text="仓位估价  —")
 
         board_for_compute = {**base, "pricing": p}
+        gs_uid = str((base.get("game_state") or {}).get("uid") or "").strip()
+        if gs_uid:
+            board_for_compute["game_uid"] = gs_uid
+        try:
+            from ...pricing.self_bid_cache import merge_self_bid_history_for_snapshot
+
+            merge_self_bid_history_for_snapshot(
+                board_for_compute, game_uid=gs_uid or None
+            )
+        except Exception:
+            pass
         grid_strategy_role = resolve_strategy_role_from_board_snapshot(
             board_for_compute
         )
         rnd = int(self.state.current_round or 1)
         mid_raw = int(self.state.map_id or 0)
         map_sig = map_bundle_key_for_automation(mid_raw) if mid_raw > 0 else ""
+        hist_raw = board_for_compute.get("self_bid_history")
+        hist_sig: tuple[tuple[str, int], ...] = ()
+        if isinstance(hist_raw, dict):
+            pairs: list[tuple[str, int]] = []
+            for k, v in hist_raw.items():
+                try:
+                    iv = int(v)
+                except (TypeError, ValueError):
+                    continue
+                if iv > 0:
+                    pairs.append((str(k), iv))
+            hist_sig = tuple(sorted(pairs))
         sig = (
             rnd,
             map_sig,
@@ -2718,6 +2741,7 @@ class GridWindow:
             p.get("points_floor"),
             p.get("points_ceiling"),
             grid_strategy_role,
+            hist_sig,
         )
         if self._header_compute_sig != sig:
             try:
