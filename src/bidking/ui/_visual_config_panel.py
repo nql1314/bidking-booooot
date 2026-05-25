@@ -327,8 +327,9 @@ class VisualConfigPanel:
 
     def _rebuild_field_forms(self) -> None:
         schema = load_visual_config_schema()
+        map_key = self._effective_map_key()
         config_fields = schema_fields_for_scope(schema, "config")
-        map_fields = schema_fields_for_scope(schema, "map")
+        map_fields = schema_fields_for_scope(schema, "map", map_bundle_key=map_key)
 
         self._populate_scope_fields(
             self._config_canvas_frame,

@@ -1,8 +1,32 @@
 {
   "pricing": {
-    "fallback_bid_price": 22222
+    "fallback_bid_price": 22222,
+    "enable_big_gold_adjustment": false,
+    "enable_opponent_bid_adjustment": true,
+    "enable_vacant_red_floor_ceiling_pick": false,
+    "enable_late_round_low_bid_surrender": false,
+    "late_round_low_bid_surrender_after_round": 4,
+    "late_round_low_bid_surrender_below": 222222,
+    "late_round_low_bid_surrender_bid": 88888,
+    "secret_auction_rank_opponent_multipliers": {
+      "1": 0.0,
+      "2": 0.0,
+      "3": 0.0,
+      "4": 0.0,
+      "default": 0.0
+    },
+    "vacant_red_floor_ceiling_pick_mode": "normal"
   },
   "automation": {
+    "express_station_round1_emoji": {
+      "enabled": false,
+      "emoji": "遗憾",
+      "character_name": "艾哈迈德",
+      "character_title": "狂热博士",
+      "seat_1_price": 520,
+      "seat_2_price": 144,
+      "wait_after_send_seconds": 3.0
+    },
     "bid_cap_price": 250000,
     "bid_ratio_by_round": {
       "1": 0.8,
@@ -10,6 +34,8 @@
       "3": 0.9,
       "4": 1.0,
       "5": 1.1
-    }
+    },
+    "aisha_round4_tool_min_vacant": 30,
+    "enable_aisha_round4_tool_vacant_gate": false
   }
 }

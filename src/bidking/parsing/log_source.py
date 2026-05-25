@@ -76,6 +76,26 @@ def skill_log_game_data_subset(data: dict) -> Dict[str, Any]:
     return out
 
 
+def emoji_signal_log_entry(event_type: str, data: dict, *, received_at_unix: float = 0.0) -> dict:
+    """
+    写入 ``skill_logs`` 的表情信号条目（与 ``game_data`` 技能子集并列）。
+
+    ``emoji_signal`` 保留 ``GameUid`` / ``UserUid`` / ``EmojiCid`` 原字段名，便于回放与 Bot 消费。
+    """
+    import time
+
+    payload = data if isinstance(data, dict) else {}
+    return {
+        "event_type": str(event_type),
+        "emoji_signal": {
+            "GameUid": str(payload.get("GameUid") or ""),
+            "UserUid": str(payload.get("UserUid") or ""),
+            "EmojiCid": int(payload.get("EmojiCid") or 0),
+        },
+        "received_at_unix": float(received_at_unix or time.time()),
+    }
+
+
 def iter_log_lines(path: str, tail: bool = False) -> Generator[Optional[str], None, None]:
     """
     逐行迭代日志文件。

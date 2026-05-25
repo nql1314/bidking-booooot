@@ -13,7 +13,8 @@ S2C 事件处理器
 import datetime
 from typing import Dict, List
 
-from .constants import ITEM_TOOLS, SEP, SKILL_TO_CATEGORY, THIN
+from .constants import ITEM_TOOLS, SEP, SKILL_TO_CATEGORY, THIN, fmt_emoji_cid
+from .events import GameUseEmojiEvent
 from .state import CsvItem, GameState
 from .processors import (
     process_hero_skill_log,
@@ -51,6 +52,7 @@ def handle_s2c33(
     state.update_players(gd.get('UserLog', []))
     state.match_started_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     state.match_ended_at = ""
+    state.emoji_events.clear()
 
     if clear_bid_cache:
         try:
@@ -191,6 +193,55 @@ def handle_s2c39(
 
     if shown_header:
         out.flush()
+
+
+def parse_game_use_emoji_notify(
+    data: dict,
+    state: GameState,
+) -> GameUseEmojiEvent:
+    """从 ``S2C_265_game_use_emoji_notify`` JSON 解析并写入 ``state.emoji_events``。"""
+    ev = GameUseEmojiEvent.from_notify(data, round_no=int(state.current_round or 1))
+    p = state.players.get(ev.user_uid)
+    if isinstance(p, dict):
+        ev.player_name = str(p.get("name") or ev.user_uid)
+    else:
+        ev.player_name = ev.user_uid or "?"
+    state.emoji_events.append(
+        {
+            "game_uid": ev.game_uid,
+            "user_uid": ev.user_uid,
+            "emoji_cid": int(ev.emoji_cid),
+            "round": int(ev.round_no or state.current_round or 1),
+            "player_name": ev.player_name,
+        }
+    )
+    return ev
+
+
+def handle_s2c265(
+    data: dict,
+    state: GameState,
+    csv_index: Dict[int, CsvItem],
+    csv_items: List[CsvItem],
+    out,
+) -> GameUseEmojiEvent:
+    """
+    S2C_265_game_use_emoji_notify — 玩家使用表情。
+
+    记录表情信号到 ``state.emoji_events``，并输出一行可读日志。
+    """
+    del csv_index, csv_items  # 表情事件不依赖物品库
+    ev = parse_game_use_emoji_notify(data, state)
+    emoji_label = fmt_emoji_cid(ev.emoji_cid)
+    who = ev.player_name or ev.user_uid or "?"
+    round_tag = f"第{ev.round_no}回合" if ev.round_no else "?"
+    print(
+        f"\n  [表情信号] {who}  {emoji_label}  ({round_tag}, EmojiCid={ev.emoji_cid})",
+        file=out,
+    )
+    print(f"  对局: {ev.game_uid}   UID: {ev.user_uid}", file=out)
+    out.flush()
+    return ev
 
 
 def handle_s2c45(

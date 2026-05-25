@@ -85,6 +85,86 @@
       "hide": false
     },
     {
+      "path": "automation.express_station_round1_emoji.enabled",
+      "type": "bool",
+      "label": "快递站开局发表情",
+      "description": "快递站系列地图第1回合：先点表情入口 (57,1015)（客户端 left_top），等待 1 秒后再点所选表情。",
+      "scope": "map",
+      "group": "自动化",
+      "map_bundle_keys": ["210"],
+      "hide": false
+    },
+    {
+      "path": "automation.express_station_round1_emoji.emoji",
+      "type": "enum",
+      "label": "快递站开局表情",
+      "description": "第1回合发表情时点击的表情项（客户端 left_top 坐标见 Bot 实现）。",
+      "scope": "map",
+      "group": "自动化",
+      "map_bundle_keys": ["210"],
+      "hide": false,
+      "choices": [
+        "问候",
+        "自信",
+        "嘲讽",
+        "惊讶",
+        "遗憾",
+        "感谢",
+        "赞赏",
+        "生气"
+      ]
+    },
+    {
+      "path": "automation.express_station_round1_emoji.wait_after_send_seconds",
+      "type": "float",
+      "label": "发表情后等待（秒）",
+      "description": "第1回合发送表情后轮询快照，等待对手回相同表情的最长秒数；仅当对手 EmojiCid 与己方所选表情一致时采用暗号价，否则走后端估价。0 表示不额外等待。",
+      "scope": "map",
+      "group": "自动化",
+      "map_bundle_keys": ["210"],
+      "hide": false
+    },
+    {
+      "path": "automation.express_station_round1_emoji.seat_1_price",
+      "type": "int",
+      "label": "快递站暗号价（座位1）",
+      "description": "开局表情已开启且对手回相同表情时：OCR 第 1 席身份区匹配顾问则为座位 1，使用的固定出价（跳过快照估价）。",
+      "scope": "map",
+      "group": "自动化",
+      "map_bundle_keys": ["210"],
+      "hide": false
+    },
+    {
+      "path": "automation.express_station_round1_emoji.seat_2_price",
+      "type": "int",
+      "label": "快递站暗号价（座位2）",
+      "description": "开局表情已开启且对手回相同表情时：OCR 第 1 席非己方时视为座位 2，使用的固定出价（跳过快照估价）。",
+      "scope": "map",
+      "group": "自动化",
+      "map_bundle_keys": ["210"],
+      "hide": false
+    },
+    {
+      "path": "automation.express_station_round1_emoji.character_name",
+      "type": "str",
+      "label": "暗号判席角色名",
+      "description": "OCR 第 1 席名字区须包含此字符串才视为座位 1（与 character_title 同时匹配）。按地图配置，不同快递站图可填不同角色。",
+      "scope": "map",
+      "group": "自动化",
+      "map_bundle_keys": ["210"],
+      "hide": false
+    },
+    {
+      "path": "automation.express_station_round1_emoji.character_title",
+      "type": "str",
+      "label": "暗号判席称号",
+      "description": "单个称号字符串，如「狂热博士」；OCR 第 1 席称号区须包含该字符串。",
+      "scope": "map",
+      "group": "自动化",
+      "map_bundle_keys": ["210"],
+      "hide": false
+    },
+    {
       "path": "automation.enable_map_entry_money_check",
       "type": "bool",
       "label": "主界面资产准入检查",

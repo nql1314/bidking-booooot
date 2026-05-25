@@ -58,7 +58,7 @@ from ...parsing.constants import (
     fmt_categories_any,
     fmt_shape,
 )
-from ...parsing.handlers import handle_s2c33, handle_s2c37, handle_s2c39, handle_s2c45
+from ...parsing.handlers import handle_s2c33, handle_s2c37, handle_s2c39, handle_s2c45, handle_s2c265
 from ...parsing.item_db import (
     candidate_probabilities,
     map_bundle_key_for_automation,
@@ -67,7 +67,11 @@ from ...parsing.item_db import (
     query_item,
 )
 from ...parsing.skill_bindings import VIKTOR_COMBINED_HIGH_TIER_ITEM_COUNT_KEY
-from ...parsing.log_source import extract_event, skill_log_game_data_subset
+from ...parsing.log_source import (
+    emoji_signal_log_entry,
+    extract_event,
+    skill_log_game_data_subset,
+)
 from ...parsing.state import CsvItem, GameState, ItemKnowledge
 from ...analysis._board_pricing import (
     build_snapshot_pricing_dict,
@@ -1980,6 +1984,9 @@ class GridWindow:
     # ── Bot 快照 JSON ───────────────────────────────────────────────────────
 
     def _append_skill_log_entry(self, event_type: str, data: dict) -> None:
+        if event_type == "S2C_265_game_use_emoji_notify":
+            self._skill_logs.append(emoji_signal_log_entry(event_type, data))
+            return
         self._skill_logs.append(
             {
                 "event_type": event_type,
@@ -2181,6 +2188,16 @@ class GridWindow:
                         event_type == "S2C_39_game_use_item" and self._live_game_active
                     ):
                         handle_s2c39(
+                            data, self.state, self.csv_index, self.csv_items, silent
+                        )
+                        self._append_skill_log_entry(event_type, data)
+                        self._queue.put("update")
+
+                    elif (
+                        event_type == "S2C_265_game_use_emoji_notify"
+                        and self._live_game_active
+                    ):
+                        handle_s2c265(
                             data, self.state, self.csv_index, self.csv_items, silent
                         )
                         self._append_skill_log_entry(event_type, data)

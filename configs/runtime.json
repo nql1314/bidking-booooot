@@ -51,6 +51,20 @@
       "top": 41,
       "width": 187,
       "height": 53
+    },
+    "seat_1_identity": {
+      "character_name": {
+        "left": 23,
+        "top": 282,
+        "width": 65,
+        "height": 30
+      },
+      "character_titles": {
+        "left": 189,
+        "top": 171,
+        "width": 80,
+        "height": 30
+      }
     }
   },
   "clicks": {

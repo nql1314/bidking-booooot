@@ -143,6 +143,27 @@ class GameOverEvent:
     raw: Dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass
+class GameUseEmojiEvent:
+    """对应 ``S2C_265_game_use_emoji_notify``：某玩家在本局使用表情。"""
+    game_uid: str
+    user_uid: str
+    emoji_cid: int
+    round_no: Optional[int] = None
+    player_name: Optional[str] = None
+    raw: Dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_notify(cls, data: Mapping[str, Any], *, round_no: Optional[int] = None) -> "GameUseEmojiEvent":
+        return cls(
+            game_uid=str(data.get("GameUid") or ""),
+            user_uid=str(data.get("UserUid") or ""),
+            emoji_cid=int(data.get("EmojiCid") or 0),
+            round_no=round_no,
+            raw=dict(data),
+        )
+
+
 __all__ = [
     "GlobalSkillStats",
     "HitBox",
@@ -152,4 +173,5 @@ __all__ = [
     "GameStartEvent",
     "RoundEndEvent",
     "GameOverEvent",
+    "GameUseEmojiEvent",
 ]

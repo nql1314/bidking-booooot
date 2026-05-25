@@ -171,6 +171,100 @@ def _infer_ordered_wh_for_default_infer(
     return out
 
 
+def _infer_free_cells_in_prefix(
+    pseudo_blocked: Set[Tuple[int, int]],
+    suppress: Set[Tuple[int, int]],
+    max_bid: int,
+) -> Set[Tuple[int, int]]:
+    """``max_box_id`` 前缀区内、未被阻挡且未手动画板抑制的格。"""
+    free: Set[Tuple[int, int]] = set()
+    mx = int(max_bid)
+    for bid in range(mx + 1):
+        r, c = bid // GRID_COLS, bid % GRID_COLS
+        if (r, c) in pseudo_blocked or (r, c) in suppress:
+            continue
+        free.add((r, c))
+    return free
+
+
+def _infer_connected_free_region(
+    ar: int,
+    ac: int,
+    free: Set[Tuple[int, int]],
+) -> Set[Tuple[int, int]]:
+    """与 ``(ar,ac)`` 四连通的 ``free`` 子集；锚不在 ``free`` 时返回空集。"""
+    seed = (int(ar), int(ac))
+    if seed not in free:
+        return set()
+    region: Set[Tuple[int, int]] = {seed}
+    queue: List[Tuple[int, int]] = [seed]
+    while queue:
+        r, c = queue.pop()
+        for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            cell = (r + dr, c + dc)
+            if cell in free and cell not in region:
+                region.add(cell)
+                queue.append(cell)
+    return region
+
+
+def _infer_solid_rectangle_bbox(
+    cells: Set[Tuple[int, int]],
+) -> Optional[Tuple[int, int, int, int]]:
+    """
+    若 ``cells`` 恰为实心矩形，返回 ``(w, h, dc, dr)``（列宽、行高、顶左列、顶左行）；否则 ``None``。
+    """
+    if not cells:
+        return None
+    rows = [r for r, _ in cells]
+    cols = [c for _, c in cells]
+    min_r, max_r = min(rows), max(rows)
+    min_c, max_c = min(cols), max(cols)
+    h = max_r - min_r + 1
+    w = max_c - min_c + 1
+    if len(cells) != w * h:
+        return None
+    for r in range(min_r, max_r + 1):
+        for c in range(min_c, max_c + 1):
+            if (r, c) not in cells:
+                return None
+    return (w, h, min_c, min_r)
+
+
+def _infer_try_q56_rectangular_vacant_fill(
+    ar: int,
+    ac: int,
+    *,
+    box_id_confirmed: bool,
+    cand_wh: Set[Tuple[int, int]],
+    pseudo_blocked: Set[Tuple[int, int]],
+    suppress: Set[Tuple[int, int]],
+    max_bid: int,
+) -> Optional[Tuple[int, int, int, int]]:
+    """
+    锚点所在四连通空置区为完整矩形、且 CSV 候选含该区 ``(w,h)`` 时，直接以该区外接矩形占领。
+
+    ``box_id_confirmed`` 时顶左须为 ``(ar,ac)``；未确认时顶左为外接矩形左上角（锚必落在矩形内）。
+    """
+    free = _infer_free_cells_in_prefix(pseudo_blocked, suppress, max_bid)
+    region = _infer_connected_free_region(ar, ac, free)
+    if not region:
+        return None
+    bbox = _infer_solid_rectangle_bbox(region)
+    if bbox is None:
+        return None
+    w, h, dc, dr = bbox
+    if (w, h) not in cand_wh:
+        return None
+    if box_id_confirmed and (dr != ar or dc != ac):
+        return None
+    if not box_id_confirmed and not (dr <= ar < dr + h and dc <= ac < dc + w):
+        return None
+    if not _infer_rect_feasible(dr, dc, dr + h - 1, dc + w - 1, pseudo_blocked, suppress, max_bid):
+        return None
+    return (w, h, dr, dc)
+
+
 def _q56_overlay_wh_sort_key(wh: Tuple[int, int]) -> Tuple[int, int, float, int, int]:
     """
     金红 ``use_rect_q56`` 路径下 ``(w,h)`` 的尝试顺序（升序 = 优先）。
@@ -303,7 +397,8 @@ def compute_grid_overlay_infer_shapes(
       首选外形不满足时按掉落概率依次尝试其余候选外形，仍无解则跳过该件推断。
     - 当 ``raw_pricing.event_stats`` 中低档总格 **q12+q3+q4** 齐备（或 ``q1+q2+q3+q4`` 等价已知），且扫描史已覆盖品质
       1–4、场上 Q1–Q4 物品轮廓与锚格均已锁定时：对 **金 (5)、红 (6)** 在已有 CSV 候选（与默认路径相同的 ``filter_csv_candidates_for_query`` 结果非空）前提下，
-      先将候选去重为 ``(w,h)`` 集合，再按 **面积与长宽比综合**（更大面积优先；同面积时更偏方块优先于 ``1×n``/``n×1`` 长条；``1×n``/``n×1`` 且 ``n>4`` 的长条整段置后；再 ``(w,h)`` 字典序稳定）在阻挡语义与 ``max_box_id`` 下尝试放置（与默认路径相同的 ``box_id_confirmed`` 顶左/枚举规则），
+      **优先**：锚点四连通空置区（相对当前 ``pseudo_blocked`` / 手动画板抑制 / ``max_box_id`` 前缀，无其它物品占位）若恰为实心矩形且候选含该区 ``(w,h)``，则直接以该外接矩形占领；
+      否则将候选去重为 ``(w,h)`` 集合，再按 **面积与长宽比综合**（更大面积优先；同面积时更偏方块优先于 ``1×n``/``n×1`` 长条；``1×n``/``n×1`` 且 ``n>4`` 的长条整段置后；再 ``(w,h)`` 字典序稳定）在阻挡语义与 ``max_box_id`` 下尝试放置（与默认路径相同的 ``box_id_confirmed`` 顶左/枚举规则），
       取 **首个可行** 者；若均不可行则跳过该件（与低档件无解时一致）。
       金优先于红；每推断成功一件即将其矩形并入后续件的阻挡集。
     """
@@ -380,16 +475,25 @@ def compute_grid_overlay_infer_shapes(
                 wh = shape_wh_from_snapshot(c.shape)
                 cand_wh.add(wh)
             ordered_wh = sorted(cand_wh, key=_q56_overlay_wh_sort_key)
-            chosen_q56: Optional[Tuple[int, int, int, int]] = None
-            for w, h in ordered_wh:
-                for dr, dc in _infer_default_placement_candidates(
-                    ar, ac, w, h, box_id_confirmed=confirmed_tl
-                ):
-                    if _infer_rect_feasible(dr, dc, dr + h - 1, dc + w - 1, pseudo_blocked, sup, mx):
-                        chosen_q56 = (w, h, dr, dc)
+            chosen_q56 = _infer_try_q56_rectangular_vacant_fill(
+                ar,
+                ac,
+                box_id_confirmed=confirmed_tl,
+                cand_wh=cand_wh,
+                pseudo_blocked=pseudo_blocked,
+                suppress=sup,
+                max_bid=mx,
+            )
+            if chosen_q56 is None:
+                for w, h in ordered_wh:
+                    for dr, dc in _infer_default_placement_candidates(
+                        ar, ac, w, h, box_id_confirmed=confirmed_tl
+                    ):
+                        if _infer_rect_feasible(dr, dc, dr + h - 1, dc + w - 1, pseudo_blocked, sup, mx):
+                            chosen_q56 = (w, h, dr, dc)
+                            break
+                    if chosen_q56 is not None:
                         break
-                if chosen_q56 is not None:
-                    break
             if chosen_q56 is None:
                 continue
             w, h, dr, dc = chosen_q56
