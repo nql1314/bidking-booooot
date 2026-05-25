@@ -193,6 +193,9 @@ class BotConfigPanel:
         ttk.Button(save_row, text="保存出价参数", command=self._save_pricing_form).pack(
             side="left",
         )
+        ttk.Button(
+            save_row, text="从磁盘重载", command=self._reload_pricing_form_from_disk,
+        ).pack(side="left", padx=(8, 0))
         self.pricing_status_var = tk.StringVar(value="")
         ttk.Label(save_row, textvariable=self.pricing_status_var, foreground="gray").pack(
             side="left", padx=(10, 0),
@@ -337,8 +340,8 @@ class BotConfigPanel:
             pr = data.get("pricing") if isinstance(data.get("pricing"), dict) else {}
             au = data.get("automation") if isinstance(data.get("automation"), dict) else {}
         else:
-            pr = self.config.get("pricing") or {}
-            au = self.config.get("automation") or {}
+            pr = {}
+            au = {}
         self.fallback_bid_var.set(str(pr.get("fallback_bid_price", 22223)))
         self.bid_cap_var.set(str(au.get("bid_cap_price", 0)))
         br_src = au.get("bid_ratio_by_round") if isinstance(au.get("bid_ratio_by_round"), dict) else {}
@@ -391,6 +394,17 @@ class BotConfigPanel:
                 "bid_ratio_by_round": bid_ratio,
             },
         }
+
+    def _reload_pricing_form_from_disk(self) -> None:
+        try:
+            mk = self._effective_map_key()
+            if not mk:
+                raise ValueError("请先在上方下拉里选择地图")
+            self._load_map_pricing_fields(mk)
+            self.pricing_status_var.set(f"已从磁盘加载 {mk}")
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            self.pricing_status_var.set(f"重载失败: {exc}")
+            messagebox.showerror("出价参数", str(exc))
 
     def _save_pricing_form(self) -> None:
         try:

@@ -38,6 +38,9 @@ _MAP_QUALITY_UNIT_LABELS: dict[str, str] = {
     "q56": "金+红 (Q56) 格单价",
 }
 
+# 隐秘拍卖档与 24x/25x 共用格单价（游戏侧归并）；UI 仅提示去对应明拍档编辑
+_DARK_MAP_UNIT_PRICE_SOURCE: dict[str, str] = {"440": "240", "450": "250"}
+
 
 def _load_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8-sig"))
@@ -76,6 +79,9 @@ class VisualConfigPanel:
         self._config_bindings: list[_FieldBinding] = []
         self._map_bindings: list[_FieldBinding] = []
         self._map_quality_unit_vars: dict[str, tk.StringVar] = {}
+        self._autosave_after: dict[str, str | None] = {"config": None, "map": None}
+        self._autosave_ms = 600
+        self._rebuilding_form = False
 
         self._reload_config_sources()
         self._build_ui(parent)
@@ -115,9 +121,8 @@ class VisualConfigPanel:
             outer,
             text=(
                 "字段定义来自 configs/visual_config_schema.json；hide=true 的项不在本页显示。\n"
-                "鼠标悬停字段名可查看说明。左侧写入 configs/config.json；"
-                "右侧写入 configs/pricing.maps/<地图>.json。"
-                "scope=both 的项在两区均可编辑，保存时各自写入对应文件。"
+                "左侧仅显示/编辑 configs/config.json；右侧仅显示/编辑当前地图的 pricing.maps 文件，"
+                "不合并 runtime 或其它地图。修改后自动保存；可用「从磁盘重载」放弃未保存编辑。"
             ),
             foreground="#555577",
             justify="left",
@@ -155,12 +160,10 @@ class VisualConfigPanel:
         self._config_canvas_frame = self._build_scope_column(
             config_wrap,
             title="主配置（configs/config.json）",
-            save_cmd=self._save_config_scope,
         )
         self._map_canvas_frame = self._build_scope_column(
             map_wrap,
             title="当前地图（configs/pricing.maps/<id>.json）",
-            save_cmd=self._save_map_scope,
         )
 
         self.schema_path_var.set(str(visual_config_schema_path()))
@@ -170,14 +173,9 @@ class VisualConfigPanel:
         parent: tk.Widget,
         *,
         title: str,
-        save_cmd,
     ) -> ttk.Frame:
         box = ttk.LabelFrame(parent, text=title, padding=6)
         box.pack(fill="both", expand=True)
-
-        bar = ttk.Frame(box)
-        bar.pack(fill="x", pady=(0, 4))
-        ttk.Button(bar, text="保存", command=save_cmd).pack(side="left")
 
         canvas = tk.Canvas(box, highlightthickness=0)
         vsb = ttk.Scrollbar(box, orient="vertical", command=canvas.yview)
@@ -213,7 +211,8 @@ class VisualConfigPanel:
         bindings: list[_FieldBinding],
         fields: list[dict[str, Any]],
         data: dict[str, Any],
-        merged_fallback: dict[str, Any],
+        *,
+        autosave_scope: str,
     ) -> None:
         inner: ttk.Frame = box._inner_frame  # type: ignore[attr-defined]
         for child in inner.winfo_children():
@@ -253,8 +252,6 @@ class VisualConfigPanel:
                 grp.columnconfigure(1, weight=1)
 
                 val = get_by_path(data, path)
-                if val is None:
-                    val = get_by_path(merged_fallback, path)
                 ftype = str(field.get("type") or "str").strip().lower()
                 if ftype == "bool":
                     var.set(bool(val))
@@ -264,8 +261,58 @@ class VisualConfigPanel:
                 else:
                     var.set(format_field_value(val, field))
 
-                bindings.append(_FieldBinding(field, var, widget))
+                fb = _FieldBinding(field, var, widget)
+                bindings.append(fb)
+                self._bind_autosave(fb, autosave_scope)
                 gi += 1
+
+    def _bind_autosave(self, binding: _FieldBinding, scope: str) -> None:
+        field = binding.field
+        ftype = str(field.get("type") or "str").strip().lower()
+
+        def _schedule(*_args: object) -> None:
+            if self._rebuilding_form:
+                return
+            self._schedule_autosave(scope)
+
+        if ftype == "json" and isinstance(binding.widget, tk.Text):
+            binding.widget.bind("<KeyRelease>", lambda _e: _schedule())
+            return
+        try:
+            binding.var.trace_add("write", lambda *_a: _schedule())
+        except tk.TclError:
+            pass
+
+    def _schedule_autosave(self, scope: str) -> None:
+        job = self._autosave_after.get(scope)
+        if job:
+            try:
+                self._top.after_cancel(job)
+            except tk.TclError:
+                pass
+        if scope == "config":
+            cmd = self._save_config_scope
+        else:
+            cmd = self._save_map_scope
+        self._autosave_after[scope] = self._top.after(self._autosave_ms, cmd)
+
+    def _cancel_pending_autosave(self) -> None:
+        for scope in ("config", "map"):
+            job = self._autosave_after.get(scope)
+            if job:
+                try:
+                    self._top.after_cancel(job)
+                except tk.TclError:
+                    pass
+            self._autosave_after[scope] = None
+
+    def _flush_autosave(self) -> None:
+        """切换地图前：立即写入待保存的编辑。"""
+        self._cancel_pending_autosave()
+        if self._config_bindings:
+            self._save_config_scope(silent=True)
+        if self._map_bindings or self._map_quality_unit_vars:
+            self._save_map_scope(silent=True)
 
     def _make_widget(
         self,
@@ -326,34 +373,46 @@ class VisualConfigPanel:
         self._rebuild_field_forms()
 
     def _rebuild_field_forms(self) -> None:
-        schema = load_visual_config_schema()
-        map_key = self._effective_map_key()
-        config_fields = schema_fields_for_scope(schema, "config")
-        map_fields = schema_fields_for_scope(schema, "map", map_bundle_key=map_key)
+        self._rebuilding_form = True
+        try:
+            schema = load_visual_config_schema()
+            map_key = self._effective_map_key()
+            config_fields = schema_fields_for_scope(schema, "config")
+            map_fields = schema_fields_for_scope(schema, "map", map_bundle_key=map_key)
 
-        self._populate_scope_fields(
-            self._config_canvas_frame,
-            self._config_bindings,
-            config_fields,
-            self.overlay,
-            self.config,
-        )
-        map_merged = self.config
-        if self.map_doc:
-            from ..config.pricing import deep_merge
+            self._populate_scope_fields(
+                self._config_canvas_frame,
+                self._config_bindings,
+                config_fields,
+                self.overlay,
+                autosave_scope="config",
+            )
+            self._populate_scope_fields(
+                self._map_canvas_frame,
+                self._map_bindings,
+                map_fields,
+                self.map_doc,
+                autosave_scope="map",
+            )
+            self._populate_map_quality_unit_section(self._map_canvas_frame)
+        finally:
+            self._rebuilding_form = False
 
-            map_merged = deep_merge(self.config, self.map_doc)
-        self._populate_scope_fields(
-            self._map_canvas_frame,
-            self._map_bindings,
-            map_fields,
-            self.map_doc,
-            map_merged,
-        )
-        self._populate_map_quality_unit_section(self._map_canvas_frame, self.map_doc)
+    def _map_quality_unit_source_bundle(self, map_key: str | None = None) -> str:
+        """格单价配置所在档键（440→240、450→250，其余为自身）。"""
+        mk = (map_key or self._effective_map_key()).strip()
+        return _DARK_MAP_UNIT_PRICE_SOURCE.get(mk, mk)
 
-    def _representative_map_id_for_editor(self) -> int:
-        mk = self._effective_map_key()
+    def _map_quality_unit_editable(self, map_key: str | None = None) -> bool:
+        mk = (map_key or self._effective_map_key()).strip()
+        return bool(mk) and mk not in _DARK_MAP_UNIT_PRICE_SOURCE
+
+    def _load_pricing_map_doc(self, map_bundle_key: str) -> dict[str, Any]:
+        path = pricing_map_overlay_path(map_bundle_key)
+        return _load_json(path) if path.is_file() else {}
+
+    def _representative_map_id_for_editor(self, map_bundle_key: str | None = None) -> int:
+        mk = (map_bundle_key or self._map_quality_unit_source_bundle()).strip()
         if not mk:
             return 0
         try:
@@ -384,14 +443,27 @@ class VisualConfigPanel:
         p50 = self._fmt_ref_price(row.get("p50_per_cell"))
         return f"CSV 指导价（格）：均价 {avg}　P25 {p25}　P50 {p50}"
 
-    def _populate_map_quality_unit_section(
-        self,
-        box: ttk.Frame,
-        map_doc: dict[str, Any],
-    ) -> None:
+    def _format_unit_overrides_summary(self, overrides: dict[str, Any]) -> str:
+        parts: list[str] = []
+        for cfg_key in CONFIG_KEYS:
+            v = overrides.get(cfg_key)
+            if v is None:
+                continue
+            try:
+                f = float(v)
+            except (TypeError, ValueError):
+                continue
+            if f <= 0:
+                continue
+            label = _MAP_QUALITY_UNIT_LABELS.get(cfg_key, cfg_key)
+            disp = str(int(f)) if f == int(f) else str(f)
+            parts.append(f"{label}={disp}")
+        return "；".join(parts) if parts else "（未设置覆盖，使用 CSV 均价）"
+
+    def _populate_map_quality_unit_section(self, box: ttk.Frame) -> None:
         inner: ttk.Frame = box._inner_frame  # type: ignore[attr-defined]
-        rep_mid = self._representative_map_id_for_editor()
-        refs = load_map_quality_unit_price_refs(rep_mid) if rep_mid > 0 else {}
+        mk = self._effective_map_key()
+        shared = self._map_quality_unit_source_bundle(mk)
 
         grp = ttk.LabelFrame(
             inner,
@@ -400,21 +472,50 @@ class VisualConfigPanel:
         )
         grp.grid(row=999, column=0, sticky="ew", pady=(0, 8))
         inner.columnconfigure(0, weight=1)
+        self._map_quality_unit_vars.clear()
+
+        if not self._map_quality_unit_editable(mk):
+            hint = (
+                f"地图档 {mk}（隐秘拍卖）与 {shared} 档共用格单价，本页不支持在此设置。\n"
+                f"请在上方「编辑地图」中选择「{shared}」，在 configs/pricing.maps/{shared}.json 中修改。"
+            )
+            ttk.Label(grp, text=hint, foreground="#555577", wraplength=520, justify="left").grid(
+                row=0, column=0, columnspan=2, sticky="w", pady=(0, 6)
+            )
+            shared_doc = self._load_pricing_map_doc(shared)
+            pricing = (
+                shared_doc.get("pricing") if isinstance(shared_doc.get("pricing"), dict) else {}
+            )
+            overrides = pricing.get("map_quality_unit_per_cell")
+            if not isinstance(overrides, dict):
+                overrides = {}
+            summary = self._format_unit_overrides_summary(overrides)
+            ttk.Label(
+                grp,
+                text=f"当前 {shared} 档生效：{summary}",
+                foreground="#666688",
+                wraplength=520,
+                justify="left",
+            ).grid(row=1, column=0, columnspan=2, sticky="w")
+            return
+
+        unit_doc = self._load_pricing_map_doc(shared)
+        rep_mid = self._representative_map_id_for_editor(shared)
+        refs = load_map_quality_unit_price_refs(rep_mid) if rep_mid > 0 else {}
 
         hint = (
-            f"代表 map_id={rep_mid or '—'}（与同档 CSV 行一致）。"
+            f"写入 configs/pricing.maps/{shared}.json；代表 map_id={rep_mid or '—'}。"
             "留空或 0 表示使用 CSV 均价；填写后覆盖 q5/q6/q5+q6 格单价。"
         )
         ttk.Label(grp, text=hint, foreground="#555577", wraplength=520, justify="left").grid(
             row=0, column=0, columnspan=2, sticky="w", pady=(0, 6)
         )
 
-        pricing = map_doc.get("pricing") if isinstance(map_doc.get("pricing"), dict) else {}
+        pricing = unit_doc.get("pricing") if isinstance(unit_doc.get("pricing"), dict) else {}
         overrides = pricing.get("map_quality_unit_per_cell")
         if not isinstance(overrides, dict):
             overrides = {}
 
-        self._map_quality_unit_vars.clear()
         gi = 1
         for cfg_key in CONFIG_KEYS:
             label = _MAP_QUALITY_UNIT_LABELS.get(cfg_key, cfg_key)
@@ -431,6 +532,10 @@ class VisualConfigPanel:
             entry = ttk.Entry(grp, textvariable=var, width=14)
             entry.grid(row=gi, column=1, sticky="w", padx=(4, 0), pady=3)
             self._map_quality_unit_vars[cfg_key] = var
+            try:
+                var.trace_add("write", lambda *_a: self._schedule_autosave("map"))
+            except tk.TclError:
+                pass
 
             gtxt = self._guidance_text_for_unit_key(refs, cfg_key)
             gl = ttk.Label(grp, text=gtxt, foreground="#666688", wraplength=480, justify="left")
@@ -466,11 +571,13 @@ class VisualConfigPanel:
             pricing.pop("map_quality_unit_per_cell", None)
 
     def _on_map_combo_selected(self, _event: object = None) -> None:
+        self._flush_autosave()
         self._reload_map_doc()
         self._rebuild_field_forms()
 
     def _reload_from_disk(self) -> None:
         try:
+            self._cancel_pending_autosave()
             self._reload_config_sources()
             self._load_into_form()
             self.status_var.set("已从磁盘加载")
@@ -525,17 +632,18 @@ class VisualConfigPanel:
                 raise ValueError(f"{field.get('label', path)} 不能大于 {hi}")
             set_by_path(doc, path, value)
 
-    def _save_config_scope(self) -> None:
+    def _save_config_scope(self, *, silent: bool = False) -> None:
         try:
             self._apply_bindings(self.overlay, self._config_bindings)
             _save_json(config_overlay_path(), self.overlay)
             self._rebuild_merged_config()
-            self.status_var.set("主配置已保存")
+            self.status_var.set("主配置已自动保存" if silent else "主配置已保存")
         except (OSError, ValueError, TypeError) as exc:
-            messagebox.showerror("主配置", str(exc))
+            if not silent:
+                messagebox.showerror("主配置", str(exc))
             self.status_var.set(f"保存失败: {exc}")
 
-    def _save_map_scope(self) -> None:
+    def _save_map_scope(self, *, silent: bool = False) -> None:
         try:
             mk = self._effective_map_key()
             if not mk:
@@ -544,7 +652,9 @@ class VisualConfigPanel:
             prior = _load_json(path) if path.is_file() else {}
             doc = dict(prior)
             self._apply_bindings(doc, self._map_bindings)
-            self._apply_map_quality_unit_to_doc(doc)
+            pricing = doc.get("pricing")
+            if isinstance(pricing, dict) and not self._map_quality_unit_editable(mk):
+                pricing.pop("map_quality_unit_per_cell", None)
             au_doc = doc.get("automation")
             if isinstance(au_doc, dict):
                 au_doc.pop("safe_guard_enabled", None)
@@ -552,9 +662,18 @@ class VisualConfigPanel:
                 au_doc.pop("default_map", None)
             _save_json(path, doc)
             self.map_doc = doc
-            self.status_var.set(f"地图 {mk} 已保存")
+
+            if self._map_quality_unit_editable(mk) and self._map_quality_unit_vars:
+                shared = self._map_quality_unit_source_bundle(mk)
+                spath = pricing_map_overlay_path(shared)
+                sdoc = _load_json(spath) if spath.is_file() else {}
+                self._apply_map_quality_unit_to_doc(sdoc)
+                _save_json(spath, sdoc)
+
+            self.status_var.set(f"地图 {mk} 已自动保存" if silent else f"地图 {mk} 已保存")
         except (OSError, ValueError, TypeError) as exc:
-            messagebox.showerror("地图配置", str(exc))
+            if not silent:
+                messagebox.showerror("地图配置", str(exc))
             self.status_var.set(f"保存失败: {exc}")
 
 
