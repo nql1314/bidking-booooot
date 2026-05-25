@@ -381,4 +381,8 @@ FIELD_META: dict[str, dict[str, str]] = {
         "label": "显示启动 Bot 按钮",
         "description": "主界面是否显示「启动 Bot」入口。",
     },
+    "viewer.game_report_max_matches": {
+        "label": "全局报表最大局数",
+        "description": "全局对局报表保留局数上限；启动时裁剪最早记录，0 为不限制。",
+    },
 }

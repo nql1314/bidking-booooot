@@ -5,38 +5,110 @@ from __future__ import annotations
 
 import csv
 import datetime
-import io
 import os
-import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 from .constants import HERO_ID
 from .state import CsvItem, GameState
 
-_LINE_TIMESTAMP_RE = re.compile(
-    r"(\d{4}-\d{2}-\d{2})[T\s](\d{2}:\d{2}:\d{2})"
-)
-
 # 超价分配（每人）：差价 = 获胜者最后一轮出价 − 藏品总价；仅当差价 > 阈值时生效，
 # 每人加计 ``(差价 − 阈值) × 比例``（先减 10000，再乘 10%）。
 OVERBID_SURPLUS_THRESHOLD = 10000
 OVERBID_REBATE_PER_PLAYER_RATE = 0.10
 
-# 默认报表文件名时间戳（``game_match_reports_<stamp>.csv``）；见 ``init_game_report_csv_session``。
+# 全局对局报表（``<data>/game_match_reports.csv``）；当次会话（``game_match_reports_<启动时间>.csv``）。
+_DEFAULT_REPORT_FILENAME = "game_match_reports.csv"
 _SESSION_STAMP: Optional[str] = None
+
+_REPORT_HEADER = [
+    "对局UID",
+    "对局开始时间",
+    "对局结束时间",
+    "角色名称",
+    "角色英雄",
+    "每轮出价",
+    "最终藏品价值",
+    "最终收益",
+]
+
+_INIT_DONE = False
+
+
+def game_report_max_matches() -> int:
+    """``viewer.game_report_max_matches``；≤0 表示不限制局数。"""
+    try:
+        from bidking.config.runtime import load_runtime
+
+        raw = load_runtime().viewer.get("game_report_max_matches")
+        v = _safe_int(raw)
+        if v is not None:
+            return int(v)
+    except Exception:
+        pass
+    return 1000
 
 
 def init_game_report_csv_session() -> None:
-    """固定本次进程默认对局报表路径的时间戳。
-
-    在 GUI / 看板 ``main()`` 入口调用一次，文件名即**程序启动时刻**。
-    若未调用，则在首次 ``resolve_game_report_csv_path()``（且未设置
-    ``BIDKING_GAME_REPORT_CSV``）时再生成时间戳。
-    """
-    global _SESSION_STAMP
+    """程序入口调用一次：固定当次会话报表路径时间戳；并裁剪全局报表局数上限。"""
+    global _INIT_DONE, _SESSION_STAMP
+    if _INIT_DONE:
+        return
+    _INIT_DONE = True
     if _SESSION_STAMP is None:
         _SESSION_STAMP = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    if os.environ.get("BIDKING_DISABLE_GAME_REPORT", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    ):
+        return
+    max_n = game_report_max_matches()
+    if max_n > 0:
+        try:
+            _trim_game_report_csv(resolve_game_report_csv_path(), max_n)
+        except OSError:
+            pass
+
+
+def init_global_game_report_csv() -> None:
+    """兼容旧名：同 :func:`init_game_report_csv_session`。"""
+    init_game_report_csv_session()
+
+
+def _trim_game_report_csv(path: Path, max_matches: int) -> None:
+    """按文件中首次出现的对局顺序保留最近 ``max_matches`` 局。"""
+    if max_matches <= 0 or not path.is_file() or path.stat().st_size == 0:
+        return
+    with open(path, "r", encoding="utf-8-sig", newline="") as f:
+        rows = list(csv.reader(f))
+    if len(rows) <= 1:
+        return
+    header, data_rows = rows[0], rows[1:]
+    game_order: List[str] = []
+    by_game: Dict[str, List[List[str]]] = {}
+    for row in data_rows:
+        if not row:
+            continue
+        uid = str(row[0]).strip()
+        if not uid:
+            continue
+        if uid not in by_game:
+            game_order.append(uid)
+            by_game[uid] = []
+        by_game[uid].append(row)
+    if len(game_order) <= max_matches:
+        return
+    keep_uids = set(game_order[-max_matches:])
+    kept_rows: List[List[str]] = []
+    for uid in game_order:
+        if uid in keep_uids:
+            kept_rows.extend(by_game[uid])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8-sig", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(header)
+        w.writerows(kept_rows)
 
 
 def _safe_int(v: Any) -> Optional[int]:
@@ -377,8 +449,24 @@ def _hero_label(hero_cid: Any) -> str:
 
 
 def resolve_game_report_csv_path() -> Path:
-    """路径：环境变量 ``BIDKING_GAME_REPORT_CSV``；否则 ``<data>/game_match_reports_<启动时间>.csv``。"""
+    """全局报表路径：``BIDKING_GAME_REPORT_CSV``；否则 ``<data>/game_match_reports.csv``。"""
     env = os.environ.get("BIDKING_GAME_REPORT_CSV", "").strip()
+    if env:
+        return Path(env).expanduser().resolve()
+    try:
+        from bidking.config.paths import data_dir
+
+        return (data_dir() / _DEFAULT_REPORT_FILENAME).resolve()
+    except Exception:
+        return (Path.cwd() / _DEFAULT_REPORT_FILENAME).resolve()
+
+
+def resolve_game_report_session_csv_path() -> Path:
+    """
+    当次启动会话报表：``BIDKING_GAME_REPORT_SESSION_CSV``；
+    否则 ``<data>/game_match_reports_<启动时间>.csv``（与本次进程 ``init_game_report_csv_session`` 一致）。
+    """
+    env = os.environ.get("BIDKING_GAME_REPORT_SESSION_CSV", "").strip()
     if env:
         return Path(env).expanduser().resolve()
     init_game_report_csv_session()
@@ -391,128 +479,15 @@ def resolve_game_report_csv_path() -> Path:
         return (Path.cwd() / f"game_match_reports_{stamp}.csv").resolve()
 
 
-def resolve_game_report_history_csv_path() -> Path:
-    """
-    历史补录文件路径：环境变量 ``BIDKING_GAME_REPORT_HISTORY_CSV``；否则
-    ``<data>/game_match_reports_history_<启动时间>.csv``，与同次启动的 live CSV
-    共享时间戳，方便成对查看。
-    """
-    env = os.environ.get("BIDKING_GAME_REPORT_HISTORY_CSV", "").strip()
-    if env:
-        return Path(env).expanduser().resolve()
-    init_game_report_csv_session()
-    stamp = _SESSION_STAMP or datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    try:
-        from bidking.config.paths import data_dir
-
-        return (data_dir() / f"game_match_reports_history_{stamp}.csv").resolve()
-    except Exception:
-        return (Path.cwd() / f"game_match_reports_history_{stamp}.csv").resolve()
-
-
-def _extract_log_line_timestamp(line: str) -> str:
-    """从 Player.log 行前缀提取 ``YYYY-MM-DD HH:MM:SS``；找不到返回空串。"""
-    m = _LINE_TIMESTAMP_RE.search(line)
-    if not m:
-        return ""
-    return f"{m.group(1)} {m.group(2)}"
-
-
-def backfill_history_game_reports_csv(
-    log_path: str,
-    csv_path: str,
-    *,
-    target_path: Optional[Path] = None,
-    overwrite: bool = False,
-) -> Optional[Tuple[Path, int]]:
-    """
-    扫描历史日志，将所有已结束（含 ``S2C_45``）的对局**单独**写入历史 CSV。
-
-    - 不影响 live 报表：写入的是 ``resolve_game_report_history_csv_path()``
-      （或显式 ``target_path``）这条独立路径。
-    - 幂等：本次启动若历史文件已存在则直接返回，不重复生成。
-      用 ``overwrite=True`` 可强制覆盖重写。
-    - 行内对局开始 / 结束时间：若日志行前缀有 ``YYYY-MM-DD HH:MM:SS`` 则用之；
-      否则**留空**（避免误导成"补录时刻"）。Unity 默认 Player.log 不带时间戳。
-    - 若 ``BIDKING_DISABLE_GAME_REPORT`` 为真则跳过（与 live 行为一致）。
-
-    Returns:
-        ``(写出文件路径, 新写入对局行数)``；被跳过或没有任何已结束对局可写时
-        返回 ``None``。若历史文件本次启动已存在且未要求覆盖，返回 ``(path, 0)``。
-    """
-    if os.environ.get("BIDKING_DISABLE_GAME_REPORT", "").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-    ):
-        return None
-
-    target = target_path or resolve_game_report_history_csv_path()
-    if target.exists() and not overwrite:
-        return (target, 0)
-    if target.exists() and overwrite:
-        try:
-            target.unlink()
-        except OSError:
-            return None
-
-    if not log_path or not os.path.exists(log_path):
-        return None
-
-    from .handlers import handle_s2c33, handle_s2c37, handle_s2c39, handle_s2c45
-    from .item_db import load_csv
-    from .log_source import extract_event, iter_log_lines
-
-    try:
-        csv_index, csv_items = load_csv(csv_path)
-    except (OSError, ValueError):
-        return None
-
-    silent = io.StringIO()
-    state = GameState()
-    game_active = False
-    pending_start_ts = ""
-    wrote_count = 0
-
-    for line in iter_log_lines(log_path, tail=False):
-        if line is None:
-            break
-        ts = _extract_log_line_timestamp(line)
-        result = extract_event(line)
-        if not result:
-            continue
-        event_type, data = result
-
-        if event_type == "S2C_33_game_start_notify":
-            state = GameState()
-            game_active = True
-            handle_s2c33(data, state, csv_index, csv_items, silent, clear_bid_cache=False)
-            state.match_started_at = ts
-            pending_start_ts = ts
-        elif event_type == "S2C_37_game_next_round_notify" and game_active:
-            handle_s2c37(data, state, csv_index, csv_items, silent)
-        elif event_type == "S2C_39_game_use_item" and game_active:
-            handle_s2c39(data, state, csv_index, csv_items, silent)
-        elif event_type == "S2C_45_game_over_notify" and game_active:
-            handle_s2c45(
-                data, state, csv_index, csv_items, silent,
-                write_game_report_csv=False,
-            )
-            state.match_started_at = pending_start_ts
-            state.match_ended_at = ts
-            try:
-                append_game_over_report_csv(
-                    data, state, csv_index, target_path=target,
-                )
-                wrote_count += 1
-            except OSError:
-                pass
-            game_active = False
-            pending_start_ts = ""
-
-    if wrote_count == 0 and not target.exists():
-        return None
-    return (target, wrote_count)
+def _append_report_rows(path: Path, rows_out: List[List[str]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    new_file = not path.exists() or path.stat().st_size == 0
+    encoding = "utf-8-sig" if new_file else "utf-8"
+    with open(path, "a", encoding=encoding, newline="") as f:
+        w = csv.writer(f)
+        if new_file:
+            w.writerow(_REPORT_HEADER)
+        w.writerows(rows_out)
 
 
 def append_game_over_report_csv(
@@ -545,8 +520,8 @@ def append_game_over_report_csv(
     ``(差价 − 10000) × 10%``（先减 10000 再乘 10%）。若 ``UserLog`` 自带 ``Profit`` 等，整列保持原值
     （不再叠门票/返利，避免与服务器重复）。
 
-    ``target_path``：显式指定输出文件；缺省则走 ``resolve_game_report_csv_path()``。
-    用于历史补录（``backfill_history_game_reports_csv``）写入独立的历史 CSV。
+    ``target_path``：显式指定单一输出文件（测试/补录用）。
+    缺省则写入当次会话报表，并同步追加到全局 ``game_match_reports.csv``。
     """
     if os.environ.get("BIDKING_DISABLE_GAME_REPORT", "").strip().lower() in (
         "1",
@@ -591,24 +566,20 @@ def append_game_over_report_csv(
         winner_last_bid,
     )
 
-    path = target_path or resolve_game_report_csv_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
+    if target_path is not None:
+        write_paths = [target_path]
+    elif os.environ.get("BIDKING_GAME_REPORT_CSV", "").strip():
+        write_paths = [resolve_game_report_csv_path()]
+    elif os.environ.get("BIDKING_GAME_REPORT_SESSION_CSV", "").strip():
+        write_paths = [resolve_game_report_session_csv_path()]
+    else:
+        write_paths = [
+            resolve_game_report_session_csv_path(),
+            resolve_game_report_csv_path(),
+        ]
 
-    new_file = not path.exists() or path.stat().st_size == 0
-    encoding = "utf-8-sig" if new_file else "utf-8"
     t_start = str(getattr(state, "match_started_at", "") or "")
     t_end = str(getattr(state, "match_ended_at", "") or "")
-    header = [
-        "对局UID",
-        "对局开始时间",
-        "对局结束时间",
-        "角色名称",
-        "角色英雄",
-        "每轮出价",
-        "最终藏品价值",
-        "最终收益",
-    ]
-
     rows_out: List[List[str]] = []
 
     def append_row(
@@ -714,17 +685,18 @@ def append_game_over_report_csv(
     if not rows_out:
         return
 
-    with open(path, "a", encoding=encoding, newline="") as f:
-        w = csv.writer(f)
-        if new_file:
-            w.writerow(header)
-        w.writerows(rows_out)
+    for path in write_paths:
+        try:
+            _append_report_rows(path, rows_out)
+        except OSError:
+            pass
 
 
 __all__ = [
     "append_game_over_report_csv",
-    "backfill_history_game_reports_csv",
+    "game_report_max_matches",
     "init_game_report_csv_session",
+    "init_global_game_report_csv",
     "resolve_game_report_csv_path",
-    "resolve_game_report_history_csv_path",
+    "resolve_game_report_session_csv_path",
 ]

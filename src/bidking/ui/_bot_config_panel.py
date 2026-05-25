@@ -66,6 +66,7 @@ class BotConfigPanel:
     def __init__(self, parent: tk.Widget):
         self.parent = parent
         self._top = parent.winfo_toplevel()
+        setattr(self._top, "_bidking_bot_config_panel", self)
 
         self.runtime_base: dict = {}
         self.overlay: dict = {}
