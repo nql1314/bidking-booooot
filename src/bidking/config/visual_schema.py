@@ -28,9 +28,31 @@ def load_visual_config_schema(path: Path | None = None) -> dict[str, Any]:
     return json.loads(p.read_text(encoding="utf-8-sig"))
 
 
+def field_matches_map_bundle(
+    field: dict[str, Any],
+    map_bundle_key: str | None,
+) -> bool:
+    """
+    若字段含 ``map_bundle_keys`` 列表，则仅当当前地图档键命中时才展示；
+    未配置该键时对所有地图可见。
+    """
+    keys = field.get("map_bundle_keys")
+    if not keys:
+        return True
+    if not isinstance(keys, list):
+        return True
+    mk = str(map_bundle_key or "").strip()
+    allowed = {str(k).strip() for k in keys if str(k).strip()}
+    if not allowed:
+        return True
+    return mk in allowed
+
+
 def schema_fields_for_scope(
     schema: dict[str, Any],
     scope: FieldScope,
+    *,
+    map_bundle_key: str | None = None,
 ) -> list[dict[str, Any]]:
     """返回适用于某编辑区的字段（config 区含 scope=config/both；map 区含 map/both）。"""
     fields = schema.get("fields")
@@ -41,6 +63,8 @@ def schema_fields_for_scope(
         if not isinstance(item, dict):
             continue
         if field_is_hidden(item):
+            continue
+        if scope == "map" and not field_matches_map_bundle(item, map_bundle_key):
             continue
         fs = str(item.get("scope") or "config").strip().lower()
         if scope == "config" and fs in ("config", "both"):
@@ -116,6 +140,7 @@ __all__ = [
     "visual_config_schema_path",
     "load_visual_config_schema",
     "schema_fields_for_scope",
+    "field_matches_map_bundle",
     "field_is_hidden",
     "get_by_path",
     "set_by_path",

@@ -88,6 +88,21 @@ CATEGORY_NAMES: Dict[int, str] = {
     109: "食饮珍馐", 110: "书画古籍",
 }
 
+# 表情 EmojiCid → 显示名（与客户端表情配置一致；未知时回退为 ``EmojiCid=<id>``）
+EMOJI_CID_NAMES: Dict[int, str] = {
+    101: "问候",
+    102: "自信",
+    103: "嘲讽",
+    104: "惊讶",
+    105: "遗憾",
+    106: "感谢",
+    107: "赞赏",
+    108: "生气",
+}
+
+# 表情显示名 → EmojiCid（与 ``EMOJI_CID_NAMES`` 互逆，供 Bot 配置等使用）
+EMOJI_NAME_TO_CID: Dict[str, int] = {name: cid for cid, name in EMOJI_CID_NAMES.items()}
+
 # 技能日志「价」侧绑定、地图 SkillCid、轮廓表、英雄/道具合并边：见 :mod:`bidking.parsing.skill_bindings`。
 
 # ─── 自 skill_bindings 再导出（供 ``raw_pricing`` 等 ``from .constants import *``）────────
@@ -140,3 +155,10 @@ def fmt_categories_any(cats: Set[int]) -> str:
 def fmt_price(v: int) -> str:
     """整数价格格式化为千分位字符串，如 12345 → '12,345'。"""
     return f"{v:,}"
+
+
+def fmt_emoji_cid(emoji_cid: int) -> str:
+    """将 ``EmojiCid`` 转为可读名称。"""
+    if not emoji_cid:
+        return "未知表情"
+    return EMOJI_CID_NAMES.get(int(emoji_cid), f"EmojiCid={int(emoji_cid)}")

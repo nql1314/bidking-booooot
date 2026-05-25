@@ -126,6 +126,9 @@ class GameState:
         # 已输出的 ItemSkillLog 事件 Uid，防止 S2C_39 与 S2C_37 重复显示
         self.displayed_event_uids: Set[str] = set()
 
+        # S2C_265 表情信号（按收到顺序追加）
+        self.emoji_events: List[dict] = []
+
         # 全量扫描历史，用于对后续新发现的物品追溯应用负向约束
         # 每条记录: ('category'|'quality', 值, 命中UID集合)
         self._scan_history: List[Tuple[str, int, FrozenSet[str]]] = []

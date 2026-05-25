@@ -12,6 +12,7 @@
 - ``items``                ``{item_uid: ItemKnowledge JSON}``
 - ``displayed_event_uids`` 已展示的 ItemSkillLog Uid
 - ``scan_history``         ``[{scan_type, value, hit_uids}, ...]``
+- ``emoji_events``         ``S2C_265`` 表情信号列表（``game_uid`` / ``user_uid`` / ``emoji_cid`` / ``round``）
 
 并附加（由 analysis 计算）：
 
@@ -97,6 +98,7 @@ def game_state_to_json(state: GameState) -> Dict[str, Any]:
         "items": items_out,
         "displayed_event_uids": sorted(state.displayed_event_uids),
         "scan_history": scan_history,
+        "emoji_events": list(getattr(state, "emoji_events", None) or []),
     }
 
 
@@ -127,6 +129,11 @@ def game_state_from_json(d: Dict[str, Any]) -> GameState:
             continue
         hit = frozenset(str(x) for x in (row.get("hit_uids") or []))
         st._scan_history.append((str(row.get("scan_type")), int(row.get("value", 0)), hit))
+    st.emoji_events = [
+        dict(row)
+        for row in (d.get("emoji_events") or [])
+        if isinstance(row, dict)
+    ]
     return st
 
 

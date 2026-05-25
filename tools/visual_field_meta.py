@@ -66,6 +66,34 @@ FIELD_META: dict[str, dict[str, str]] = {
         "label": "爱莎第4回合空置门控",
         "description": "开启后：第4回合仅在空置格≥门槛且 Q5 网格统计已知时才使用道具。",
     },
+    "automation.express_station_round1_emoji.enabled": {
+        "label": "快递站开局发表情",
+        "description": "快递站系列地图第1回合：先点表情入口 (57,1015)（客户端 left_top），等待 1 秒后再点所选表情。",
+    },
+    "automation.express_station_round1_emoji.emoji": {
+        "label": "快递站开局表情",
+        "description": "第1回合发表情时点击的表情项。",
+    },
+    "automation.express_station_round1_emoji.wait_after_send_seconds": {
+        "label": "发表情后等待（秒）",
+        "description": "发送表情后轮询快照；仅当对手回与己方相同的表情（EmojiCid 一致）时用暗号价，否则走后端估价。",
+    },
+    "automation.express_station_round1_emoji.seat_1_price": {
+        "label": "快递站暗号价（座位1）",
+        "description": "对手回表情后，OCR 第 1 席身份区匹配顾问（座位 1）时使用的固定出价。",
+    },
+    "automation.express_station_round1_emoji.seat_2_price": {
+        "label": "快递站暗号价（座位2）",
+        "description": "对手回表情后，OCR 第 1 席非己方（座位 2）时使用的固定出价。",
+    },
+    "automation.express_station_round1_emoji.character_name": {
+        "label": "暗号判席角色名",
+        "description": "OCR 第 1 席身份区匹配用的己方角色名（按地图配置）。",
+    },
+    "automation.express_station_round1_emoji.character_title": {
+        "label": "暗号判席称号",
+        "description": "单个称号字符串，OCR 第 1 席称号区须包含（按地图配置）。",
+    },
     "automation.game_start_timeout_seconds": {
         "label": "开局等待超时（秒）",
         "description": "选图后等待「开始」界面出现的最大秒数，超时则重试或放弃本局。",
