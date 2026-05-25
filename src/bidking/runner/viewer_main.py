@@ -142,10 +142,12 @@ def _show_start_page(default_log: str, csv_path: str) -> None:
     launch_tab = ttk.Frame(notebook)
     config_tab = ttk.Frame(notebook)
     visual_config_tab = ttk.Frame(notebook)
+    tools_tab = ttk.Frame(notebook)
     sponsor_tab = ttk.Frame(notebook)
     notebook.add(launch_tab, text="启动看板")
     notebook.add(config_tab, text="策略配置")
     notebook.add(visual_config_tab, text="可视化配置")
+    notebook.add(tools_tab, text="工具")
 
     # ── 启动看板 tab ───────────────────────────────────────────────────────
     log_var = tk.StringVar(value=default_log)
@@ -211,51 +213,6 @@ def _show_start_page(default_log: str, csv_path: str) -> None:
         value="ahmad",
     ).pack(anchor="w")
     # tk.Radiobutton(frame, text="拉文", variable=board_var, value="raven").pack(anchor="w")
-
-    def export_history_report() -> None:
-        log_path = log_var.get().strip()
-        if not os.path.exists(log_path):
-            messagebox.showerror("错误", f"找不到日志文件:\n{log_path}")
-            return
-        if not os.path.exists(csv_path):
-            messagebox.showerror("错误", f"找不到物品数据:\n{csv_path}")
-            return
-        try:
-            from ..parsing.game_report_csv import backfill_history_game_reports_csv
-
-            # 手动导出：全量扫描当前日志；覆盖同次启动已生成的历史 CSV，避免误触后仍是旧内容
-            result = backfill_history_game_reports_csv(
-                log_path, csv_path, overwrite=True,
-            )
-        except Exception as exc:  # noqa: BLE001
-            messagebox.showerror("导出失败", str(exc))
-            return
-        if result is None:
-            messagebox.showinfo(
-                "历史报告",
-                "未生成文件：可能没有已结束对局，或已设置环境变量 "
-                "BIDKING_DISABLE_GAME_REPORT。",
-            )
-            return
-        out, wrote = result
-        if wrote > 0:
-            messagebox.showinfo("历史报告", f"已写出 {wrote} 局到\n{out}")
-        else:
-            messagebox.showinfo("历史报告", f"未写入新行（可能日志中无已结束对局）。\n{out}")
-
-    history_row = tk.Frame(frame)
-    history_row.pack(anchor="w", pady=(10, 4))
-    tk.Button(
-        history_row,
-        text="导出历史报告",
-        command=export_history_report,
-    ).pack(side="left")
-    tk.Label(
-        history_row,
-        text="（扫描当前 Log 中全部已结束对局；启动看板不会自动导出）",
-        fg="#5a6a7a",
-        font=("微软雅黑", 8),
-    ).pack(side="left", padx=(8, 0))
 
     def start() -> None:
         log_path = log_var.get().strip()
@@ -370,7 +327,20 @@ def _show_start_page(default_log: str, csv_path: str) -> None:
             padding=20,
         ).pack(fill="both", expand=True)
 
-    # ── 赞助标签（Notebook 第四页）────────────────────────────────────────
+    # ── 工具 tab（可视化配置右侧）──────────────────────────────────────────
+    try:
+        from ..ui._tools_panel import ToolsPanel
+
+        ToolsPanel(tools_tab)
+    except Exception as exc:  # noqa: BLE001
+        ttk.Label(
+            tools_tab,
+            text=f"工具面板加载失败：{exc}",
+            foreground="#aa3333",
+            padding=20,
+        ).pack(fill="both", expand=True)
+
+    # ── 赞助标签（Notebook 最后一页）────────────────────────────────────────
     try:
         from ..ui.grid._sponsor_column import populate_sponsor_notebook_tab
 
@@ -387,32 +357,6 @@ def _show_start_page(default_log: str, csv_path: str) -> None:
     notebook.add(sponsor_tab, text="赞助栏")
 
     root.mainloop()
-
-
-def _run_history_backfill(
-    log_path: str | None,
-    csv_path: str,
-    *,
-    overwrite: bool,
-) -> None:
-    """启动时把日志里所有"已结束"的对局补录到独立的历史 CSV；失败静默忽略。"""
-    if not log_path or not os.path.exists(log_path) or not os.path.exists(csv_path):
-        return
-    try:
-        from ..parsing.game_report_csv import backfill_history_game_reports_csv
-
-        result = backfill_history_game_reports_csv(
-            log_path, csv_path, overwrite=overwrite,
-        )
-        if result is None:
-            return
-        out, wrote = result
-        if wrote > 0:
-            print(f"[history-report] 已写出 {wrote} 局到 {out}", file=sys.stderr)
-        else:
-            print(f"[history-report] 已存在，跳过：{out}", file=sys.stderr)
-    except Exception as exc:  # noqa: BLE001
-        print(f"[history-report] 跳过：{exc}", file=sys.stderr)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -435,16 +379,6 @@ def main(argv: list[str] | None = None) -> None:
         help="覆盖快照写出路径；省略时优先用 configs 合并结果中的 board_snapshot.path",
     )
     parser.add_argument("--snapshot-no-overlay", action="store_true", help="快照不含 grid_overlay")
-    parser.add_argument(
-        "--history-report",
-        action="store_true",
-        help="启动前把历史对局补录到 game_match_reports_history_<启动时间>.csv（默认不执行）",
-    )
-    parser.add_argument(
-        "--history-report-overwrite",
-        action="store_true",
-        help="与 --history-report 同用时，若历史 CSV 已存在则强制覆盖重写",
-    )
     args = parser.parse_args(argv)
 
     board_mode = "elsa"
@@ -467,12 +401,6 @@ def main(argv: list[str] | None = None) -> None:
     if not os.path.exists(csv_path):
         print(f"错误: 找不到 CSV 文件: {csv_path}", file=sys.stderr)
         sys.exit(1)
-
-    if args.history_report:
-        _run_history_backfill(
-            log_path, csv_path,
-            overwrite=args.history_report_overwrite,
-        )
 
     snap = (args.snapshot_path or "").strip() or None
     _open_grid(

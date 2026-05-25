@@ -9,6 +9,8 @@ from bidking.parsing import game_report_csv as grc
 from bidking.parsing.game_report_csv import (
     OVERBID_REBATE_PER_PLAYER_RATE,
     OVERBID_SURPLUS_THRESHOLD,
+    _REPORT_HEADER,
+    _trim_game_report_csv,
     append_game_over_report_csv,
 )
 from bidking.config.runtime import load_runtime
@@ -197,6 +199,31 @@ def test_overbid_rebate_per_player(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert int(rows[1][7]) == 100_000 - 120_000 + rebate - ticket
     assert rows[2][3] == "败者"
     assert int(rows[2][7]) == 0 + rebate - ticket
+
+
+def test_trim_game_report_csv_keeps_newest_matches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    csv_path = tmp_path / "global.csv"
+    monkeypatch.setenv("BIDKING_GAME_REPORT_CSV", str(csv_path))
+
+    def _game_rows(uid: str, name: str) -> list[list[str]]:
+        return [
+            [uid, "", "", name, "103", "R1:1", "0", "0"],
+            [uid, "", "", f"{name}2", "104", "R1:2", "0", "0"],
+        ]
+
+    with csv_path.open("w", encoding="utf-8-sig", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(_REPORT_HEADER)
+        for uid, name in (("g1", "a"), ("g2", "b"), ("g3", "c")):
+            w.writerows(_game_rows(uid, name))
+
+    _trim_game_report_csv(csv_path, 2)
+
+    rows = list(csv.reader(csv_path.read_text(encoding="utf-8-sig").splitlines()))
+    uids = [r[0] for r in rows[1:]]
+    assert uids == ["g2", "g2", "g3", "g3"]
 
 
 def test_map_entry_ticket_lookup() -> None:

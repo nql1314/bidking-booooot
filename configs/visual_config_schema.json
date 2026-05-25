@@ -312,6 +312,16 @@
       "scope": "config",
       "group": "时序",
       "hide": false
+    },
+    {
+      "path": "viewer.game_report_max_matches",
+      "type": "int",
+      "label": "全局报表最大局数",
+      "description": "全局对局报表 game_match_reports.csv 保留的对局数量上限；程序启动时按文件顺序删除最早对局。填 0 表示不限制。",
+      "scope": "config",
+      "group": "对局报表",
+      "min": 0,
+      "hide": false
     }
   ]
 }

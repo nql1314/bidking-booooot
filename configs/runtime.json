@@ -184,8 +184,8 @@
         "name": "沉船密封舱",
         "point": {
           "origin": "left_top",
-          "x": 1839,
-          "y": 682
+          "x": 1777,
+          "y": 649
         }
       },
       "450": {
@@ -236,6 +236,7 @@
     "runs_dir": "runs"
   },
   "viewer": {
-    "show_bot_runner": true
+    "show_bot_runner": true,
+    "game_report_max_matches": 1000
   }
 }
