@@ -15,12 +15,12 @@
       "4": 0.0,
       "default": 0.0
     },
-    "vacant_red_floor_ceiling_pick_mode": "normal"
+    "vacant_red_floor_ceiling_pick_mode": "aggressive"
   },
   "automation": {
     "express_station_round1_emoji": {
       "enabled": true,
-      "emoji": "惊讶",
+      "emoji": "生气",
       "seat_1_price": 520,
       "seat_2_price": 144,
       "round2_plus_high_random_max": 888,

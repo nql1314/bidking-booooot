@@ -5,10 +5,19 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional, Set, Tuple, Union
 
+from ...analysis.grid_overlay_infer_vacant_rects import (
+    VacantRectPhantomSpec,
+    is_auto_vacant_rect_phantom_uid,
+)
 from ...analysis.scan_inference import apply_census_absent_qualities_from_raw_pricing
 from ...parsing.state import GameState, ItemKnowledge
 
 GRID_COLS = 10
+
+# 与 ``_grid_view.PHANTOM_Q_INFER`` 一致：幽灵品质「原推断」占位
+PHANTOM_Q_INFER = "_phantom_q_infer"
+# 快照中表示 ``phantom_quality_pref`` 无键（金默认 Q5）
+_VACANT_Q_PREF_ABSENT = object()
 
 
 def _shape_wh(shape: object) -> Tuple[int, int]:
@@ -103,6 +112,53 @@ def apply_scan_history_to_phantom_items(
                 pk.excluded_categories.add(value)
             else:
                 pk.excluded_qualities.add(value)
+
+
+def snapshot_auto_vacant_phantom_quality_prefs(
+    phantom_items: Dict[str, ItemKnowledge],
+    phantom_quality_pref: Dict[str, Union[int, str]],
+) -> Dict[str, object]:
+    """在 purge 自动 ``phantom_vac_*`` 前保存品质偏好，供重算后恢复用户手改。"""
+    out: Dict[str, object] = {}
+    for uid in phantom_items:
+        if not is_auto_vacant_rect_phantom_uid(uid):
+            continue
+        out[uid] = phantom_quality_pref.get(uid, _VACANT_Q_PREF_ABSENT)
+    return out
+
+
+def vacant_rect_spec_auto_quality_pref(spec: VacantRectPhantomSpec) -> object:
+    if spec.manual_confirm_item_id is not None:
+        return _VACANT_Q_PREF_ABSENT
+    if spec.quality is not None:
+        return int(spec.quality)
+    return PHANTOM_Q_INFER
+
+
+def apply_vacant_rect_phantom_quality_pref(
+    uid: str,
+    spec: VacantRectPhantomSpec,
+    phantom_quality_pref: Dict[str, Union[int, str]],
+    saved: Dict[str, object],
+) -> None:
+    """写入推断默认品质；若该 uid 此前存在且与用户手改不一致则保留手改。"""
+    auto = vacant_rect_spec_auto_quality_pref(spec)
+    if auto is _VACANT_Q_PREF_ABSENT:
+        phantom_quality_pref.pop(uid, None)
+    elif auto == PHANTOM_Q_INFER:
+        phantom_quality_pref[uid] = PHANTOM_Q_INFER
+    else:
+        phantom_quality_pref[uid] = int(auto)
+
+    if uid not in saved:
+        return
+    prev = saved[uid]
+    if prev == auto:
+        return
+    if prev is _VACANT_Q_PREF_ABSENT:
+        phantom_quality_pref.pop(uid, None)
+    else:
+        phantom_quality_pref[uid] = prev  # type: ignore[assignment]
 
 
 def reconcile_overlay_after_refresh(

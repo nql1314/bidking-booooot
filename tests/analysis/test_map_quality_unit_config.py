@@ -28,17 +28,26 @@ class MapQualityUnitConfigTests(unittest.TestCase):
         self.assertNotIn("q6", ov)
 
     def test_apply_overrides_cell_and_scaled_item(self) -> None:
-        cell = {"q5": 1000.0, "q5+q6": 2000.0}
-        item = {"q5": 500.0, "q5+q6": 4000.0}
+        cell = {"q5": 1000.0, "q5+q6": 2000.0, "q4+q5+q6": 4000.0}
+        item = {"q5": 500.0, "q5+q6": 4000.0, "q4+q5+q6": 8000.0}
         cell2, item2, applied = apply_map_quality_unit_per_cell_overrides(
-            cell, item, {"q5": 2000.0, "q56": 3000.0}
+            cell, item, {"q5": 2000.0, "q56": 3000.0, "q456": 5000.0}
         )
         self.assertEqual(cell2["q5"], 2000.0)
         self.assertEqual(cell2["q5+q6"], 3000.0)
+        self.assertEqual(cell2["q4+q5+q6"], 5000.0)
         self.assertAlmostEqual(item2["q5"], 1000.0)
         self.assertAlmostEqual(item2["q5+q6"], 6000.0)
+        self.assertAlmostEqual(item2["q4+q5+q6"], 10000.0)
         self.assertIn("q5", applied)
         self.assertIn("q5+q6", applied)
+        self.assertIn("q4+q5+q6", applied)
+
+    def test_config_overrides_q456_parsed(self) -> None:
+        ov = config_overrides_from_pricing(
+            {"map_quality_unit_per_cell": {"q456": 15000.0}}
+        )
+        self.assertEqual(ov.get("q456"), 15000.0)
 
     def test_build_raw_pricing_config_overrides_csv(self) -> None:
         tmp = tempfile.NamedTemporaryFile(
