@@ -88,6 +88,7 @@ from ...analysis.snapshot import game_state_to_json, item_knowledge_to_json
 from ...config.runtime import (
     infer_fraud_empty_cells_algorithm_and_trim,
     infer_unknown_contour_shapes_enabled,
+    infer_vacant_rect_phantoms_enabled,
     load_runtime,
 )
 from ...pricing.compute import compute_price
@@ -857,6 +858,7 @@ class GridWindow:
         self._infer_unknown_contour_shapes = infer_unknown_contour_shapes_enabled(
             _rt_cfg
         )
+        self._infer_vacant_rect_phantoms = infer_vacant_rect_phantoms_enabled(_rt_cfg)
 
         # 实时 tail：关闭画板或返回主页时置位，供后台线程退出
         self._monitor_stop = threading.Event()
@@ -1083,6 +1085,88 @@ class GridWindow:
             for uid, t in raw.items()
             if len(t) >= 4 and str(uid) not in self._infer_suppress_uids
         }
+        self._sync_vacant_rect_phantoms_from_analysis(rp)
+
+    def _purge_auto_vacant_rect_phantoms(self) -> None:
+        """移除上一轮自动推断的 ``phantom_vac_*``，保留用户手画幽灵。"""
+        for uid in list(self._phantom_items):
+            if not _grid_overlay.is_auto_vacant_rect_phantom_uid(uid):
+                continue
+            self._phantom_items.pop(uid, None)
+            self._manual_shapes.pop(uid, None)
+            self._phantom_quality_pref.pop(uid, None)
+
+    def _fraud_cells_for_vacant_rect_infer(self, occupied: set) -> Set[Tuple[int, int]]:
+        limit = min(
+            self._empty_zone_max_box_id(),
+            GRID_COLS * GRID_ROWS - 1,
+        )
+        if limit < 0:
+            return set()
+        apply_fraud = _grid_overlay.fraud_zone_cell_exclusion_enabled(
+            self._vacant_scan_context_snapshot(),
+            occupied,
+            limit,
+        )
+        if not apply_fraud:
+            return set()
+        placed = self._fraud_placed_items_for_overlay()
+        return _grid_overlay.fraud_empty_cells_for_algorithm(
+            self._fraud_empty_cells_algorithm,
+            limit,
+            occupied,
+            placed,
+            fraud_empty_cells_tiling_n=self._fraud_empty_cells_tiling_n,
+        )
+
+    def _sync_vacant_rect_phantoms_from_analysis(
+        self, raw_pricing: Dict[str, Any]
+    ) -> None:
+        """
+        艾莎第 4 回合：空置闭合矩形 → 自动幽灵 + 手动画框；
+        候选唯一品质/唯一物品时自动补齐。
+        """
+        self._purge_auto_vacant_rect_phantoms()
+        if not self._infer_vacant_rect_phantoms:
+            return
+        occ = self._occupied_cells_for_overlay_infer()
+        fraud_cells = self._fraud_cells_for_vacant_rect_infer(occ)
+        specs = _grid_overlay.compute_vacant_rect_phantom_specs(
+            game_state=self.state,
+            manual_shapes=self._manual_shapes,
+            phantom_items=self._phantom_items,
+            phantom_quality_pref=self._phantom_quality_pref,
+            occupied_cells=set(occ),
+            vacant_manual_suppress=set(self._vacant_manual_suppress),
+            max_box_id=max_anchor_box_id_from_overlay_ui(
+                self.state.items, self._phantom_items
+            ),
+            raw_pricing=raw_pricing,
+            current_round=int(self.state.current_round or 1),
+            fraud_cells=fraud_cells,
+            enabled=True,
+        )
+        for spec in specs:
+            pk = ItemKnowledge(uid=spec.uid)
+            pk.box_id = int(spec.dr) * GRID_COLS + int(spec.dc)
+            pk.box_id_confirmed = True
+            if spec.manual_confirm_item_id is not None:
+                pk.manual_confirm_item_id = int(spec.manual_confirm_item_id)
+            self._phantom_items[spec.uid] = pk
+            self._manual_shapes[spec.uid] = (
+                int(spec.w),
+                int(spec.h),
+                int(spec.dc),
+                int(spec.dr),
+            )
+            if spec.manual_confirm_item_id is not None:
+                self._phantom_quality_pref.pop(spec.uid, None)
+            elif spec.quality is not None:
+                self._phantom_quality_pref[spec.uid] = int(spec.quality)
+            else:
+                self._phantom_quality_pref[spec.uid] = PHANTOM_Q_INFER
+        if specs:
+            apply_scan_history_to_phantom_items(self._phantom_items, self.state)
 
     def _build_occupied(self, exclude_uid: str = "") -> set:
         """

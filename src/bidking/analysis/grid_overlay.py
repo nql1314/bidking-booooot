@@ -35,6 +35,12 @@ from .grid_overlay_infer_shapes import (
     _infer_pseudo_blocked,
     compute_grid_overlay_infer_shapes,
 )
+from .grid_overlay_infer_vacant_rects import (
+    AUTO_VACANT_RECT_PHANTOM_PREFIX,
+    VacantRectPhantomSpec,
+    compute_vacant_rect_phantom_specs,
+    is_auto_vacant_rect_phantom_uid,
+)
 from .grid_overlay_item_merge import (
     apply_infer_shapes_to_items,
     apply_manual_confirm_projection,
@@ -77,6 +83,10 @@ __all__ = [
     "build_occupied_cells",
     "compute_overlay_vacant_dict",
     "compute_grid_overlay_infer_shapes",
+    "compute_vacant_rect_phantom_specs",
+    "AUTO_VACANT_RECT_PHANTOM_PREFIX",
+    "VacantRectPhantomSpec",
+    "is_auto_vacant_rect_phantom_uid",
     "empty_zone_ignore_fraud_filter",
     "fraud_empty_cells_for_algorithm",
     "fraud_empty_cells_in_zone_prefix",

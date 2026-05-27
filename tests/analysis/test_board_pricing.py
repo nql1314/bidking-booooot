@@ -771,6 +771,113 @@ class BoardPricingTests(unittest.TestCase):
             )
         )
 
+    def test_infer_vacant_rect_phantoms_enabled_from_raw(self) -> None:
+        from bidking.config.runtime import infer_vacant_rect_phantoms_enabled
+
+        self.assertTrue(infer_vacant_rect_phantoms_enabled({"pricing": {}}))
+        self.assertFalse(
+            infer_vacant_rect_phantoms_enabled(
+                {"pricing": {"infer_vacant_rect_phantoms": False}}
+            )
+        )
+
+    def test_vacant_rect_phantom_specs_round4_solid_region(self) -> None:
+        """第 4 回合、Q1–Q4 已扫且低阶轮廓齐：实心空置矩形生成 phantom_vac 与唯一品质/候选。"""
+        from bidking.parsing.state import GameState, ItemKnowledge
+
+        _, csv_items = bp._load_item_prices_db()
+        excl_q = {1, 2, 3, 4}
+        pick_shape: int | None = None
+        pick_quality: int | None = None
+        pick_confirm: int | None = None
+        for sh in sorted({i.shape for i in csv_items}):
+            pool = [
+                i
+                for i in csv_items
+                if i.shape == sh
+                and 1 <= int(i.quality) <= 6
+                and int(i.quality) not in excl_q
+            ]
+            if len(pool) != 1 or int(pool[0].item_id) <= 0:
+                continue
+            pick_shape = int(sh)
+            pick_quality = int(pool[0].quality)
+            pick_confirm = int(pool[0].item_id)
+            break
+        self.assertIsNotNone(pick_shape, "need a shape with single Q5/Q6 quality in CSV")
+        assert pick_shape is not None and pick_quality is not None
+        from bidking.analysis._shape_wh import shape_wh_from_snapshot
+
+        w, h = shape_wh_from_snapshot(pick_shape)
+
+        st = GameState()
+        st.current_round = 4
+        st.map_id = 2101
+        for q in (1, 2, 3, 4):
+            st._scan_history.append(("quality", q, frozenset({"log_q%d" % q})))
+        anchors = [(0, 0), (0, 9), (9, 0), (9, 9)]
+        for q, (r, c) in zip((1, 2, 3, 4), anchors):
+            uid = f"log_q{q}"
+            st.items[uid] = ItemKnowledge(
+                uid=uid,
+                box_id=r * 10 + c,
+                box_id_confirmed=True,
+                shape=11,
+                quality=q,
+            )
+        dr, dc = 3, 3
+        occ = {(r, c) for r, c in anchors}
+        for pad_r in range(-1, h + 1):
+            for pad_c in range(-1, w + 1):
+                r, c = dr + pad_r, dc + pad_c
+                if not (0 <= r < 10 and 0 <= c < 10):
+                    continue
+                if dr <= r < dr + h and dc <= c < dc + w:
+                    continue
+                occ.add((r, c))
+        max_box_id = (dr + h) * 10 + (dc + w)
+        specs = grid_overlay_mod.compute_vacant_rect_phantom_specs(
+            game_state=st,
+            manual_shapes={},
+            phantom_items={},
+            phantom_quality_pref={},
+            occupied_cells=occ,
+            vacant_manual_suppress=set(),
+            max_box_id=max_box_id,
+            raw_pricing={"event_stats": {f"q{pick_quality}_count": 99}},
+            current_round=4,
+            fraud_cells=set(),
+            enabled=True,
+        )
+        self.assertEqual(len(specs), 1)
+        sp = specs[0]
+        self.assertTrue(sp.uid.startswith(grid_overlay_mod.AUTO_VACANT_RECT_PHANTOM_PREFIX))
+        self.assertEqual((sp.w, sp.h, sp.dc, sp.dr), (w, h, dc, dr))
+        self.assertEqual(sp.quality, pick_quality)
+        self.assertEqual(sp.manual_confirm_item_id, pick_confirm)
+
+    def test_vacant_rect_phantom_skipped_when_not_round4(self) -> None:
+        from bidking.parsing.state import GameState
+
+        st = GameState()
+        st.current_round = 3
+        st.map_id = 2101
+        for q in (1, 2, 3, 4):
+            st._scan_history.append(("quality", q, frozenset()))
+        specs = grid_overlay_mod.compute_vacant_rect_phantom_specs(
+            game_state=st,
+            manual_shapes={},
+            phantom_items={},
+            phantom_quality_pref={},
+            occupied_cells=set(),
+            vacant_manual_suppress=set(),
+            max_box_id=30,
+            raw_pricing={},
+            current_round=3,
+            enabled=True,
+        )
+        self.assertEqual(specs, [])
+
     def test_infer_pseudo_blocked_keeps_prior_infer_on_foreign_anchor(self) -> None:
         """先前推断占住的格不能再借 ``baseline - self_base`` 排除误放行。"""
         pb = grid_overlay_mod._infer_pseudo_blocked(
