@@ -1815,6 +1815,8 @@ class BoardPricingTests(unittest.TestCase):
             p.get("est_orange"),
             int(round(t - kcw + float(vac + kg) * 111.0)),
         )
+        self.assertEqual(p.get("vacant_pts_base"), t - kcw)
+        self.assertEqual(p.get("vacant_adj"), vac + kg)
 
     def test_blend_random_avg_helper_q14_separate_floor_ceiling(self) -> None:
         ev = {"random_avg_price_min": 1_531_348}

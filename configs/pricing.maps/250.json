@@ -4,7 +4,21 @@
     "enable_opponent_bid_adjustment": true,
     "enable_vacant_red_floor_ceiling_pick": true,
     "enable_big_gold_adjustment": true,
-    "fallback_bid_price": 333333
+    "fallback_bid_price": 333333,
+    "enable_late_round_low_bid_surrender": false,
+    "late_round_low_bid_surrender_after_round": 0,
+    "late_round_low_bid_surrender_below": 0,
+    "late_round_low_bid_surrender_bid": 0,
+    "secret_auction_rank_opponent_multipliers": {
+      "1": 0.0,
+      "2": 0.0,
+      "3": 0.0,
+      "4": 0.0,
+      "default": 0.0
+    },
+    "map_quality_unit_per_cell": {
+      "q56": 24000.0
+    }
   },
   "automation": {
     "bid_cap_price": 3000000,
@@ -14,6 +28,8 @@
       "3": 0.8,
       "4": 0.9,
       "5": 0.95
-    }
+    },
+    "aisha_round4_tool_min_vacant": 0,
+    "enable_aisha_round4_tool_vacant_gate": false
   }
 }

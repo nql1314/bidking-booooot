@@ -17,9 +17,8 @@ from .state import CsvItem, GameState
 OVERBID_SURPLUS_THRESHOLD = 10000
 OVERBID_REBATE_PER_PLAYER_RATE = 0.10
 
-# 全局对局报表（``<data>/game_match_reports.csv``）；当次会话（``game_match_reports_<启动时间>.csv``）。
+# 全局对局报表（``<data>/game_match_reports.csv``）。
 _DEFAULT_REPORT_FILENAME = "game_match_reports.csv"
-_SESSION_STAMP: Optional[str] = None
 
 _REPORT_HEADER = [
     "对局UID",
@@ -50,13 +49,11 @@ def game_report_max_matches() -> int:
 
 
 def init_game_report_csv_session() -> None:
-    """程序入口调用一次：固定当次会话报表路径时间戳；并裁剪全局报表局数上限。"""
-    global _INIT_DONE, _SESSION_STAMP
+    """程序入口调用一次：裁剪全局报表局数上限。"""
+    global _INIT_DONE
     if _INIT_DONE:
         return
     _INIT_DONE = True
-    if _SESSION_STAMP is None:
-        _SESSION_STAMP = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     if os.environ.get("BIDKING_DISABLE_GAME_REPORT", "").strip().lower() in (
         "1",
         "true",
@@ -461,24 +458,6 @@ def resolve_game_report_csv_path() -> Path:
         return (Path.cwd() / _DEFAULT_REPORT_FILENAME).resolve()
 
 
-def resolve_game_report_session_csv_path() -> Path:
-    """
-    当次启动会话报表：``BIDKING_GAME_REPORT_SESSION_CSV``；
-    否则 ``<data>/game_match_reports_<启动时间>.csv``（与本次进程 ``init_game_report_csv_session`` 一致）。
-    """
-    env = os.environ.get("BIDKING_GAME_REPORT_SESSION_CSV", "").strip()
-    if env:
-        return Path(env).expanduser().resolve()
-    init_game_report_csv_session()
-    stamp = _SESSION_STAMP or datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    try:
-        from bidking.config.paths import data_dir
-
-        return (data_dir() / f"game_match_reports_{stamp}.csv").resolve()
-    except Exception:
-        return (Path.cwd() / f"game_match_reports_{stamp}.csv").resolve()
-
-
 def _append_report_rows(path: Path, rows_out: List[List[str]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     new_file = not path.exists() or path.stat().st_size == 0
@@ -521,7 +500,7 @@ def append_game_over_report_csv(
     （不再叠门票/返利，避免与服务器重复）。
 
     ``target_path``：显式指定单一输出文件（测试/补录用）。
-    缺省则写入当次会话报表，并同步追加到全局 ``game_match_reports.csv``。
+    缺省则仅追加到全局 ``game_match_reports.csv``。
     """
     if os.environ.get("BIDKING_DISABLE_GAME_REPORT", "").strip().lower() in (
         "1",
@@ -568,15 +547,8 @@ def append_game_over_report_csv(
 
     if target_path is not None:
         write_paths = [target_path]
-    elif os.environ.get("BIDKING_GAME_REPORT_CSV", "").strip():
-        write_paths = [resolve_game_report_csv_path()]
-    elif os.environ.get("BIDKING_GAME_REPORT_SESSION_CSV", "").strip():
-        write_paths = [resolve_game_report_session_csv_path()]
     else:
-        write_paths = [
-            resolve_game_report_session_csv_path(),
-            resolve_game_report_csv_path(),
-        ]
+        write_paths = [resolve_game_report_csv_path()]
 
     t_start = str(getattr(state, "match_started_at", "") or "")
     t_end = str(getattr(state, "match_ended_at", "") or "")
@@ -698,5 +670,4 @@ __all__ = [
     "init_game_report_csv_session",
     "init_global_game_report_csv",
     "resolve_game_report_csv_path",
-    "resolve_game_report_session_csv_path",
 ]

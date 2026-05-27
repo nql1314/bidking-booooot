@@ -23,6 +23,7 @@ from ..analysis.map_avg_csv import load_prefix3_to_min_map_id
 from ..analysis.map_quality_unit_config import CONFIG_KEYS, load_map_quality_unit_price_refs
 from ..config.visual_schema import (
     coerce_field_value,
+    field_is_display_only,
     format_field_value,
     get_by_path,
     load_visual_config_schema,
@@ -82,6 +83,8 @@ class VisualConfigPanel:
         self._autosave_after: dict[str, str | None] = {"config": None, "map": None}
         self._autosave_ms = 600
         self._rebuilding_form = False
+        # 表单当前展示的地图档；切换下拉时 map_var 已变新档，须用此键 flush 避免写错文件
+        self._editing_map_key = ""
 
         self._reload_config_sources()
         self._build_ui(parent)
@@ -268,6 +271,8 @@ class VisualConfigPanel:
 
     def _bind_autosave(self, binding: _FieldBinding, scope: str) -> None:
         field = binding.field
+        if field_is_display_only(field):
+            return
         ftype = str(field.get("type") or "str").strip().lower()
 
         def _schedule(*_args: object) -> None:
@@ -307,12 +312,14 @@ class VisualConfigPanel:
             self._autosave_after[scope] = None
 
     def _flush_autosave(self) -> None:
-        """切换地图前：立即写入待保存的编辑。"""
+        """立即写入待保存的编辑（地图写入当前表单档键，而非下拉已切换后的档）。"""
         self._cancel_pending_autosave()
         if self._config_bindings:
             self._save_config_scope(silent=True)
         if self._map_bindings or self._map_quality_unit_vars:
-            self._save_map_scope(silent=True)
+            mk = self._editing_map_key or self._effective_map_key()
+            if mk:
+                self._save_map_scope(map_key=mk, silent=True)
 
     def _make_widget(
         self,
@@ -330,6 +337,10 @@ class VisualConfigPanel:
             w = ttk.Combobox(parent, textvariable=var, values=choices, width=18)
             if choices:
                 w.configure(state="readonly")
+            return var, w
+        if ftype == "display":
+            var = tk.StringVar()
+            w = ttk.Label(parent, textvariable=var, width=20)
             return var, w
         if ftype == "json":
             var = tk.StringVar()
@@ -395,6 +406,7 @@ class VisualConfigPanel:
                 autosave_scope="map",
             )
             self._populate_map_quality_unit_section(self._map_canvas_frame)
+            self._editing_map_key = self._effective_map_key()
         finally:
             self._rebuilding_form = False
 
@@ -571,7 +583,12 @@ class VisualConfigPanel:
             pricing.pop("map_quality_unit_per_cell", None)
 
     def _on_map_combo_selected(self, _event: object = None) -> None:
-        self._flush_autosave()
+        old_mk = self._editing_map_key
+        self._cancel_pending_autosave()
+        if self._config_bindings:
+            self._save_config_scope(silent=True)
+        if old_mk and (self._map_bindings or self._map_quality_unit_vars):
+            self._save_map_scope(map_key=old_mk, silent=True)
         self._reload_map_doc()
         self._rebuild_field_forms()
 
@@ -601,6 +618,8 @@ class VisualConfigPanel:
     ) -> None:
         for binding in bindings:
             field = binding.field
+            if field_is_display_only(field):
+                continue
             path = str(field.get("path") or "").strip()
             if not path:
                 continue
@@ -643,9 +662,9 @@ class VisualConfigPanel:
                 messagebox.showerror("主配置", str(exc))
             self.status_var.set(f"保存失败: {exc}")
 
-    def _save_map_scope(self, *, silent: bool = False) -> None:
+    def _save_map_scope(self, *, map_key: str | None = None, silent: bool = False) -> None:
         try:
-            mk = self._effective_map_key()
+            mk = (map_key or self._editing_map_key or self._effective_map_key()).strip()
             if not mk:
                 raise ValueError("请先选择地图")
             path = pricing_map_overlay_path(mk)
@@ -661,7 +680,8 @@ class VisualConfigPanel:
                 au_doc.pop("safe_guard_max_increase_ratio", None)
                 au_doc.pop("default_map", None)
             _save_json(path, doc)
-            self.map_doc = doc
+            if mk == self._effective_map_key():
+                self.map_doc = doc
 
             if self._map_quality_unit_editable(mk) and self._map_quality_unit_vars:
                 shared = self._map_quality_unit_source_bundle(mk)

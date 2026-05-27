@@ -9,6 +9,7 @@ import unittest
 from pathlib import Path
 
 from bidking.analysis.map_avg_csv import set_map_quality_csv_override
+from bidking.analysis._board_pricing import build_snapshot_pricing_dict
 from bidking.analysis.map_quality_unit_config import (
     apply_map_quality_unit_per_cell_overrides,
     config_overrides_from_pricing,
@@ -85,6 +86,40 @@ class MapQualityUnitConfigTests(unittest.TestCase):
         finally:
             set_map_quality_csv_override(None)
             csv_path.unlink(missing_ok=True)
+            map_path.unlink(missing_ok=True)
+
+    def test_cached_raw_pricing_reapplies_map_unit_overrides(self) -> None:
+        """快照内嵌旧 raw_pricing 时，定价仍应读取当前 pricing.maps 格单价覆盖。"""
+        from bidking.config import map_runtime_overlay as mro
+
+        map_json = tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, suffix=".json")
+        json.dump(
+            {"pricing": {"map_quality_unit_per_cell": {"q56": 22000}}},
+            map_json,
+            ensure_ascii=False,
+        )
+        map_json.close()
+        map_path = Path(map_json.name)
+        orig = mro.pricing_map_overlay_path
+        mro.pricing_map_overlay_path = lambda mid: map_path  # type: ignore[assignment]
+        try:
+            snap = {
+                "game_state": {"map_id": 2401, "current_round": 4, "items": {}},
+                "skill_logs": [],
+                "map_id": 2401,
+                "current_round": 4,
+                "raw_pricing": {
+                    "csv_quality_groups_avg_per_cell": {
+                        "q5": 100.0,
+                        "q5+q6": 200.0,
+                        "q6": 300.0,
+                    }
+                },
+            }
+            p = build_snapshot_pricing_dict(snap)
+            self.assertEqual(p.get("vacant_unit_gold_red"), 22000)
+        finally:
+            mro.pricing_map_overlay_path = orig  # type: ignore[assignment]
             map_path.unlink(missing_ok=True)
 
 

@@ -1,6 +1,6 @@
 {
   "pricing": {
-    "fallback_bid_price": 155555,
+    "fallback_bid_price": 122222,
     "enable_big_gold_adjustment": false,
     "enable_opponent_bid_adjustment": true,
     "enable_vacant_red_floor_ceiling_pick": true,
@@ -15,7 +15,7 @@
       "4": 0.0,
       "default": 0.0
     },
-    "vacant_red_floor_ceiling_pick_mode": "aggressive"
+    "vacant_red_floor_ceiling_pick_mode": "normal"
   },
   "automation": {
     "bid_cap_price": 800000,

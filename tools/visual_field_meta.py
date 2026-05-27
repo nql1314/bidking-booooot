@@ -80,19 +80,11 @@ FIELD_META: dict[str, dict[str, str]] = {
     },
     "automation.express_station_round1_emoji.seat_1_price": {
         "label": "快递站暗号价（座位1）",
-        "description": "对手回表情后，OCR 第 1 席身份区匹配顾问（座位 1）时使用的固定出价。",
+        "description": "只读展示；修改请编辑 configs/pricing.maps/<地图档>.json 中的 seat_1_price。",
     },
     "automation.express_station_round1_emoji.seat_2_price": {
         "label": "快递站暗号价（座位2）",
-        "description": "对手回表情后，OCR 第 1 席非己方（座位 2）时使用的固定出价。",
-    },
-    "automation.express_station_round1_emoji.character_name": {
-        "label": "暗号判席角色名",
-        "description": "OCR 第 1 席身份区匹配用的己方角色名（按地图配置）。",
-    },
-    "automation.express_station_round1_emoji.character_title": {
-        "label": "暗号判席称号",
-        "description": "单个称号字符串，OCR 第 1 席称号区须包含（按地图配置）。",
+        "description": "只读展示；修改请编辑 configs/pricing.maps/<地图档>.json 中的 seat_2_price。",
     },
     "automation.game_start_timeout_seconds": {
         "label": "开局等待超时（秒）",

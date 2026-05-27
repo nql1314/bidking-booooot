@@ -87,6 +87,7 @@ from ...analysis.raw_pricing import (
 from ...analysis.snapshot import game_state_to_json, item_knowledge_to_json
 from ...config.runtime import (
     infer_fraud_empty_cells_algorithm_and_trim,
+    infer_unknown_contour_shapes_enabled,
     load_runtime,
 )
 from ...pricing.compute import compute_price
@@ -333,30 +334,114 @@ def _display_position_estimate_pts(p: Dict[str, Any]) -> Optional[float]:
     return None
 
 
-def _generic_position_formula_line(p: Dict[str, Any]) -> str:
-    """通用画板：T+V×U 粗算（扫描早期 U 见 early_vacant_unit_from_scan）；顶栏数字见 ``pricing.points_ceiling``。"""
+def _pricing_vacant_formula_parts(p: Dict[str, Any]) -> Tuple[float, int]:
+    """与 ``pipeline.compute_base_metrics`` 一致的定价基底 T' 与有效空置乘数 V'。"""
+    vb = p.get("vacant_pts_base")
+    va = p.get("vacant_adj")
+    if vb is not None and va is not None:
+        try:
+            return float(vb), int(va)
+        except (TypeError, ValueError):
+            pass
     try:
         t_val = float(p.get("total") or 0)
     except (TypeError, ValueError):
         t_val = 0.0
     try:
-        v_eff = int(p.get("vacant") or 0)
+        kcw = float(p.get("known_contour_weighted_price") or 0)
     except (TypeError, ValueError):
-        v_eff = 0
+        kcw = 0.0
+    try:
+        tev = float(p.get("tier_extra_value") or 0)
+    except (TypeError, ValueError):
+        tev = 0.0
+    t_base = t_val - kcw + tev
+    try:
+        vac = int(p.get("vacant") or 0)
+    except (TypeError, ValueError):
+        vac = 0
+    try:
+        kcg = int(p.get("known_contour_weighted_cells") or 0)
+    except (TypeError, ValueError):
+        kcg = 0
+    try:
+        tec = int(p.get("tier_extra_cells") or 0)
+    except (TypeError, ValueError):
+        tec = 0
+    try:
+        uc = int(p.get("unknown_contour_vacant_cell_excess_subtract") or 0)
+    except (TypeError, ValueError):
+        uc = 0
+    v_adj = max(0, vac + kcg - tec - uc)
+    return t_base, v_adj
+
+
+def _pricing_vacant_formula_head_lines(p: Dict[str, Any], v_adj: int) -> List[str]:
+    """T'/V' 与几何空置、扣减项说明（与 ``pricing`` 字段一致）。"""
+    try:
+        t_items = float(p.get("total") or 0)
+    except (TypeError, ValueError):
+        t_items = 0.0
+    try:
+        t_base, _ = _pricing_vacant_formula_parts(p)
+    except (TypeError, ValueError):
+        t_base = t_items
+    try:
+        vac = int(p.get("vacant") or 0)
+    except (TypeError, ValueError):
+        vac = 0
+    lines: List[str] = [
+        f"T'（定价基底 vacant_pts_base）= {t_base:,.0f}",
+        f"V'（有效空置乘数 vacant_adj）= {v_adj}",
+        f"几何空置 pricing.vacant = {vac}（vacant_source = {p.get('vacant_source', '—')!s}）",
+    ]
+    v_g = p.get("vacant_geometric")
+    if v_g is not None:
+        lines.append(f"后备 vacant_geometric = {v_g}")
+    kcg = p.get("known_contour_weighted_cells")
+    kcw = p.get("known_contour_weighted_price")
+    tec = p.get("tier_extra_cells")
+    tev = p.get("tier_extra_value")
+    uc = p.get("unknown_contour_vacant_cell_excess_subtract")
+    if any(x not in (None, 0, 0.0) for x in (kcw, kcg, tec, tev, uc)):
+        parts: List[str] = []
+        if kcw not in (None, 0, 0.0) or kcg not in (None, 0):
+            parts.append(
+                f"已知轮廓 −{float(kcw or 0):,.0f} 价 / +{int(kcg or 0)} 格"
+            )
+        if tev not in (None, 0, 0.0) or tec not in (None, 0):
+            parts.append(
+                f"档位最少格 +{float(tev or 0):,.0f} 价 / −{int(tec or 0)} 空置格"
+            )
+        if uc not in (None, 0):
+            parts.append(f"未知轮廓多计 −{int(uc)} 空置格")
+        if parts:
+            lines.append("调整：" + "；".join(parts) + f"（物品总价 T = {t_items:,.0f}）")
+    src = "地图品质均价 CSV" if p.get("map_quality_avg_hit") else "内置缺省单价"
+    lines.append(f"空置单价来源：{src}")
+    lines.append("")
+    return lines
+
+
+def _generic_position_formula_line(p: Dict[str, Any]) -> str:
+    """通用画板：T'+V'×U（与 est_* / points 同源）；顶栏数字见 ``pricing.points_ceiling``。"""
+    t_base, v_adj = _pricing_vacant_formula_parts(p)
     eu = p.get("early_vacant_unit_from_scan")
     try:
         u_scan = int(eu) if eu is not None else None
     except (TypeError, ValueError):
         u_scan = None
     if u_scan is not None:
-        approx = t_val + float(v_eff) * float(u_scan)
-        return f"T+V×U_scan ≈ {t_val:,.0f}+{v_eff}×{u_scan:,} = {approx:,.0f}"
+        approx = t_base + float(v_adj) * float(u_scan)
+        return (
+            f"T'+V'×U_scan ≈ {t_base:,.0f}+{v_adj}×{u_scan:,} = {approx:,.0f}"
+        )
     try:
         u_o = float(p.get("vacant_unit_all_orange") or 0)
     except (TypeError, ValueError):
         u_o = 0.0
-    approx = t_val + float(v_eff) * u_o
-    return f"T+V×U_全橙 ≈ {t_val:,.0f}+{v_eff}×{u_o:,.0f} = {approx:,.0f}"
+    approx = t_base + float(v_adj) * u_o
+    return f"T'+V'×U_全橙 ≈ {t_base:,.0f}+{v_adj}×{u_o:,.0f} = {approx:,.0f}"
 
 
 # 写入 board_snapshot.json 的 schema 版本（与 bot 侧校验一致）
@@ -721,6 +806,20 @@ class GridWindow:
                     file=sys.stderr,
                 )
         self._snapshot_export_overlay = bool(snapshot_export_overlay)
+        try:
+            from ...config.runtime import load_runtime
+            from ...interaction.public_blacklist_sync import (
+                sync_public_blacklist_from_tencent_docs,
+            )
+
+            _ok, _note = sync_public_blacklist_from_tencent_docs(load_runtime().raw)
+            if _note:
+                print(f"[bidking] {_note}", file=sys.stderr)
+        except Exception as exc:
+            print(
+                f"[bidking] 公共黑名单同步失败（保留本地 CSV）: {exc}",
+                file=sys.stderr,
+            )
         self._perf_log_path: Path = _grid_perf_log_path(self._snapshot_path or "")
         self._perf_log_mode: str = _grid_perf_log_mode()
         self._skill_logs: List[dict] = []
@@ -731,6 +830,7 @@ class GridWindow:
         self._last_compute_price: Optional[int] = None
         self._last_compute_payload: Optional[Dict[str, Any]] = None
         self._header_compute_sig: Optional[Tuple[Any, ...]] = None
+        self._express_players_sig: Optional[Tuple[Any, ...]] = None
         # 地图类别权重入口：category tag -> multiplier，默认由 item_db 使用 1.0。
         self._map_category_weights = map_category_weights
         self._home_shell: Optional[tk.Tk] = home_shell
@@ -753,6 +853,9 @@ class GridWindow:
         )
         self._grid_avg_infer_max_grid_count = resolve_grid_avg_infer_max_grid_count(
             pricing_dict=_pricing_rt if isinstance(_pricing_rt, dict) else {}
+        )
+        self._infer_unknown_contour_shapes = infer_unknown_contour_shapes_enabled(
+            _rt_cfg
         )
 
         # 实时 tail：关闭画板或返回主页时置位，供后台线程退出
@@ -973,6 +1076,7 @@ class GridWindow:
                 self.state.items, self._phantom_items
             ),
             raw_pricing=rp,
+            infer_unknown_contour_shapes=self._infer_unknown_contour_shapes,
         )
         self._infer_shapes = {
             str(uid): (int(t[0]), int(t[1]), int(t[2]), int(t[3]))
@@ -1428,9 +1532,20 @@ class GridWindow:
         return (
             "画板金（Q5）/ 红（Q6）件数与格数\n"
             "与 ``merged_items_dict`` 一致（日志 + 幽灵、手动画框、推断外形、偏好与手动确认投影）。\n\n"
-            "「未知」：合并表中 ``quality`` 仍为空的占位物品总格数（品质未定）。\n\n"
-            "行末「当前画板…=物品占位…+空置…」：画板格 = ``merged_items_dict`` 占位总格 + 空置格数；"
-            "其中「空置」与 ``pricing.vacant``、图例「估算总价」悬浮里所述空置同源（橘红候选区几何计数 / 200009 总格减占位）。"
+            "「未知」：合并表中 ``quality`` 仍为空的占位物品总格数（品质未定）。"
+        )
+
+    def _tooltip_text_vacant_geometric(self) -> str:
+        return (
+            "几何空置（pricing.vacant）\n"
+            "与橘红候选区计数、200009 总格减占位同源；"
+            "画板格 = 物品占位总格 + 本项空置格数。"
+        )
+
+    def _tooltip_text_vacant_adj(self) -> str:
+        return (
+            "未知空置格（pricing.vacant_adj，有效空置乘数 V'）\n"
+            "在空置格中去掉已知品质总格信息，实际参与到计算的未知品质的空置格。"
         )
 
     def _top_cats_text(self) -> str:
@@ -1456,6 +1571,210 @@ class GridWindow:
             return "类别TOP3: " + " / ".join(top_parts)
         except Exception:
             return ""
+
+    def _board_snapshot_for_express_blacklist_ui(self) -> tuple[dict[str, Any], dict[str, Any]]:
+        """供快递站表情黑名单 UI 使用的快照与 ``board_snapshot`` 配置段。"""
+        snap: dict[str, Any] = dict(self._make_board_snapshot())
+        gs = snap.get("game_state") or {}
+        g_uid = str(gs.get("uid") or "").strip()
+        if g_uid:
+            snap["game_uid"] = g_uid
+        try:
+            from ...analysis.strategy.ahmad import _local_board_snapshot_branch
+
+            branch = _local_board_snapshot_branch()
+        except Exception:
+            branch = {}
+        cfg_uid = str(branch.get("self_user_uid") or "").strip()
+        if cfg_uid:
+            snap["self_user_uid"] = cfg_uid
+        return snap, branch
+
+    def _collect_express_match_players(self) -> List[Dict[str, Any]]:
+        """快递站（档 210）本局玩家及黑名单状态。"""
+        from ...analysis.strategy.ahmad import map_bundle_is_express_station_series
+        from ...interaction.emoji_signal_blacklist import player_express_blacklist_reason
+        from ...pricing.snapshot_players import board_snapshot_self_identity
+
+        mid = int(self.state.map_id or 0)
+        if not map_bundle_is_express_station_series(mid):
+            return []
+        snap, branch = self._board_snapshot_for_express_blacklist_ui()
+        config = {"board_snapshot": branch}
+        self_uid, _ = board_snapshot_self_identity(config, snap)
+        self_uid_s = str(self_uid or "").strip()
+        g_uid = str(
+            (snap.get("game_state") or {}).get("uid")
+            or snap.get("game_uid")
+            or ""
+        ).strip()
+        players = self.state.players if isinstance(self.state.players, dict) else {}
+        out: List[Dict[str, Any]] = []
+        for p_uid, pdata in players.items():
+            if not isinstance(pdata, dict):
+                continue
+            uid_s = str(p_uid or "").strip()
+            if not uid_s:
+                continue
+            name = str(pdata.get("name") or uid_s).strip()
+            bl = player_express_blacklist_reason(
+                uid=uid_s, name=name, game_uid=g_uid
+            )
+            out.append(
+                {
+                    "uid": uid_s,
+                    "name": name,
+                    "is_self": bool(self_uid_s and uid_s == self_uid_s),
+                    "blacklist": bl,
+                }
+            )
+        out.sort(key=lambda p: (not p.get("is_self"), str(p.get("name") or "")))
+        return out
+
+    def _toggle_player_match_blacklist(self, uid: str, name: str) -> None:
+        """点击切换：加入或移出本局对局黑名单。"""
+        from ...interaction.emoji_signal_blacklist import (
+            add_player_to_match_blacklist,
+            is_on_match_blacklist,
+            remove_player_from_match_blacklist,
+        )
+        from ...pricing.snapshot_players import player_round_price_bid
+
+        snap, _branch = self._board_snapshot_for_express_blacklist_ui()
+        g_uid = str(
+            (snap.get("game_state") or {}).get("uid")
+            or snap.get("game_uid")
+            or ""
+        ).strip()
+        if is_on_match_blacklist(game_uid=g_uid, uid=uid, name=name):
+            changed, note = remove_player_from_match_blacklist(
+                game_uid=g_uid, uid=uid, name=name
+            )
+        else:
+            rnd = int(self.state.current_round or 1)
+            pdata = (
+                self.state.players.get(uid)
+                if isinstance(self.state.players, dict)
+                else None
+            )
+            bid = (
+                player_round_price_bid(pdata, rnd)
+                if isinstance(pdata, dict)
+                else None
+            )
+            changed, note = add_player_to_match_blacklist(
+                game_uid=g_uid,
+                uid=uid,
+                name=name,
+                round_no=rnd,
+                bid=bid,
+            )
+        hint = getattr(self, "_express_players_hint_label", None)
+        if hint is not None:
+            hint.config(text=note, fg="#7dffb0" if changed else "#ffb070")
+            self.root.after(
+                2500,
+                lambda: hint.config(text="", fg="#7dffb0")
+                if hint.winfo_exists()
+                else None,
+            )
+        if changed:
+            self._express_players_sig = None
+            self._update_express_players_row()
+
+    def _update_express_players_row(self) -> None:
+        """快递站地图：顶栏展示本局玩家；黑名单标红；点击切换对局黑名单。"""
+        frame = getattr(self, "_express_players_frame", None)
+        if frame is None:
+            return
+        bg = "#1a1a2e"
+        players = self._collect_express_match_players()
+        sig = tuple(
+            (p["uid"], p["name"], p.get("blacklist"), p.get("is_self"))
+            for p in players
+        )
+        if sig == self._express_players_sig:
+            return
+        self._express_players_sig = sig
+        for child in frame.winfo_children():
+            child.destroy()
+        if not players:
+            return
+        tk.Label(
+            frame,
+            text="对局玩家",
+            bg=bg,
+            fg="#9fd9ff",
+            font=("微软雅黑", 10, "bold"),
+            anchor="w",
+        ).pack(side="left", anchor="w")
+        tk.Label(
+            frame,
+            text="（点击玩家加入/移出对局黑名单）",
+            bg=bg,
+            fg="#7a8aaa",
+            font=("微软雅黑", 9),
+            anchor="w",
+        ).pack(side="left", padx=(6, 12), anchor="w")
+        for p in players:
+            uid = str(p["uid"])
+            name = str(p["name"])
+            bl = str(p.get("blacklist") or "")
+            is_self = bool(p.get("is_self"))
+            if bl == "public":
+                fg = "#ff5050"
+                tag = "·公共黑名单"
+            elif bl == "match":
+                fg = "#ff6060"
+                tag = "·对局黑名单"
+            else:
+                fg = "#b8d8ff"
+                tag = ""
+            if is_self:
+                if bl == "public":
+                    text = "我·公共黑名单"
+                elif bl == "match":
+                    text = "我·对局黑名单"
+                else:
+                    text = "我"
+            else:
+                text = f"{name}{tag}"
+            can_toggle = not is_self
+            lbl = tk.Label(
+                frame,
+                text=text,
+                bg=bg,
+                fg=fg,
+                font=("微软雅黑", 10, "bold" if bl else "normal"),
+                cursor="hand2" if can_toggle else "arrow",
+                anchor="w",
+            )
+            lbl.pack(side="left", padx=(0, 14), anchor="w")
+            if is_self:
+                tip = (
+                    f"昵称: {name}\nUID: {uid}\n（己方不可操作对局黑名单）"
+                )
+            elif bl == "match":
+                tip = f"UID: {uid}\n昵称: {name}\n点击移出对局黑名单"
+            else:
+                tip = f"UID: {uid}\n昵称: {name}\n点击加入对局黑名单"
+            _PricingHoverTip(lbl, lambda t=tip: t)
+            if can_toggle:
+                lbl.bind(
+                    "<Button-1>",
+                    lambda _e, u=uid, n=name: self._toggle_player_match_blacklist(
+                        u, n
+                    ),
+                )
+        self._express_players_hint_label = tk.Label(
+            frame,
+            text="",
+            bg=bg,
+            fg="#7dffb0",
+            font=("微软雅黑", 9),
+            anchor="w",
+        )
+        self._express_players_hint_label.pack(side="left", padx=(8, 0), anchor="w")
 
     def _info_summary_text(self) -> str:
         """第 2 行摘要：画板总格、已知物品件数、总格数、平均格数。"""
@@ -2056,6 +2375,7 @@ class GridWindow:
             max_box_id=max_anchor_box_id_from_overlay_ui(
                 self.state.items, self._phantom_items
             ),
+            infer_unknown_contour_shapes=self._infer_unknown_contour_shapes,
             infer_suppress_uids=self._infer_suppress_uids,
         )
         inf = export.get("infer_shapes") or {}
@@ -2257,6 +2577,7 @@ class GridWindow:
 
     def _reset_for_new_game(self) -> None:
         """新对局开始：清空幽灵、更新标题、重建 Canvas。"""
+        self._express_players_sig = None
         # 新对局：清空所有手动注释
         self._phantom_items.clear()
         self._phantom_draw_state = None
@@ -2275,6 +2596,7 @@ class GridWindow:
         )
         if hasattr(self, "_info_bar_label"):
             self._info_bar_label.config(text=self._info_summary_text())
+        self._update_express_players_row()
         cw = GRID_COLS * CELL_W + 1
         ch = GRID_ROWS * CELL_H + 1
         self.canvas.config(
@@ -2403,11 +2725,7 @@ class GridWindow:
         p = self._last_pricing_for_tooltips
         if not isinstance(p, dict) or not p:
             return "（估价尚未计算，请稍候刷新）"
-        t_raw = p.get("total")
-        try:
-            t_val = float(t_raw or 0)
-        except (TypeError, ValueError):
-            t_val = 0.0
+        t_base, v_adj = _pricing_vacant_formula_parts(p)
         try:
             u_o = float(p.get("vacant_unit_all_orange") or 0)
             u_gr = float(p.get("vacant_unit_gold_red") or 0)
@@ -2415,50 +2733,32 @@ class GridWindow:
         except (TypeError, ValueError):
             u_o = u_gr = u_r = 0.0
 
-        v_raw = p.get("vacant_geometric")
-        try:
-            v_g = int(v_raw) if v_raw is not None else None
-        except (TypeError, ValueError):
-            v_g = None
-        v_eff_raw = p.get("vacant")
-        try:
-            v_eff = int(v_eff_raw) if v_eff_raw is not None else 0
-        except (TypeError, ValueError):
-            v_eff = 0
-        src = "地图品质均价 CSV" if p.get("map_quality_avg_hit") else "内置缺省单价"
-
-        head: List[str] = [
-            f"定价用空置 V = {v_eff}（见 pricing.vacant；vacant_source = {p.get('vacant_source', '—')!s}）",
-        ]
-        if v_g is not None:
-            head.append(f"后备/几何相关 vacant_geometric = {v_g}")
-        head.append(f"空置单价来源：{src}")
-        head.append("")
+        head = _pricing_vacant_formula_head_lines(p, v_adj)
 
         if key == "orange":
             title = "全橙估价 est_orange"
-            formula = "T + V × U_全橙"
+            formula = "T' + V' × U_全橙"
             u = u_o
             result = p.get("est_orange")
-            num = f"{t_val:,.0f} + {v_eff} × {u_o:,.0f} = {float(result or 0):,.0f}"
+            num = f"{t_base:,.0f} + {v_adj} × {u_o:,.0f} = {float(result or 0):,.0f}"
         elif key == "gold_red":
             title = "金红估价 est_gold_red"
-            formula = "T + V × U_金红"
+            formula = "T' + V' × U_金红"
             u = u_gr
             result = p.get("est_gold_red")
-            num = f"{t_val:,.0f} + {v_eff} × {u_gr:,.0f} = {float(result or 0):,.0f}"
+            num = f"{t_base:,.0f} + {v_adj} × {u_gr:,.0f} = {float(result or 0):,.0f}"
         elif key == "red":
             title = "全红估价 est_red"
-            formula = "T + V × U_全红"
+            formula = "T' + V' × U_全红"
             u = u_r
             result = p.get("est_red")
-            num = f"{t_val:,.0f} + {v_eff} × {u_r:,.0f} = {float(result or 0):,.0f}"
+            num = f"{t_base:,.0f} + {v_adj} × {u_r:,.0f} = {float(result or 0):,.0f}"
         elif key == "floor":
             title = "仓位估价区间 points_floor / points_ceiling"
             pf = p.get("points_floor")
             pc = p.get("points_ceiling")
             ahmad_active = bool(p.get("ahmad_pricing_active"))
-            base_lines = [title]
+            base_lines = [title, *head]
             if ahmad_active:
                 wc = _ahmad_detail_winner_candidate(p.get("ahmad_points_detail"))
                 if wc:
@@ -2477,9 +2777,13 @@ class GridWindow:
                     f"通用画板对照区间 generic_floor/ceiling = {gpf!s} / {gpc!s}。"
                 )
             else:
+                est_o = p.get("est_orange")
+                est_r = p.get("est_red")
                 base_lines.extend(
                     [
-                        f"第 4 回合起：下限 ≈ T + V×U_全橙 = {pf!s}；上限 ≈ T + V×U_全红 = {pc!s}。",
+                        f"第 4 回合起（未混合 random_avg 时）：下限 ≈ T'+V'×U_全橙 = {est_o!s}（est_orange）；"
+                        f"上限 ≈ T'+V'×U_全红 = {est_r!s}（est_red）。",
+                        f"当前 points_floor / points_ceiling = {pf!s} / {pc!s}（含早单价、大金、random_avg 等规则后可能与 est_* 不同）。",
                         "第 1–3 回合：早期定价常使 floor/ceiling 与 points 相同；"
                         "顶栏「仓位估价」数字取 points_ceiling（与 points 不同时见上沿单价）。",
                     ]
@@ -2491,15 +2795,21 @@ class GridWindow:
         else:
             return ""
 
+        est_key = {"orange": "est_orange", "gold_red": "est_gold_red", "red": "est_red"}[
+            key
+        ]
         lines = [
             title,
             *head,
-            f"公式：{formula}",
-            f"其中 U = ¥{u:,.0f}",
-            f"数字：{num}",
+            f"公式：{formula}（T' = vacant_pts_base，V' = vacant_adj）",
+            f"其中 U = ¥{u:,.0f} / 格",
+            f"数字：{num}（与 pricing.{est_key} 一致）",
         ]
         if key in ("red", "orange", "gold_red"):
-            lines.append("说明：适用于金红总格明确的情况下。")
+            lines.append(
+                "说明：T' 自物品总价扣除已知轮廓权重价并加档位最少格补价；"
+                "V' 在几何空置上计入已知轮廓格、扣减档位与未知轮廓多计。"
+            )
         return "\n".join(lines)
 
     def _tooltip_text_early_exclusions(self) -> str:
@@ -2512,8 +2822,7 @@ class GridWindow:
             u_int = int(eu) if eu is not None else 0
         except (TypeError, ValueError):
             u_int = 0
-        t_val = float(p.get("total") or 0)
-        v_eff = int(p.get("vacant") or 0)
+        t_base, v_adj = _pricing_vacant_formula_parts(p)
         pts = p.get("points")
         qg = str(p.get("early_vacant_csv_group") or "").strip()
         pq_raw = p.get("early_vacant_possible_qualities")
@@ -2538,7 +2847,7 @@ class GridWindow:
         lines.extend(
             [
                 f"U = ¥{u_int:,.0f} / 格（pricing.early_vacant_unit_from_scan）",
-                f"顶栏地图行「当前画板…=…+空置…」中的空置格数与 pricing.vacant 一致，当前 V = {v_eff}。",
+                f"顶栏地图行「当前画板…=…+空置…」中的几何空置与 pricing.vacant 一致；定价乘数 V' = {v_adj}。",
             ]
         )
         if p.get("ahmad_pricing_active"):
@@ -2548,7 +2857,7 @@ class GridWindow:
             )
         else:
             lines.append(
-                f"pricing.points 粗算 ≈ T + V×U_scan = {t_val:,.0f} + {v_eff} × {u_int:,.0f}（与 pricing.points 一致；顶栏数字用 points_ceiling）。",
+                f"pricing.points 粗算 ≈ T'+V'×U_scan = {t_base:,.0f} + {v_adj} × {u_int:,.0f}（与 pricing.points 一致；顶栏数字用 points_ceiling）。",
             )
         pc_disp = p.get("points_ceiling")
         if pc_disp is not None:
@@ -2612,8 +2921,10 @@ class GridWindow:
             lines.append(_generic_position_formula_line(p))
         if pf is not None or pc is not None:
             lines.append(f"points_floor / points_ceiling = {pf!s} / {pc!s}")
+        _, v_adj = _pricing_vacant_formula_parts(p)
         lines.append(
-            f"空置 V = {p.get('vacant')!s}；单价 CSV 命中 = {p.get('map_quality_avg_hit')!s}。"
+            f"几何空置 pricing.vacant = {p.get('vacant')!s}；有效乘数 V' = {v_adj}；"
+            f"单价 CSV 命中 = {p.get('map_quality_avg_hit')!s}。"
         )
         return "\n".join(lines)
 
@@ -2705,6 +3016,15 @@ class GridWindow:
             )
             if hasattr(self, "_map_board_stats_label"):
                 self._map_board_stats_label.config(text=f"空置 {vac_n}格")
+            if hasattr(self, "_map_vacant_adj_label"):
+                try:
+                    _, vac_adj = _pricing_vacant_formula_parts(p)
+                except (TypeError, ValueError):
+                    try:
+                        vac_adj = int(p.get("vacant_adj") or 0)
+                    except (TypeError, ValueError):
+                        vac_adj = 0
+                self._map_vacant_adj_label.config(text=f"未知空置格 {vac_adj}格")
         pts_bar = _display_position_estimate_pts(p)
         mult = _instant_win_multiplier_for_round(self.state.current_round)
         if pts_bar is not None:
@@ -2818,6 +3138,8 @@ class GridWindow:
             self._est_label_floor.config(text=f"仓位估价区间  ¥{pf:,.0f} – ¥{pc:,.0f}")
         else:
             self._est_label_floor.config(text="")
+
+        self._update_express_players_row()
 
     # ── 界面构建 ──────────────────────────────────────────────────────────
 
@@ -3016,6 +3338,11 @@ class GridWindow:
         )
         self._top_cats_label.pack(side="left", padx=(20, 0), anchor="w")
 
+        # ── 快递站（210）：本局玩家 + 黑名单标红 ─────────────────────────────
+        row_players = tk.Frame(bar, bg=BG)
+        row_players.pack(fill="x", padx=10, pady=(3, 0))
+        self._express_players_frame = row_players
+
         # ── 第 2 行：对局摘要 ─────────────────────────────────────────────
         row2 = tk.Frame(bar, bg=BG)
         row2.pack(fill="x", padx=10, pady=(3, 0))
@@ -3042,10 +3369,14 @@ class GridWindow:
         self._map_quality_stats_label.pack(side="left", anchor="w")
         _PricingHoverTip(self._map_quality_stats_label, self._tooltip_text_map_merged_stats)
 
-        # 当前画板格数
+        # 几何空置 / 有效空置乘数（定价 vacant_adj）
         self._map_board_stats_label = tk.Label(row3, text="", **stat_lbl)
         self._map_board_stats_label.pack(side="left", padx=(20, 0), anchor="w")
-        _PricingHoverTip(self._map_board_stats_label, self._tooltip_text_map_merged_stats)
+        _PricingHoverTip(self._map_board_stats_label, self._tooltip_text_vacant_geometric)
+
+        self._map_vacant_adj_label = tk.Label(row3, text="", **stat_lbl)
+        self._map_vacant_adj_label.pack(side="left", padx=(12, 0), anchor="w")
+        _PricingHoverTip(self._map_vacant_adj_label, self._tooltip_text_vacant_adj)
 
         self._event_stats_label = tk.Label(
             row3,
@@ -3062,6 +3393,7 @@ class GridWindow:
         def _after_idle_refresh() -> None:
             self._info_bar_label.config(text=self._info_summary_text())
             self._top_cats_label.config(text=self._top_cats_text())
+            self._update_express_players_row()
 
         self.root.after_idle(_after_idle_refresh)
 
