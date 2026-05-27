@@ -16,6 +16,7 @@ import json
 import os
 import threading
 import traceback
+from datetime import datetime, timedelta
 from pathlib import Path
 import tkinter as tk
 from tkinter import messagebox, ttk
@@ -72,6 +73,40 @@ def _format_minutes_for_entry(value: object) -> str:
     return format(x, "g")
 
 
+def _parse_clock_hour(text: object, *, default: int = 8) -> int:
+    s = str(text).strip()
+    if s.isdigit():
+        return max(0, min(23, int(s)))
+    return default
+
+
+def _parse_clock_minute(text: object, *, default: int = 0) -> int:
+    s = str(text).strip()
+    if s.isdigit():
+        return max(0, min(59, int(s)))
+    return default
+
+
+def _seconds_until_local_time(hour: int, minute: int, *, now: datetime | None = None) -> int:
+    """距本地 ``hour:minute`` 的秒数；若今日该时刻已过则等到次日。"""
+    current = now or datetime.now()
+    target = current.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if target <= current:
+        target += timedelta(days=1)
+    return max(0, int((target - current).total_seconds()))
+
+
+def _format_countdown(seconds: int) -> str:
+    seconds = max(0, int(seconds))
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}小时{m:02d}分{s:02d}秒"
+    if m:
+        return f"{m}分{s:02d}秒"
+    return f"{s}秒"
+
+
 def _bot_runner_label_from_config(cfg: dict) -> str:
     """与 :func:`resolve_bot_runner` 一致地还原下拉显示文案（aisha 与通用共用同一脚本键）。"""
     key = resolve_bot_runner(cfg)
@@ -124,6 +159,9 @@ class BidKingApp:
 
         self.worker: threading.Thread | None = None
         self.stop_requested = False
+        self._schedule_after_id: str | None = None
+        self._scheduled_remaining_sec: int = 0
+        self._scheduled_target_label: str = ""
         self.original_log = bot.log
         bot.log = GuiLogger(self.append_log)
 
@@ -140,6 +178,9 @@ class BidKingApp:
         self.aisha_round4_vacant_gate_var = tk.BooleanVar(value=False)
         self.aisha_round4_min_vacant_var = tk.StringVar(value="5")
         self.bot_runner_var = tk.StringVar(value=BOT_RUNNER_COMBO_VALUES[0])
+        self.scheduled_start_enabled_var = tk.BooleanVar(value=False)
+        self.scheduled_start_hour_var = tk.StringVar(value="8")
+        self.scheduled_start_minute_var = tk.StringVar(value="0")
 
         self.build_ui()
         self.load_into_form()
@@ -232,6 +273,27 @@ class BidKingApp:
         )
         self.bot_runner_combo.grid(row=2, column=1, sticky="w", pady=4)
 
+        schedule_row = ttk.Frame(settings_box)
+        schedule_row.grid(row=3, column=0, columnspan=3, sticky="w", pady=4)
+        ttk.Checkbutton(
+            schedule_row,
+            text="定时启动",
+            variable=self.scheduled_start_enabled_var,
+        ).pack(side="left")
+        ttk.Label(schedule_row, text="  时").pack(side="left", padx=(8, 0))
+        ttk.Entry(
+            schedule_row, textvariable=self.scheduled_start_hour_var, width=3,
+        ).pack(side="left", padx=(2, 0))
+        ttk.Label(schedule_row, text="分").pack(side="left", padx=(6, 0))
+        ttk.Entry(
+            schedule_row, textvariable=self.scheduled_start_minute_var, width=3,
+        ).pack(side="left", padx=(2, 0))
+        ttk.Label(
+            schedule_row,
+            text="（点「开启」后等到该时刻再跑；已过则次日；可点「停止」取消）",
+            foreground="#555555",
+        ).pack(side="left", padx=(8, 0))
+
         button_box = ttk.LabelFrame(main, text="2. 控制 F9强制停止", padding=10)
         button_box.pack(fill="x", pady=(10, 0))
         self.start_btn = ttk.Button(button_box, text="开启", command=self.start_bot)
@@ -322,6 +384,13 @@ class BidKingApp:
             min_vacant = auto.get("tool_skip_vacant_threshold", 5)
         self.aisha_round4_min_vacant_var.set(str(min_vacant))
         self.bot_runner_var.set(_bot_runner_label_from_config(self.config))
+        self.scheduled_start_enabled_var.set(bool(auto.get("scheduled_start_enabled", False)))
+        self.scheduled_start_hour_var.set(
+            str(_parse_clock_hour(auto.get("scheduled_start_hour", 8))),
+        )
+        self.scheduled_start_minute_var.set(
+            str(_parse_clock_minute(auto.get("scheduled_start_minute", 0))),
+        )
 
     def _validate_disk_board_snapshot(self) -> None:
         """检查磁盘上的 ``board_snapshot`` 路径等；己方 UID 可留空以使用跨对局推断。"""
@@ -374,6 +443,14 @@ class BidKingApp:
             self.aisha_round4_vacant_gate_var.get()
         )
         self.config["automation"]["aisha_round4_tool_min_vacant"] = min_vacant_value
+        scheduled_enabled = bool(self.scheduled_start_enabled_var.get())
+        scheduled_hour = _parse_clock_hour(self.scheduled_start_hour_var.get(), default=8)
+        scheduled_minute = _parse_clock_minute(
+            self.scheduled_start_minute_var.get(), default=0,
+        )
+        self.config["automation"]["scheduled_start_enabled"] = scheduled_enabled
+        self.config["automation"]["scheduled_start_hour"] = scheduled_hour
+        self.config["automation"]["scheduled_start_minute"] = scheduled_minute
         self.config.setdefault("advisor", {})["role"] = advisor_role
 
         self.overlay.setdefault("automation", {})
@@ -388,6 +465,9 @@ class BidKingApp:
             self.aisha_round4_vacant_gate_var.get()
         )
         self.overlay["automation"]["aisha_round4_tool_min_vacant"] = min_vacant_value
+        self.overlay["automation"]["scheduled_start_enabled"] = scheduled_enabled
+        self.overlay["automation"]["scheduled_start_hour"] = scheduled_hour
+        self.overlay["automation"]["scheduled_start_minute"] = scheduled_minute
         self.overlay.setdefault("advisor", {})["role"] = advisor_role
 
         self.save_json(CONFIG_OVERLAY_PATH, self.overlay)
@@ -420,25 +500,29 @@ class BidKingApp:
         except tk.TclError:
             pass
 
-    def start_bot(self) -> None:
-        if self.worker and self.worker.is_alive():
-            messagebox.showinfo("提示", "脚本已经在运行中")
-            return
-        try:
-            self.apply_form_to_config()
-        except Exception as exc:  # noqa: BLE001
-            messagebox.showerror("配置错误", str(exc))
-            return
+    def _cancel_scheduled_start(self) -> None:
+        if self._schedule_after_id is not None:
+            try:
+                self.root.after_cancel(self._schedule_after_id)
+            except tk.TclError:
+                pass
+            self._schedule_after_id = None
+        self._scheduled_remaining_sec = 0
+        self._scheduled_target_label = ""
 
+    def _begin_start_ui(self) -> None:
         self.stop_requested = False
         bot.reset_stop()
         self.start_btn.state(["disabled"])
         self.stop_btn.state(["!disabled"])
-        self.append_log("GUI start: bot thread launching")
         try:
             self.executed_runs_label.configure(text="（已执行 0 次）")
         except tk.TclError:
             pass
+
+    def _launch_bot_worker(self) -> None:
+        self._cancel_scheduled_start()
+        self.append_log("GUI start: bot thread launching")
 
         sink = self._run_progress_sink
 
@@ -465,7 +549,97 @@ class BidKingApp:
         self.worker = threading.Thread(target=runner, daemon=True)
         self.worker.start()
 
+    def _schedule_start_tick(self) -> None:
+        self._schedule_after_id = None
+        if self.stop_requested:
+            return
+        if self._scheduled_remaining_sec <= 0:
+            self.append_log(f"定时到达（{self._scheduled_target_label}），正在启动 bot…")
+            try:
+                self.executed_runs_label.configure(text="（已执行 0 次）")
+            except tk.TclError:
+                pass
+            self._launch_bot_worker()
+            return
+
+        try:
+            self.executed_runs_label.configure(
+                text=(
+                    f"（定时 {self._scheduled_target_label}，"
+                    f"还剩 {_format_countdown(self._scheduled_remaining_sec)}）"
+                ),
+            )
+        except tk.TclError:
+            pass
+
+        if self._scheduled_remaining_sec % 60 == 0 or self._scheduled_remaining_sec <= 10:
+            self.append_log(
+                f"定时启动：目标 {self._scheduled_target_label}，"
+                f"还剩 {_format_countdown(self._scheduled_remaining_sec)}",
+            )
+
+        self._scheduled_remaining_sec -= 1
+        if self._scheduled_remaining_sec <= 0:
+            self.append_log(f"定时到达（{self._scheduled_target_label}），正在启动 bot…")
+            try:
+                self.executed_runs_label.configure(text="（已执行 0 次）")
+            except tk.TclError:
+                pass
+            self._launch_bot_worker()
+            return
+
+        self._schedule_after_id = self.root.after(1000, self._schedule_start_tick)
+
+    def _arm_scheduled_start(self, hour: int, minute: int) -> None:
+        delay_sec = _seconds_until_local_time(hour, minute)
+        self._scheduled_target_label = f"{hour:02d}:{minute:02d}"
+        self._scheduled_remaining_sec = delay_sec
+        self._begin_start_ui()
+        self.append_log(
+            f"定时启动已设置：将于 {self._scheduled_target_label} 开跑"
+            f"（约 {_format_countdown(delay_sec)} 后；可点「停止」取消）",
+        )
+        try:
+            self.executed_runs_label.configure(
+                text=(
+                    f"（定时 {self._scheduled_target_label}，"
+                    f"还剩 {_format_countdown(delay_sec)}）"
+                ),
+            )
+        except tk.TclError:
+            pass
+        self._schedule_after_id = self.root.after(1000, self._schedule_start_tick)
+
+    def start_bot(self) -> None:
+        if self._schedule_after_id is not None:
+            messagebox.showinfo("提示", "定时启动倒计时中，请先点「停止」取消")
+            return
+        if self.worker and self.worker.is_alive():
+            messagebox.showinfo("提示", "脚本已经在运行中")
+            return
+        try:
+            self.apply_form_to_config()
+        except Exception as exc:  # noqa: BLE001
+            messagebox.showerror("配置错误", str(exc))
+            return
+
+        auto = self.config.get("automation") or {}
+        if auto.get("scheduled_start_enabled"):
+            hour = _parse_clock_hour(auto.get("scheduled_start_hour", 8))
+            minute = _parse_clock_minute(auto.get("scheduled_start_minute", 0))
+            self._arm_scheduled_start(hour, minute)
+            return
+
+        self._begin_start_ui()
+        self._launch_bot_worker()
+
     def stop_bot(self) -> None:
+        if self._schedule_after_id is not None or self._scheduled_remaining_sec > 0:
+            self.stop_requested = True
+            self._cancel_scheduled_start()
+            self.append_log("GUI stop: 已取消定时启动")
+            self.on_worker_done()
+            return
         bot.request_stop()
         self.stop_btn.state(["disabled"])
         self.append_log("GUI stop: requested")
@@ -479,6 +653,8 @@ class BidKingApp:
         self.stop_btn.state(["disabled"])
 
     def on_close(self) -> None:
+        self.stop_requested = True
+        self._cancel_scheduled_start()
         bot.request_stop()
         bot.log = self.original_log
         self.root.destroy()
