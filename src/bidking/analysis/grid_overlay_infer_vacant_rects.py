@@ -1,4 +1,4 @@
-"""艾莎第 4 回合：由空置区「近似实心矩形」推断幽灵物品（手动画框 + 候选约束）。"""
+"""艾莎第 4 回合及之后：由空置区「近似实心矩形」推断幽灵物品（手动画框 + 候选约束）。"""
 
 from __future__ import annotations
 
@@ -17,9 +17,14 @@ from .scan_inference import census_absent_qualities_from_board_snapshot
 from .strategy.common import _find_continuous_regions
 
 AUTO_VACANT_RECT_PHANTOM_PREFIX = "phantom_vac_"
-AISHA_VACANT_RECT_INFER_ROUND = 4
+AISHA_VACANT_RECT_INFER_ROUND = 4  # 自该回合起（含第 4 回合及以后）启用
 DEFAULT_VACANT_RECT_MAX_HOLE_CELLS = 2
 DEFAULT_VACANT_RECT_MIN_BBOX_AREA = 1
+
+
+def vacant_rect_phantom_infer_round_active(current_round: int) -> bool:
+    """第 4 回合及之后才做空置矩形自动幽灵推断。"""
+    return int(current_round) >= AISHA_VACANT_RECT_INFER_ROUND
 
 
 @dataclass(frozen=True)
@@ -251,7 +256,7 @@ def compute_vacant_rect_phantom_specs(
     enabled: bool = True,
 ) -> List[VacantRectPhantomSpec]:
     """
-    艾莎第 4 回合且 Q1–Q4 轮廓已齐时：在剩余空置区中识别近似矩形空洞，
+    艾莎第 4 回合及之后、且 Q1–Q4 轮廓已齐时：在剩余空置区中识别近似矩形空洞，
     生成 ``phantom_vac_*`` 规格（手动画框语义）。
 
     - 须有 CSV 候选（扫描负向 + ``event_stats`` 件数配额）；
@@ -260,7 +265,7 @@ def compute_vacant_rect_phantom_specs(
     """
     if not enabled:
         return []
-    if int(current_round) != AISHA_VACANT_RECT_INFER_ROUND:
+    if not vacant_rect_phantom_infer_round_active(current_round):
         return []
     if not _infer_q1234_scan_and_q14_contours_ready(game_state, manual_shapes):
         return []
@@ -352,6 +357,7 @@ def compute_vacant_rect_phantom_specs(
 
 __all__ = [
     "AISHA_VACANT_RECT_INFER_ROUND",
+    "vacant_rect_phantom_infer_round_active",
     "AUTO_VACANT_RECT_PHANTOM_PREFIX",
     "DEFAULT_VACANT_RECT_MAX_HOLE_CELLS",
     "DEFAULT_VACANT_RECT_MIN_BBOX_AREA",

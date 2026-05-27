@@ -121,21 +121,11 @@ def load_runtime(path: Optional[Path | str] = None) -> RuntimeConfig:
     return RuntimeConfig(raw=merged, source_path=src.resolve() if src.is_file() else cp.resolve())
 
 
-def infer_vacant_rect_phantoms_enabled(
-    cfg: Optional[Union[RuntimeConfig, Mapping[str, Any]]] = None,
-) -> bool:
-    """
-    艾莎第 4 回合：空置区近似矩形 → 自动 ``phantom_vac_*`` 手动画框推断。
+from ..analysis.grid_overlay_infer_vacant_rects import vacant_rect_phantom_infer_round_active
 
-    读取 ``pricing.infer_vacant_rect_phantoms``；键缺失时为 ``True``。
-    """
-    raw: Mapping[str, Any]
-    if cfg is None:
-        raw = load_runtime().raw
-    elif isinstance(cfg, RuntimeConfig):
-        raw = cfg.raw
-    else:
-        raw = cfg
+
+def _infer_vacant_rect_phantoms_config_flag(raw: Mapping[str, Any]) -> bool:
+    """``pricing.infer_vacant_rect_phantoms`` 开关；键缺失时为 ``True``。"""
     p = raw.get("pricing")
     if not isinstance(p, dict):
         return True
@@ -147,6 +137,31 @@ def infer_vacant_rect_phantoms_enabled(
     if isinstance(v, str):
         return v.strip().lower() in ("1", "true", "yes", "on")
     return True
+
+
+def infer_vacant_rect_phantoms_enabled(
+    cfg: Optional[Union[RuntimeConfig, Mapping[str, Any]]] = None,
+    *,
+    current_round: Optional[int] = None,
+) -> bool:
+    """
+    艾莎第 4 回合起：空置区近似矩形 → 自动 ``phantom_vac_*`` 手动画框推断。
+
+    读取 ``pricing.infer_vacant_rect_phantoms``；键缺失时为 ``True``。
+    传入 ``current_round`` 时，仅当回合 ≥ 第 4 回合才为 ``True``（与推断层一致）。
+    """
+    raw: Mapping[str, Any]
+    if cfg is None:
+        raw = load_runtime().raw
+    elif isinstance(cfg, RuntimeConfig):
+        raw = cfg.raw
+    else:
+        raw = cfg
+    if not _infer_vacant_rect_phantoms_config_flag(raw):
+        return False
+    if current_round is None:
+        return True
+    return vacant_rect_phantom_infer_round_active(int(current_round))
 
 
 def infer_unknown_contour_shapes_enabled(

@@ -258,6 +258,10 @@ FIELD_META: dict[str, dict[str, str]] = {
         "label": "推断未知轮廓形状",
         "description": "是否根据邻格与轮廓对未知形状格尝试形状/价值推断。",
     },
+    "pricing.infer_vacant_rect_phantoms": {
+        "label": "空置矩形自动幽灵",
+        "description": "第4回合及之后：空置区近似实心矩形 → 自动 phantom_vac 手动画框；画板右键可取消且本局不再补回。",
+    },
     "pricing.late_round_low_bid_surrender_after_round": {
         "label": "认输生效回合",
         "description": "从第几回合起（含该回合）启用后期低价认输。",

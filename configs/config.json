@@ -7,6 +7,7 @@
     "enable_vacant_red_floor_ceiling_pick": false,
     "enable_opponent_bid_adjustment": true,
     "infer_unknown_contour_shapes": true,
+    "infer_vacant_rect_phantoms": true,
     "price_avg_infer_max_item_count": 30,
     "grid_avg_infer_max_item_count": 30,
     "grid_avg_infer_max_grid_count": 60
