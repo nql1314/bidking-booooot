@@ -9,12 +9,17 @@ from typing import Any, Literal
 from .paths import configs_dir
 
 FieldScope = Literal["config", "map", "both"]
-FieldType = Literal["bool", "int", "float", "str", "enum", "int_list", "json"]
+FieldType = Literal["bool", "int", "float", "str", "enum", "int_list", "json", "display"]
 
 
 def field_is_hidden(field: dict[str, Any]) -> bool:
     """``hide: true`` 的字段不在可视化页展示。"""
     return bool(field.get("hide", False))
+
+
+def field_is_display_only(field: dict[str, Any]) -> bool:
+    """``type: display`` 的字段仅展示，不可编辑且不参与保存。"""
+    return str(field.get("type") or "").strip().lower() == "display"
 
 
 def visual_config_schema_path() -> Path:
@@ -142,6 +147,7 @@ __all__ = [
     "schema_fields_for_scope",
     "field_matches_map_bundle",
     "field_is_hidden",
+    "field_is_display_only",
     "get_by_path",
     "set_by_path",
     "coerce_field_value",

@@ -201,6 +201,45 @@ def test_overbid_rebate_per_player(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert int(rows[2][7]) == 0 + rebate - ticket
 
 
+def test_append_writes_only_global_csv_by_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    global_csv = data_dir / "game_match_reports.csv"
+    session_csv = data_dir / "game_match_reports_20260101_120000.csv"
+
+    monkeypatch.delenv("BIDKING_GAME_REPORT_CSV", raising=False)
+    monkeypatch.delenv("BIDKING_GAME_REPORT_SESSION_CSV", raising=False)
+    monkeypatch.setattr(
+        grc,
+        "resolve_game_report_csv_path",
+        lambda: global_csv,
+    )
+
+    st = GameState()
+    st.uid = "2306:one"
+    data = {
+        "WinUserUid": "u1",
+        "GameData": {
+            "Uid": "2306:one",
+            "UserLog": [
+                {
+                    "UserUid": "u1",
+                    "Name": "甲",
+                    "HeroCid": 103,
+                    "PriceLog": [{"Round": 0, "ItemCidOrPrice": 1}],
+                },
+            ],
+        },
+    }
+
+    append_game_over_report_csv(data, st, {})
+
+    assert global_csv.is_file()
+    assert not session_csv.exists()
+
+
 def test_trim_game_report_csv_keeps_newest_matches(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

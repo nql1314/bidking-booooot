@@ -12,7 +12,7 @@
       "4": 1.2,
       "default": 1.1
     },
-    "enable_late_round_low_bid_surrender": true,
+    "enable_late_round_low_bid_surrender": false,
     "late_round_low_bid_surrender_after_round": 4,
     "late_round_low_bid_surrender_below": 555555,
     "late_round_low_bid_surrender_bid": 886
@@ -26,7 +26,7 @@
       "4": 0.9,
       "5": 0.95
     },
-    "enable_aisha_round4_tool_vacant_gate": true,
+    "enable_aisha_round4_tool_vacant_gate": false,
     "aisha_round4_tool_min_vacant": 30
   }
 }

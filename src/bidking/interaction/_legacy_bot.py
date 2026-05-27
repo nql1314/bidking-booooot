@@ -265,10 +265,28 @@ def format_bid_details_line(details: dict[str, Any]) -> str:
 
     sig = details.get("express_emoji_signal")
     if isinstance(sig, dict):
-        parts.append(
-            f"emoji_seat={sig.get('seat')} price={sig.get('seat_price')} "
-            f"self_cid={sig.get('self_emoji_cid')} opp_cid={sig.get('opponent_emoji_cid')}"
-        )
+        if sig.get("price_mode") == "public_blacklist_force":
+            parts.append(
+                f"emoji_force_bid={sig.get('forced_bid')} "
+                f"self_cid={sig.get('self_emoji_cid')} opp_cid={sig.get('opponent_emoji_cid')}"
+            )
+        elif sig.get("price_mode") == "random":
+            lo, hi = sig.get("random_lo"), sig.get("random_hi")
+            range_note = (
+                f" range={lo}-{hi}" if lo is not None and hi is not None else ""
+            )
+            r1 = sig.get("round1_signal_bid")
+            r1_note = f" r1={r1}" if r1 is not None else ""
+            parts.append(
+                f"emoji_random={sig.get('random_price')}{range_note}{r1_note} "
+                f"self_cid={sig.get('self_emoji_cid')} opp_cid={sig.get('opponent_emoji_cid')}"
+            )
+        else:
+            pick = "random" if sig.get("seat_random_pick") else "fixed"
+            parts.append(
+                f"emoji_seat={sig.get('seat')}({pick}) price={sig.get('seat_price')} "
+                f"self_cid={sig.get('self_emoji_cid')} opp_cid={sig.get('opponent_emoji_cid')}"
+            )
 
     return " | ".join(parts) if parts else "(empty details)"
 
@@ -1509,20 +1527,80 @@ AISHA_HERO_CID = 103
 AISHA_ROUND4_TOOL_ROUND = 4
 AISHA_ROUND5_TOOL_ROUND = 5
 
-# 快递站系列地图第 1 回合开局表情（游戏客户端 left_top 坐标，参考 1920×1080）
-_EXPRESS_STATION_EMOJI_PANEL_CLIENT = (57, 1015)
-_EXPRESS_STATION_EMOJI_PANEL_WAIT_SECONDS = 1.0
-_EXPRESS_STATION_EMOJI_COORDS: dict[str, tuple[int, int]] = {
-    "问候": (230, 488),
-    "自信": (230, 564),
-    "嘲讽": (230, 637),
-    "惊讶": (230, 708),
-    "遗憾": (230, 777),
-    "感谢": (230, 858),
-    "赞赏": (230, 932),
-    "生气": (230, 1000),
-}
 _EXPRESS_STATION_EMOJI_DEFAULT = "问候"
+
+
+def _default_express_station_round1_emoji_clicks() -> dict[str, Any]:
+    """快递站第 1 回合开局表情点击（客户端 left_top，参考 1920×1080）。默认见 ``runtime.json`` → ``clicks``。"""
+    return {
+        "panel": {"origin": "left_top", "x": 57, "y": 1000},
+        "panel_wait_seconds": 1.0,
+        "targets": {
+            "问候": {"x": 230, "y": 469},
+            "自信": {"x": 230, "y": 538},
+            "嘲讽": {"x": 230, "y": 618},
+            "惊讶": {"x": 230, "y": 688},
+            "遗憾": {"x": 230, "y": 777},
+            "感谢": {"x": 230, "y": 838},
+            "赞赏": {"x": 230, "y": 913},
+            "生气": {"x": 230, "y": 987},
+        },
+    }
+
+
+def merge_express_station_round1_emoji_clicks(config: dict[str, Any]) -> dict[str, Any]:
+    """合并 ``clicks.express_station_round1_emoji``（``runtime.json`` 可配）。"""
+    defaults = _default_express_station_round1_emoji_clicks()
+    raw = (config.get("clicks") or {}).get("express_station_round1_emoji")
+    if not isinstance(raw, dict):
+        return dict(defaults)
+    out = dict(defaults)
+    if isinstance(raw.get("panel"), dict):
+        base = dict(defaults["panel"])
+        base.update(raw["panel"])
+        out["panel"] = base
+    try:
+        wait = float(raw.get("panel_wait_seconds", defaults["panel_wait_seconds"]))
+    except (TypeError, ValueError):
+        wait = float(defaults["panel_wait_seconds"])
+    out["panel_wait_seconds"] = max(0.0, wait)
+    raw_targets = raw.get("targets")
+    if isinstance(raw_targets, dict):
+        targets = dict(defaults["targets"])
+        for name, val in raw_targets.items():
+            key = str(name).strip()
+            if not key:
+                continue
+            if isinstance(val, dict) and "x" in val and "y" in val:
+                targets[key] = {"x": int(val["x"]), "y": int(val["y"])}
+            elif isinstance(val, (list, tuple)) and len(val) >= 2:
+                targets[key] = {"x": int(val[0]), "y": int(val[1])}
+        out["targets"] = targets
+    return out
+
+
+def _express_station_emoji_panel_xy(clicks: dict[str, Any]) -> tuple[int, int]:
+    panel = clicks.get("panel")
+    if isinstance(panel, dict) and "x" in panel and "y" in panel:
+        return int(panel["x"]), int(panel["y"])
+    dp = _default_express_station_round1_emoji_clicks()["panel"]
+    return int(dp["x"]), int(dp["y"])
+
+
+def _express_station_emoji_target_xy(
+    clicks: dict[str, Any], emoji: str
+) -> tuple[int, int] | None:
+    targets = clicks.get("targets")
+    if not isinstance(targets, dict):
+        return None
+    pt = targets.get(emoji)
+    if isinstance(pt, dict) and "x" in pt and "y" in pt:
+        return int(pt["x"]), int(pt["y"])
+    if isinstance(pt, (list, tuple)) and len(pt) >= 2:
+        return int(pt[0]), int(pt[1])
+    return None
+_EXPRESS_ROUND2_PLUS_HIGH_RANDOM_MAX_DEFAULT = 888
+_express_round1_signal_bid_by_game: dict[str, int] = {}
 
 
 def _automation_with_map_overlay(
@@ -1546,16 +1624,12 @@ def _automation_with_map_overlay(
     return auto if isinstance(auto, dict) else {}
 
 
-def _parse_express_emoji_character_title(raw: Any) -> str:
-    """暗号判席称号：配置为单个字符串；兼容旧版 ``character_titles`` 数组（取首项）。"""
-    if isinstance(raw, str):
-        return raw.strip()
-    if isinstance(raw, (list, tuple)) and raw:
-        return str(raw[0]).strip()
-    return ""
-
-
-def _express_station_round1_emoji_settings(automation: dict[str, Any]) -> dict[str, Any]:
+def _express_station_round1_emoji_settings(
+    automation: dict[str, Any],
+    config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    known_targets = (merge_express_station_round1_emoji_clicks(config or {}).get("targets") or {})
+    known_names = set(known_targets.keys()) if isinstance(known_targets, dict) else set()
     raw = (automation or {}).get("express_station_round1_emoji")
     if not isinstance(raw, dict):
         return {
@@ -1565,11 +1639,10 @@ def _express_station_round1_emoji_settings(automation: dict[str, Any]) -> dict[s
             "seat_2_price": 886,
             "wait_after_send_seconds": 3.0,
             "self_emoji_cid": 0,
-            "character_name": "",
-            "character_title": "",
+            "round2_plus_high_random_max": _EXPRESS_ROUND2_PLUS_HIGH_RANDOM_MAX_DEFAULT,
         }
     emoji = str(raw.get("emoji") or _EXPRESS_STATION_EMOJI_DEFAULT).strip()
-    if emoji not in _EXPRESS_STATION_EMOJI_COORDS:
+    if known_names and emoji not in known_names:
         emoji = _EXPRESS_STATION_EMOJI_DEFAULT
 
     def _seat_price(key: str, default: int) -> int:
@@ -1589,6 +1662,13 @@ def _express_station_round1_emoji_settings(automation: dict[str, Any]) -> dict[s
 
     self_emoji_cid = int(EMOJI_NAME_TO_CID.get(emoji, 0))
 
+    try:
+        round2_high_max = int(
+            raw.get("round2_plus_high_random_max", _EXPRESS_ROUND2_PLUS_HIGH_RANDOM_MAX_DEFAULT)
+        )
+    except (TypeError, ValueError):
+        round2_high_max = _EXPRESS_ROUND2_PLUS_HIGH_RANDOM_MAX_DEFAULT
+
     return {
         "enabled": bool(raw.get("enabled", False)),
         "emoji": emoji,
@@ -1596,10 +1676,7 @@ def _express_station_round1_emoji_settings(automation: dict[str, Any]) -> dict[s
         "seat_1_price": _seat_price("seat_1_price", 250),
         "seat_2_price": _seat_price("seat_2_price", 886),
         "wait_after_send_seconds": wait_after,
-        "character_name": str(raw.get("character_name") or "").strip(),
-        "character_title": _parse_express_emoji_character_title(
-            raw.get("character_title", raw.get("character_titles", raw.get("my_title")))
-        ),
+        "round2_plus_high_random_max": max(1, round2_high_max),
     }
 
 
@@ -1631,125 +1708,86 @@ def _emoji_events_from_board_snapshot(
     return out
 
 
-def _seat_1_identity_regions(config: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]] | None:
-    """第 1 席身份 OCR 区：``capture.seat_1_identity`` 或 ``bid_history_multiplayer.layouts[\"2\"][0]``。"""
-    cap = config.get("capture") or {}
-    ident = cap.get("seat_1_identity")
-    if isinstance(ident, dict):
-        name_r = ident.get("character_name")
-        titles_r = ident.get("character_titles")
-        if isinstance(name_r, dict) and isinstance(titles_r, dict):
-            return name_r, titles_r
-    multi = cap.get("bid_history_multiplayer")
-    if isinstance(multi, dict):
-        layouts = multi.get("layouts")
-        if isinstance(layouts, dict):
-            block = layouts.get("2")
-            if isinstance(block, list) and block and isinstance(block[0], dict):
-                p0 = block[0]
-                name_r = p0.get("character_name")
-                titles_r = p0.get("character_titles")
-                if isinstance(name_r, dict) and isinstance(titles_r, dict):
-                    return name_r, titles_r
+def _express_random_seat_for_signal() -> int:
+    """第 1 回合暗号价：随机座次 1 或 2（各用对应 ``seat_*_price``）。"""
+    return random.choice((1, 2))
+
+
+def _express_remember_round1_signal_bid(
+    board_snapshot: dict[str, Any], bid: int
+) -> None:
+    g = game_uid_from_snapshot(board_snapshot)
+    if g:
+        _express_round1_signal_bid_by_game[str(g)] = int(bid)
+
+
+def _express_round1_signal_bid_for_followup(
+    config: dict[str, Any],
+    board_snapshot: dict[str, Any],
+    seat_prices: dict[int, int],
+) -> int | None:
+    """第 2 回合及以后：读取本局第 1 回合暗号出价（缓存或快照）。"""
+    from ..pricing.self_bid_cache import get_self_gold_bid
+
+    r1 = get_self_gold_bid(config, board_snapshot, 1)
+    if r1 is not None and int(r1) > 0:
+        return int(r1)
+    g = game_uid_from_snapshot(board_snapshot)
+    if g:
+        cached = _express_round1_signal_bid_by_game.get(str(g))
+        if cached is not None and int(cached) > 0:
+            return int(cached)
     return None
 
 
-def _express_emoji_character_identity(
+def _express_round2_plus_random_bounds(
+    seat_prices: dict[int, int],
+    round1_bid: int,
+    *,
+    high_random_max: int,
+) -> tuple[int, int]:
+    """
+    第 2 回合及以后随机区间。
+
+    第 1 回合为座次 1 价（如 520）→ ``[1, seat_2_price]``；
+    第 1 回合为座次 2 价（如 144）→ ``[seat_1_price, high_random_max]``（默认上限 888）。
+    """
+    seat_1 = int(seat_prices[1])
+    seat_2 = int(seat_prices[2])
+    r1 = int(round1_bid)
+    if r1 == seat_1:
+        lo, hi = 1, seat_2
+    elif r1 == seat_2:
+        lo, hi = seat_1, int(high_random_max)
+    elif abs(r1 - seat_1) <= abs(r1 - seat_2):
+        lo, hi = 1, seat_2
+    else:
+        lo, hi = seat_1, int(high_random_max)
+    if lo > hi:
+        lo, hi = hi, lo
+    return lo, hi
+
+
+def _express_round2_plus_random_price(
+    config: dict[str, Any],
+    board_snapshot: dict[str, Any],
+    seat_prices: dict[int, int],
     emoji_cfg: dict[str, Any],
-    config: dict[str, Any],
-) -> tuple[str, str]:
-    """快递站表情配置中的角色名与称号（用于与第 1 席 OCR 文本比对）。"""
-    name = str(emoji_cfg.get("character_name") or "").strip()
-    title = str(emoji_cfg.get("character_title") or "").strip()
-    if not name or not title:
-        adv = config.get("advisor") or {}
-        if not name:
-            name = str(adv.get("character_name") or "").strip()
-        if not title:
-            title = _parse_express_emoji_character_title(
-                adv.get("character_title", adv.get("character_titles", adv.get("my_title")))
-            )
-    if not name:
-        role = str((config.get("advisor") or {}).get("role") or "").strip().lower()
-        if role == "ahmad":
-            name = "艾哈迈德"
-        elif role in ("aisha", "elsa"):
-            name = "艾莎"
-    return name, title
-
-
-def _ocr_identity_matches_self(
-    name_text: str,
-    titles_text: str,
-    *,
-    my_character_name: str,
-    my_character_title: str,
-) -> bool:
-    """第 1 席名字/称号区 OCR 是否匹配：角色名与称号字符串均须出现在 OCR 文本中。"""
-    blob = (name_text or "") + "\n" + (titles_text or "")
-    name = (my_character_name or "").strip()
-    title = (my_character_title or "").strip()
-    if not name or name not in blob:
-        return False
-    if title and title not in blob:
-        return False
-    return True
-
-
-def _ocr_region_text_from_frame(
-    config: dict[str, Any],
-    frame: Image.Image,
-    region: dict[str, Any],
-) -> str:
-    box = scaled_region_box(region, config, frame.width, frame.height)
-    crop = frame.crop(box)
-    return rapidocr_once(ImageOps.grayscale(crop).convert("RGB")).strip()
-
-
-def _player_seat_index_from_slot1_ocr(
-    config: dict[str, Any],
-    frame: Image.Image | None = None,
-    *,
-    board_snapshot: dict[str, Any] | None = None,
-) -> int | None:
-    """
-    对局 UI 第 1 席 OCR 名字+称号区：与当前地图表情配置中的角色名/称号匹配则为座位 1，否则为座位 2。
-    """
-    regions = _seat_1_identity_regions(config)
-    if regions is None:
-        log(
-            "快递站表情暗号：未配置 capture.seat_1_identity 或 bid_history_multiplayer.layouts[\"2\"][0]",
-            gui_verbose_only=True,
-        )
-        return None
-    automation = _automation_with_map_overlay(config, board_snapshot)
-    emoji_cfg = _express_station_round1_emoji_settings(automation)
-    my_name, my_title = _express_emoji_character_identity(emoji_cfg, config)
-    if not my_name:
-        log(
-            "快递站表情暗号：express_station_round1_emoji.character_name 未配置，无法 OCR 判席",
-            gui_verbose_only=True,
-        )
-        return None
-    name_r, titles_r = regions
-    if frame is None:
-        bring_window_to_front(config)
-        frame, _info = capture_window_frame(config)
-    name_text = _ocr_region_text_from_frame(config, frame, name_r)
-    titles_text = _ocr_region_text_from_frame(config, frame, titles_r)
-    is_self = _ocr_identity_matches_self(
-        name_text,
-        titles_text,
-        my_character_name=my_name,
-        my_character_title=my_title,
+) -> tuple[int, int, int, int | None]:
+    """返回 ``(price, lo, hi, round1_bid)``。"""
+    high_max = int(
+        emoji_cfg.get("round2_plus_high_random_max")
+        or _EXPRESS_ROUND2_PLUS_HIGH_RANDOM_MAX_DEFAULT
     )
-    seat = 1 if is_self else 2
-    log(
-        f"快递站表情暗号：第1席 OCR 判席 seat={seat} "
-        f"name={name_text!r} titles={titles_text!r} advisor={my_name!r}",
-        gui_verbose_only=True,
-    )
-    return seat
+    r1 = _express_round1_signal_bid_for_followup(config, board_snapshot, seat_prices)
+    if r1 is None:
+        lo, hi = 1, 100
+    else:
+        lo, hi = _express_round2_plus_random_bounds(
+            seat_prices, r1, high_random_max=high_max
+        )
+    price = random.randint(int(lo), int(hi))
+    return price, lo, hi, r1
 
 
 def _expected_self_emoji_cid_for_signal(
@@ -1758,7 +1796,9 @@ def _expected_self_emoji_cid_for_signal(
 ) -> int:
     """己方配置表情对应的 ``EmojiCid``（101–108）。"""
     automation = _automation_with_map_overlay(config, board_snapshot)
-    return int(_express_station_round1_emoji_settings(automation).get("self_emoji_cid") or 0)
+    return int(
+        _express_station_round1_emoji_settings(automation, config).get("self_emoji_cid") or 0
+    )
 
 
 def _opponent_matched_emoji_signal(
@@ -1809,6 +1849,33 @@ def _opponent_matching_emoji_cid(
     return None
 
 
+def _express_after_snapshot_hooks(
+    config: dict[str, Any],
+    board_snapshot: dict[str, Any] | None,
+) -> None:
+    """
+    暗号已对上的快递站局：快照更新后补写对局黑名单。
+
+    避免首回合即结算、无第 2 回合时对手出价尚未写入快照而漏记。
+    """
+    if not isinstance(board_snapshot, dict):
+        return
+    if not _express_station_emoji_handshake_enabled(config, board_snapshot):
+        return
+    automation = _automation_with_map_overlay(config, board_snapshot)
+    emoji_cfg = _express_station_round1_emoji_settings(automation, config)
+    if not emoji_cfg.get("enabled"):
+        return
+    self_emoji_cid = int(emoji_cfg.get("self_emoji_cid") or 0)
+    if not _opponent_matched_emoji_signal(
+        board_snapshot, config, expected_emoji_cid=self_emoji_cid
+    ):
+        return
+    from .emoji_signal_blacklist import maybe_update_steal_express_blacklist
+
+    maybe_update_steal_express_blacklist(config, board_snapshot)
+
+
 def try_resolve_express_emoji_signal_price(
     config: dict[str, Any],
     board_snapshot: dict[str, Any] | None,
@@ -1816,7 +1883,13 @@ def try_resolve_express_emoji_signal_price(
     round_no: int,
 ) -> tuple[int, dict[str, Any]] | None:
     """
-    快递站 + 开局表情已开启 + 对手回了与己方相同的表情：跳过快照估价，按座位使用暗号价。
+    快递站 + 开局表情已开启 + 对手回了与己方相同的表情：跳过快照估价。
+
+    第 1 回合随机座次 1/2 并使用对应 ``seat_*_price``。
+
+    第 2 回合及以后按第 1 回合出价分档随机：首回合为座次 1 价则在
+    ``[1, seat_2_price]``；首回合为座次 2 价则在 ``[seat_1_price, round2_plus_high_random_max]``
+    （默认 888）。
     """
     from ..analysis._board_pricing import map_id_from_board_snapshot
     from ..analysis.strategy.ahmad import map_bundle_is_express_station_series
@@ -1833,7 +1906,7 @@ def try_resolve_express_emoji_signal_price(
         return None
 
     automation = _automation_with_map_overlay(config, board_snapshot)
-    emoji_cfg = _express_station_round1_emoji_settings(automation)
+    emoji_cfg = _express_station_round1_emoji_settings(automation, config)
     if not emoji_cfg["enabled"]:
         return None
     self_emoji_cid = int(emoji_cfg.get("self_emoji_cid") or 0)
@@ -1842,42 +1915,124 @@ def try_resolve_express_emoji_signal_price(
     ):
         return None
 
+    from .emoji_signal_blacklist import (
+        SELF_PUBLIC_BLACKLIST_FORCE_BID,
+        is_self_on_public_blacklist,
+        maybe_update_steal_express_blacklist,
+        opponent_blocks_express_emoji_signal_price,
+    )
+
+    opp_r1_bid = maybe_update_steal_express_blacklist(config, board_snapshot)
+
     self_uid, _ = board_snapshot_self_identity(config, board_snapshot)
-    seat = _player_seat_index_from_slot1_ocr(config, board_snapshot=board_snapshot)
-    if seat is None:
-        return None
-
-    seat_prices = {1: int(emoji_cfg["seat_1_price"]), 2: int(emoji_cfg["seat_2_price"])}
-    price = int(seat_prices[seat])
-    if price <= 0:
-        return None
-
     map_bundle_key = map_bundle_key_for_automation(int(mid))
     effective_config = merged_runtime_with_map_pricing(
         config, map_bundle_key=map_bundle_key
     )
     effective_round = resolve_effective_round(int(round_no), board_snapshot)
-
     opp_emoji_cid = _opponent_matching_emoji_cid(
         board_snapshot, config, expected_emoji_cid=self_emoji_cid
     )
 
-    payload: dict[str, Any] = {
-        "fallback": False,
-        "reason": "express_emoji_seat_signal",
-        "pricing_strategy": "express_emoji_seat_signal",
-        "role": None,
-        "effective_round": effective_round,
-        "source_value": float(price),
-        "express_emoji_signal": {
-            "seat": seat,
-            "seat_price": price,
+    if is_self_on_public_blacklist(config, board_snapshot):
+        price = int(SELF_PUBLIC_BLACKLIST_FORCE_BID)
+        signal_detail: dict[str, Any] = {
+            "price_mode": "public_blacklist_force",
+            "forced_bid": price,
+            "self_user_uid": self_uid,
+            "self_emoji_cid": self_emoji_cid,
+            "opponent_emoji_cid": opp_emoji_cid,
+        }
+        payload: dict[str, Any] = {
+            "fallback": False,
+            "reason": "express_emoji_public_blacklist_force",
+            "pricing_strategy": "express_emoji_public_blacklist_force",
+            "role": None,
+            "effective_round": effective_round,
+            "source_value": float(price),
+            "express_emoji_signal": signal_detail,
+        }
+        pricing_total = None
+        pricing = board_snapshot.get("pricing")
+        if isinstance(pricing, dict) and pricing.get("total") is not None:
+            try:
+                pricing_total = float(pricing["total"])
+            except (TypeError, ValueError):
+                pricing_total = None
+        fin, payload = apply_bid_cap(
+            effective_config, price, payload, pricing_total=pricing_total
+        )
+        payload["final_round_used"] = effective_round
+        log(
+            f"快递站表情暗号：己方在公共黑名单，强制出价 -> {fin}",
+            gui_verbose_only=True,
+        )
+        return int(fin), payload
+
+    blocked, block_reason = opponent_blocks_express_emoji_signal_price(
+        config, board_snapshot
+    )
+    if blocked:
+        opp_bid_note = (
+            f" 对手首回合出价={opp_r1_bid}" if opp_r1_bid is not None else ""
+        )
+        log(
+            f"快递站表情暗号：对手在{'公共' if block_reason == 'public' else '对局'}黑名单，"
+            f"改走后端估价{opp_bid_note}",
+            gui_verbose_only=True,
+        )
+        return None
+
+    seat_prices = {1: int(emoji_cfg["seat_1_price"]), 2: int(emoji_cfg["seat_2_price"])}
+
+    if effective_round >= 2:
+        price, rand_lo, rand_hi, round1_bid = _express_round2_plus_random_price(
+            config, board_snapshot, seat_prices, emoji_cfg
+        )
+        pricing_strategy = "express_emoji_random_signal"
+        signal_detail = {
+            "price_mode": "random",
+            "random_price": price,
+            "random_lo": rand_lo,
+            "random_hi": rand_hi,
+            "round1_signal_bid": round1_bid,
             "self_user_uid": self_uid,
             "self_emoji_cid": self_emoji_cid,
             "opponent_emoji_cid": opp_emoji_cid,
             "seat_1_price": seat_prices[1],
             "seat_2_price": seat_prices[2],
-        },
+        }
+    else:
+        seat = _express_random_seat_for_signal()
+        price = int(seat_prices[seat])
+        if price <= 0:
+            return None
+        pricing_strategy = "express_emoji_seat_signal"
+        signal_detail = {
+            "price_mode": "seat",
+            "seat": seat,
+            "seat_price": price,
+            "seat_random_pick": True,
+            "self_user_uid": self_uid,
+            "self_emoji_cid": self_emoji_cid,
+            "opponent_emoji_cid": opp_emoji_cid,
+            "seat_1_price": seat_prices[1],
+            "seat_2_price": seat_prices[2],
+        }
+        log(
+            f"快递站表情暗号：随机座次 seat={seat} -> 出价 {price}",
+            gui_verbose_only=True,
+        )
+        _express_remember_round1_signal_bid(board_snapshot, price)
+
+    payload: dict[str, Any] = {
+        "fallback": False,
+        "reason": pricing_strategy,
+        "pricing_strategy": pricing_strategy,
+        "role": None,
+        "effective_round": effective_round,
+        "source_value": float(price),
+        "express_emoji_signal": signal_detail,
     }
     pricing_total = None
     pricing = board_snapshot.get("pricing")
@@ -1890,10 +2045,21 @@ def try_resolve_express_emoji_signal_price(
         effective_config, price, payload, pricing_total=pricing_total
     )
     payload["final_round_used"] = effective_round
-    log(
-        f"快递站表情暗号出价: 座位{seat} -> {fin}（配置座位价 {price}）",
-        gui_verbose_only=True,
-    )
+    if effective_round >= 2:
+        lo = signal_detail.get("random_lo")
+        hi = signal_detail.get("random_hi")
+        r1 = signal_detail.get("round1_signal_bid")
+        log(
+            f"快递站表情暗号出价: 第{effective_round}回合随机 -> {fin}（"
+            f"第1回合={r1} 区间 {lo}-{hi} 随机价 {price}）",
+            gui_verbose_only=True,
+        )
+    else:
+        seat = signal_detail.get("seat")
+        log(
+            f"快递站表情暗号出价: 座位{seat} -> {fin}（配置座位价 {price}）",
+            gui_verbose_only=True,
+        )
     return int(fin), payload
 
 
@@ -1914,7 +2080,8 @@ def _express_station_emoji_handshake_enabled(
         return False
     return bool(
         _express_station_round1_emoji_settings(
-            _automation_with_map_overlay(config, board_snapshot)
+            _automation_with_map_overlay(config, board_snapshot),
+            config,
         ).get("enabled")
     )
 
@@ -1926,20 +2093,30 @@ def try_send_express_station_round1_emoji(
     """快递站系列地图第 1 回合：打开表情面板并点选配置的表情。"""
     if not _express_station_emoji_handshake_enabled(config, board_snapshot):
         return False
-    sleep_interruptible(1.0)
     settings = _express_station_round1_emoji_settings(
-        _automation_with_map_overlay(config, board_snapshot)
+        _automation_with_map_overlay(config, board_snapshot),
+        config,
     )
 
     emoji = settings["emoji"]
-    ex, ey = _EXPRESS_STATION_EMOJI_COORDS[emoji]
-    px, py = _EXPRESS_STATION_EMOJI_PANEL_CLIENT
+    clicks_cfg = merge_express_station_round1_emoji_clicks(config)
+    target = _express_station_emoji_target_xy(clicks_cfg, emoji)
+    if target is None:
+        log(
+            f"warn: 快递站开局表情坐标未配置: {emoji!r}（clicks.express_station_round1_emoji.targets）",
+            gui_verbose_only=True,
+        )
+        return False
+    ex, ey = target
+    px, py = _express_station_emoji_panel_xy(clicks_cfg)
+    panel_wait = float(clicks_cfg.get("panel_wait_seconds", 1.0))
     log(
-        f"快递站第1回合发表情: {emoji} panel=({px},{py}) target=({ex},{ey}) [left_top]",
+        f"快递站第1回合发表情: {emoji} panel=({px},{py}) target=({ex},{ey}) "
+        f"panel_wait={panel_wait:g}s [left_top]",
         gui_verbose_only=True,
     )
     click_client_left_top(config, px, py, "express_emoji_panel")
-    sleep_interruptible(_EXPRESS_STATION_EMOJI_PANEL_WAIT_SECONDS)
+    sleep_interruptible(panel_wait)
     click_client_left_top(config, ex, ey, f"express_emoji_{emoji}")
     return True
 
@@ -1963,7 +2140,8 @@ def wait_after_express_station_round1_emoji(
         return board_snapshot
 
     settings = _express_station_round1_emoji_settings(
-        _automation_with_map_overlay(config, board_snapshot)
+        _automation_with_map_overlay(config, board_snapshot),
+        config,
     )
     if not settings["enabled"]:
         return board_snapshot
@@ -2006,6 +2184,122 @@ def wait_after_express_station_round1_emoji(
             gui_verbose_only=True,
         )
     return bs_final if isinstance(bs_final, dict) else board_snapshot
+
+
+# 实时道具推送；``S2C_37`` 汇总里也可能带 ItemSkillLog，但 bot 点道具后等 S2C_39 落盘。
+_TOOL_ITEM_SKILL_LOG_EVENT_TYPES = frozenset({"S2C_39_game_use_item"})
+
+
+def _item_skill_log_keys_from_snapshot(
+    board_snapshot: dict[str, Any] | None,
+    *,
+    event_types: frozenset[str] | None = _TOOL_ITEM_SKILL_LOG_EVENT_TYPES,
+) -> frozenset[str]:
+    """``skill_logs`` 中 ``ItemSkillLog`` 条目键：优先 ``Uid``，无则退化为事件指纹。"""
+    if not isinstance(board_snapshot, dict):
+        return frozenset()
+    keys: set[str] = set()
+    for block in board_snapshot.get("skill_logs") or []:
+        if not isinstance(block, dict):
+            continue
+        et = str(block.get("event_type") or "")
+        if event_types is not None and et not in event_types:
+            continue
+        gd = block.get("game_data")
+        if not isinstance(gd, dict):
+            continue
+        logs = gd.get("ItemSkillLog")
+        if not isinstance(logs, list) or not logs:
+            continue
+        rx = block.get("received_at_unix")
+        for entry in logs:
+            if not isinstance(entry, dict):
+                continue
+            uid = str(entry.get("Uid") or "").strip()
+            if uid:
+                keys.add(uid)
+                continue
+            try:
+                item_cid = int(entry.get("ItemCid") or 0)
+                skill_cid = int(entry.get("SkillCid") or 0)
+            except (TypeError, ValueError):
+                item_cid = 0
+                skill_cid = 0
+            cast_time = str(entry.get("CastTime") or "")
+            keys.add(f"{et}|{rx}|{skill_cid}|{item_cid}|{cast_time}")
+    return frozenset(keys)
+
+
+def _new_item_skill_log_detail(
+    fresh: dict[str, Any],
+    prior_item_log_keys: frozenset[str],
+) -> str | None:
+    new_item_keys = _item_skill_log_keys_from_snapshot(fresh) - prior_item_log_keys
+    if not new_item_keys:
+        return None
+    sample = next(iter(new_item_keys))
+    extra = len(new_item_keys) - 1
+    detail = sample if extra <= 0 else f"{sample} (+{extra})"
+    return f"new ItemSkillLog {detail}"
+
+
+def wait_board_snapshot_after_tool(
+    config: dict[str, Any],
+    board_snapshot: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """道具后：轮询快照直至出现新 ``ItemSkillLog``，再固定等待 ``tool_after_wait_seconds`` 供游戏渲染。
+
+    - ``tool_after_snapshot_poll_seconds``：最长轮询等待新道具日志落盘（默认 8s）。
+    - ``tool_after_wait_seconds``：见到新日志后的固定渲染等待（默认 5s），与轮询提前结束无关。
+
+    grid_view 在日志 tail 发现 ``S2C_39_game_use_item`` 后写入 ``skill_logs`` 并重算
+    ``pricing``；bot 若在回合初缓存快照且道具后不重读，会按道具前画板估价出价。
+    """
+    timing = config.get("timing", {}) or {}
+    render_wait = float(timing.get("tool_after_wait_seconds", 5.0) or 0.0)
+    poll_timeout = float(timing.get("tool_after_snapshot_poll_seconds", 8.0) or 0.0)
+    prior_item_log_keys = _item_skill_log_keys_from_snapshot(board_snapshot)
+
+    if poll_timeout <= 0.0 and render_wait <= 0.0:
+        fresh = load_board_snapshot_for_loop(config)
+        return fresh if isinstance(fresh, dict) else board_snapshot
+
+    poll = min(0.5, max(0.25, poll_timeout / 10.0) if poll_timeout > 0 else 0.25)
+    deadline = time.monotonic() + max(0.0, poll_timeout)
+    best: dict[str, Any] | None = (
+        board_snapshot if isinstance(board_snapshot, dict) else None
+    )
+
+    def _sleep_render_wait() -> None:
+        if render_wait <= 0.0:
+            return
+        log(
+            f"after tool: 已获得新 ItemSkillLog，等待游戏渲染 {render_wait:g}s …",
+            gui_verbose_only=True,
+        )
+        sleep_interruptible(render_wait)
+
+    while poll_timeout > 0.0:
+        ensure_not_stopped()
+        fresh = load_board_snapshot_for_loop(config)
+        if isinstance(fresh, dict):
+            best = fresh
+            reason = _new_item_skill_log_detail(fresh, prior_item_log_keys)
+            if reason:
+                log(f"after tool: snapshot {reason}", gui_verbose_only=True)
+                _sleep_render_wait()
+                return fresh
+        remain = deadline - time.monotonic()
+        if remain <= 0.0:
+            break
+        sleep_interruptible(min(poll, remain))
+
+    if _item_skill_log_keys_from_snapshot(best) == prior_item_log_keys:
+        log(
+            f"after tool: 轮询 {poll_timeout:g}s 后仍无新 ItemSkillLog，按当前快照出价",
+            gui_verbose_only=True,
+        )
+    return best if isinstance(best, dict) else board_snapshot
 
 
 def _aisha_round4_vacant_gate_enabled(
@@ -2151,27 +2445,16 @@ def handle_round(
 ) -> None:
     ensure_not_stopped()
     bs_data = load_board_snapshot_for_loop(config)
+    timing_cfg = config.get("timing", {}) or {}
     if int(round_no) <= 1:
+        sleep_interruptible(
+            float(timing_cfg.get("round1_extra_wait_seconds", 0.0))
+        )
         if try_send_express_station_round1_emoji(config, bs_data):
             waited = wait_after_express_station_round1_emoji(config, bs_data)
             if isinstance(waited, dict):
                 bs_data = waited
-    timing_cfg = config.get("timing", {}) or {}
-    # wait_for_round_bid_button_ready_ocr(config, round_no=int(round_no))
-    if int(round_no) == 1:
-        if _express_station_emoji_handshake_enabled(config, bs_data):
-            log(f"round {round_no}: express station emoji handshake enabled, wait {timing_cfg.get('round_detect_wait_seconds', 0.0)} seconds", gui_verbose_only=True)
-            sleep_interruptible(
-                float(timing_cfg.get("round_detect_wait_seconds", 0.0) or 0.0)
-            )
-        else:
-            log(f"round {round_no}: express station emoji handshake disabled, wait {timing_cfg.get('round1_extra_wait_seconds', 0.0)} seconds", gui_verbose_only=True)
-            sleep_interruptible(
-                float(timing_cfg.get("round1_extra_wait_seconds", 0.0))
-                + float(timing_cfg.get("round_detect_wait_seconds", 0.0) or 0.0)
-            )
-    else:
-        sleep_interruptible(float(timing_cfg.get("round_detect_wait_seconds", 0.0) or 0.0))
+    sleep_interruptible(float(timing_cfg.get("round_detect_wait_seconds", 0.0) or 0.0))
     tool_rounds = {int(item) for item in config.get("automation", {}).get("tool_rounds", [1, 2])}
     ran_tool_this_round = int(round_no) in tool_rounds
     skip_tool, skip_reason = should_skip_tool_for_aisha_vacant_gate(
@@ -2187,9 +2470,13 @@ def handle_round(
     if ran_tool_this_round:
         run_tool_sequence(config)
         log(f"after tool", gui_verbose_only=True)
-        sleep_interruptible(5)
+        bs_data = wait_board_snapshot_after_tool(config, bs_data)
     else:
         log(f"round {round_no}: tool skipped", gui_verbose_only=True)
+
+    fresh_bs = load_board_snapshot_for_loop(config)
+    if isinstance(fresh_bs, dict):
+        bs_data = fresh_bs
 
     price, details = compute_price(
         config,
@@ -2226,6 +2513,8 @@ def handle_round(
         )
     except Exception:
         pass
+    bs_after_bid = load_board_snapshot_for_loop(config)
+    _express_after_snapshot_hooks(config, bs_after_bid)
 
 
 def handle_end_transition(
@@ -2268,6 +2557,14 @@ def run_loop(
     run_cycles = lv["run_cycles"]
     cycle_rest_minutes = lv["cycle_rest_minutes"]
     prepare_target_window(config, center=True)
+
+    try:
+        from .public_blacklist_sync import sync_public_blacklist_from_tencent_docs
+
+        ok, note = sync_public_blacklist_from_tencent_docs(config)
+        log(note, gui_verbose_only=not ok)
+    except Exception as exc:
+        log(f"公共黑名单同步异常（保留本地 CSV）: {exc}", gui_verbose_only=True)
 
     log("BidKing bot 已启动（交互层；出价由 pricing.compute_price 读快照计算）；按 F9 停止")
     log("mode: full-window OCR -> lobby/end/round handling", gui_verbose_only=True)
@@ -2406,6 +2703,7 @@ def run_loop(
                     "重置回合状态并清空 self_bid_cache"
                 )
                 handled_rounds.clear()
+                _express_round1_signal_bid_by_game.clear()
                 try:
                     from ..pricing.self_bid_cache import clear_self_bid_disk_cache
 
@@ -2414,6 +2712,9 @@ def run_loop(
                     pass
             if game_uid is not None:
                 cached_game_uid = game_uid
+
+            if isinstance(bs_data, dict):
+                _express_after_snapshot_hooks(config, bs_data)
 
             log(
                 f"loop {loop_index}: snap_round={snap_round} poll_round={observation.round_no} "
@@ -2444,6 +2745,8 @@ def run_loop(
             if observation.end_prompt:
                 pending_game_start_deadline = None
                 map_select_no_start_streak = 0
+                if isinstance(bs_data, dict):
+                    _express_after_snapshot_hooks(config, bs_data)
                 last_end_at, confirm_at = handle_end_transition(
                     config,
                     handled_rounds,

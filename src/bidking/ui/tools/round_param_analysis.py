@@ -9,6 +9,7 @@ import json
 import os
 import tkinter as tk
 from collections import Counter
+from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
@@ -21,6 +22,7 @@ from ...config.map_runtime_overlay import (
 from ...config.paths import config_overlay_path, pricing_map_overlay_path, runtime_path
 from ...config.pricing import deep_merge
 from .._bot_config_panel import DEFAULT_BID_RATIO_BY_ROUND
+from .._date_picker import DatePicker
 
 MULTIPLIERS = [2.0, 1.6, 1.3, 1.1]  # R1~R4 秒杀倍数
 PREMIUM_MIN = 10000
@@ -142,6 +144,22 @@ def format_bids_short(bids: list[int | None]) -> str:
     return ";".join(parts) if parts else "—"
 
 
+def _parse_datetime_loose(text: str, *, end_of_day: bool = False) -> datetime | None:
+    """解析筛选时间；仅日期且 ``end_of_day`` 时取当日 23:59:59。"""
+    s = (text or "").strip()
+    if not s:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            dt = datetime.strptime(s, fmt)
+            if end_of_day and fmt == "%Y-%m-%d":
+                return dt.replace(hour=23, minute=59, second=59)
+            return dt
+        except ValueError:
+            continue
+    return None
+
+
 def parse_bids(bid_str: str) -> list[int | None]:
     result: list[int | None] = [None] * 5
     if not bid_str or not bid_str.strip():
@@ -190,6 +208,7 @@ def load_games(filepath: str | os.PathLike[str]) -> tuple[list[dict], str]:
             map_id, map_bundle = parse_map_from_uid(uid)
             games_dict[uid] = {
                 "uid": uid,
+                "match_started_at": row[1].strip() if len(row) > 1 else "",
                 "map_id": map_id,
                 "map_bundle": map_bundle,
                 "players": [],
@@ -666,11 +685,41 @@ class RoundParamAnalysisApp:
             foreground="#5a6a7a",
         ).pack(side=tk.LEFT)
 
+        f_time = ttk.Frame(self.root, padding=(8, 0, 8, 4))
+        f_time.pack(fill=tk.X)
+        ttk.Label(f_time, text="对局开始:").pack(side=tk.LEFT)
+        self.time_start_var = tk.StringVar(value="")
+        DatePicker(
+            f_time,
+            textvariable=self.time_start_var,
+            include_time=True,
+            default_hour=0,
+            default_minute=0,
+        ).pack(side=tk.LEFT, padx=(4, 8))
+        ttk.Label(f_time, text="对局结束:").pack(side=tk.LEFT)
+        self.time_end_var = tk.StringVar(value="")
+        DatePicker(
+            f_time,
+            textvariable=self.time_end_var,
+            include_time=True,
+            default_hour=23,
+            default_minute=59,
+        ).pack(side=tk.LEFT, padx=(4, 8))
+        ttk.Button(f_time, text="应用时间筛选", command=self._on_time_filter_changed).pack(
+            side=tk.LEFT, padx=2
+        )
+        ttk.Label(
+            f_time,
+            text="（格式 YYYY-MM-DD HH:MM；留空表示不限制）",
+            foreground="#5a6a7a",
+        ).pack(side=tk.LEFT)
+
         f_table = ttk.Frame(self.root, padding=5)
         f_table.pack(fill=tk.BOTH, expand=True, padx=5)
 
         cols = (
             "uid",
+            "match_start",
             "map",
             "prize",
             "win_bid",
@@ -693,6 +742,7 @@ class RoundParamAnalysisApp:
 
         cfg = [
             ("uid", "对局UID", 175),
+            ("match_start", "对局开始时间", 132),
             ("map", "地图", 48),
             ("prize", "当局藏品价值", 88),
             ("win_bid", "赢家出价", 88),
@@ -793,10 +843,34 @@ class RoundParamAnalysisApp:
         self.map_filter_combo.bind("<<ComboboxSelected>>", self._on_map_filter_changed)
 
     def _filtered_games(self) -> list[dict]:
+        games = self.games
         sel = self.map_filter_var.get().strip()
-        if not sel or sel == "全部":
-            return self.games
-        return [g for g in self.games if str(g.get("map_bundle") or "") == sel]
+        if sel and sel != "全部":
+            games = [g for g in games if str(g.get("map_bundle") or "") == sel]
+
+        start_dt = _parse_datetime_loose(self.time_start_var.get())
+        end_raw = self.time_end_var.get().strip()
+        end_dt = _parse_datetime_loose(end_raw, end_of_day=True)
+        if end_dt is not None and len(end_raw) == 16:
+            end_dt = end_dt.replace(second=59)
+        if start_dt is None and end_dt is None:
+            return games
+
+        out: list[dict] = []
+        for g in games:
+            mt = _parse_datetime_loose(str(g.get("match_started_at") or ""))
+            if mt is None:
+                continue
+            if start_dt is not None and mt < start_dt:
+                continue
+            if end_dt is not None and mt > end_dt:
+                continue
+            out.append(g)
+        return out
+
+    def _on_time_filter_changed(self) -> None:
+        if self.games:
+            self._sim_all()
 
     def _on_map_filter_changed(self, *_args: object) -> None:
         bundle = self.map_filter_var.get().strip()
@@ -981,6 +1055,7 @@ class RoundParamAnalysisApp:
         bl = self.baseline.get(uid, {})
         sr = self.sim_results.get(uid)
         map_b = str(g.get("map_bundle") or "—")
+        match_start = str(g.get("match_started_at") or "—")
         prize = int(g.get("prize_pool") or 0)
         win_bid = self._baseline_winner_bid_text(uid)
         csv_p = self._target_csv_profit(g, target)
@@ -988,6 +1063,7 @@ class RoundParamAnalysisApp:
         if sr is None:
             return (
                 uid,
+                match_start,
                 map_b,
                 str(prize),
                 win_bid,
@@ -1006,6 +1082,7 @@ class RoundParamAnalysisApp:
         newb = sr["new_bids"]
         return (
             uid,
+            match_start,
             map_b,
             str(prize),
             win_bid,
@@ -1028,26 +1105,30 @@ class RoundParamAnalysisApp:
     def _sort_key_for_column(self, col: str, values: tuple[Any, ...]) -> Any:
         idx_map = {
             "uid": 0,
-            "map": 1,
-            "prize": 2,
-            "win_bid": 3,
-            "csv_profit": 4,
-            "orig_r1": 5,
-            "orig_r2": 6,
-            "orig_r3": 7,
-            "orig_r4": 8,
-            "orig_r5": 9,
-            "new_r1": 10,
-            "new_r2": 11,
-            "new_r3": 12,
-            "new_r4": 13,
-            "new_r5": 14,
-            "base": 15,
-            "sim": 16,
-            "delta": 17,
+            "match_start": 1,
+            "map": 2,
+            "prize": 3,
+            "win_bid": 4,
+            "csv_profit": 5,
+            "orig_r1": 6,
+            "orig_r2": 7,
+            "orig_r3": 8,
+            "orig_r4": 9,
+            "orig_r5": 10,
+            "new_r1": 11,
+            "new_r2": 12,
+            "new_r3": 13,
+            "new_r4": 14,
+            "new_r5": 15,
+            "base": 16,
+            "sim": 17,
+            "delta": 18,
         }
         i = idx_map.get(col, 0)
         raw = values[i] if i < len(values) else ""
+        if col == "match_start":
+            dt = _parse_datetime_loose(str(raw))
+            return dt or datetime.min
         if col in ("prize", "win_bid", "csv_profit", "base", "sim", "delta"):
             s = str(raw).lstrip("+").replace(",", "")
             try:
@@ -1126,10 +1207,15 @@ class RoundParamAnalysisApp:
                         break
 
         map_part = f" | 地图={map_sel}" if map_sel and map_sel != "全部" else ""
+        t0 = self.time_start_var.get().strip()
+        t1 = self.time_end_var.get().strip()
+        time_part = ""
+        if t0 or t1:
+            time_part = f" | 时间={t0 or '…'}~{t1 or '…'}"
         load_part = f"{self._load_summary} | " if self._load_summary else ""
         self.status_var.set(
             load_part
-            + f"显示 {len(valid_srs)}/{len(self.games)} 局{map_part} | 目标: {target} | "
+            + f"显示 {len(valid_srs)}/{len(self.games)} 局{map_part}{time_part} | 目标: {target} | "
             f"CSV原始: {csv_sum:,} | 门票={ticket} | "
             f"原系数 {_fmt5(orig_coefs)} → 新系数 {_fmt5(new_coefs)} | "
             f"基准: {base_sum:,} | 模拟: {sim_sum:,} | 变化: {d:+,}"
@@ -1257,7 +1343,8 @@ class RoundParamAnalysisApp:
             opp_parts.append(f"{nm}={format_bids_short(p.get('bids') or [])}")
 
         self.detail_var.set(
-            f"[{uid}] 地图={g.get('map_bundle') or '—'} | "
+            f"[{uid}] 开始={g.get('match_started_at') or '—'} | "
+            f"地图={g.get('map_bundle') or '—'} | "
             f"藏品={g['prize_pool']:,} | 赢家出价={w_bid:,}({bl.get('winner', '—')}) | 玩家收益={csv_p:,} | "
             + " | ".join(parts)
             + " | 对手: "
@@ -1284,6 +1371,7 @@ class RoundParamAnalysisApp:
             w.writerow(
                 [
                     "对局UID",
+                    "对局开始时间",
                     "地图档",
                     "当局藏品价值",
                     "赢家出价",
@@ -1332,6 +1420,7 @@ class RoundParamAnalysisApp:
                 w.writerow(
                     [
                         g["uid"],
+                        g.get("match_started_at") or "",
                         g.get("map_bundle") or "",
                         g.get("prize_pool") or 0,
                         int(bl.get("winner_bid") or 0),

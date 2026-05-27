@@ -2,7 +2,7 @@
   "pricing": {
     "fallback_bid_price": 33334,
     "enable_big_gold_adjustment": false,
-    "enable_opponent_bid_adjustment": false,
+    "enable_opponent_bid_adjustment": true,
     "enable_vacant_red_floor_ceiling_pick": false,
     "enable_late_round_low_bid_surrender": false,
     "late_round_low_bid_surrender_after_round": 4,
@@ -15,7 +15,7 @@
       "4": 0.0,
       "default": 0.0
     },
-    "vacant_red_floor_ceiling_pick_mode": "aggressive",
+    "vacant_red_floor_ceiling_pick_mode": "normal",
     "map_quality_unit_per_cell": {
       "q56": 8500.0,
       "q5": 8000.0

@@ -61,6 +61,7 @@ def prepare_snapshot_pricing_context(
 
     t0_csv = time.perf_counter()
     raw_csv_cells = raw.get("csv_quality_groups_avg_per_cell") if isinstance(raw, dict) else None
+    raw_csv_items = raw.get("csv_quality_groups_avg_per_item") if isinstance(raw, dict) else None
     if isinstance(raw_csv_cells, dict):
         try:
             csv_cells_for_est = {str(k): float(v) for k, v in raw_csv_cells.items()}
@@ -68,6 +69,33 @@ def prepare_snapshot_pricing_context(
             csv_cells_for_est = {}
     else:
         csv_cells_for_est = {}
+    if csv_cells_for_est and int(map_id or 0) > 0:
+        from ..map_quality_unit_config import apply_map_overrides_to_csv_quality_groups
+
+        try:
+            from ...config.runtime import load_runtime
+
+            _cfg = load_runtime().raw
+        except Exception:
+            _cfg = None
+        csv_cells_for_est, _item_adj, _ov_keys = apply_map_overrides_to_csv_quality_groups(
+            csv_cells_for_est,
+            raw_csv_items if isinstance(raw_csv_items, dict) else None,
+            int(map_id),
+            config=_cfg,
+        )
+        if _ov_keys and isinstance(raw, dict):
+            raw = dict(raw)
+            raw["csv_quality_groups_avg_per_cell"] = dict(csv_cells_for_est)
+            if _item_adj:
+                raw["csv_quality_groups_avg_per_item"] = dict(_item_adj)
+            prev = raw.get("map_quality_unit_override_keys")
+            merged_keys = list(prev) if isinstance(prev, list) else []
+            for k in _ov_keys:
+                if k not in merged_keys:
+                    merged_keys.append(k)
+            raw["map_quality_unit_override_keys"] = merged_keys
+            snap_full["raw_pricing"] = raw
     perf_log_elapsed("build_snapshot_pricing_dict: csv_cells_parse", t0_csv)
 
     return SnapshotPricingContext(

@@ -19,12 +19,11 @@
   },
   "automation": {
     "express_station_round1_emoji": {
-      "enabled": false,
-      "emoji": "遗憾",
-      "character_name": "艾哈迈德",
-      "character_title": "狂热博士",
+      "enabled": true,
+      "emoji": "惊讶",
       "seat_1_price": 520,
       "seat_2_price": 144,
+      "round2_plus_high_random_max": 888,
       "wait_after_send_seconds": 3.0
     },
     "bid_cap_price": 250000,

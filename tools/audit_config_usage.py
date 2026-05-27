@@ -12,6 +12,7 @@ SRC = ROOT / "src"
 
 # 与 generate_visual_config_schema.DEPRECATED_PATHS 保持一致
 DEPRECATED_PATHS = frozenset({
+    "timing.tool_after_snapshot_poll_seconds",
     "timing.tool_after_wait_seconds",
     "automation.safe_guard_enabled",
     "automation.safe_guard_max_increase_ratio",

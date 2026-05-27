@@ -178,6 +178,39 @@ def apply_map_quality_unit_per_cell_overrides(
     return cell_out, item_out, applied_csv
 
 
+def apply_map_overrides_to_csv_quality_groups(
+    per_cell: Mapping[str, float],
+    per_item: Mapping[str, float] | None,
+    map_id: int,
+    *,
+    config: Mapping[str, Any] | None = None,
+) -> tuple[Dict[str, float], Dict[str, float], list[str]]:
+    """
+    在已有 ``csv_quality_groups_avg_*`` 上重放 ``pricing.map_quality_unit_per_cell`` 覆盖。
+
+    快照若内嵌旧 ``raw_pricing``，仍须按当前 ``pricing.maps`` 刷新格单价（画板实时刷新会重建 raw，
+    但回放/写盘快照常复用缓存）。
+    """
+    cell_in = {str(k): float(v) for k, v in per_cell.items()}
+    item_in: Dict[str, float] = {}
+    if isinstance(per_item, Mapping):
+        for k, v in per_item.items():
+            try:
+                item_in[str(k)] = float(v)
+            except (TypeError, ValueError):
+                continue
+    if config is None:
+        from ..config.runtime import load_runtime
+
+        cfg = load_runtime().raw
+    else:
+        cfg = config
+    ov = merge_config_overrides_into_runtime(cfg, int(map_id))
+    if not ov:
+        return cell_in, item_in, []
+    return apply_map_quality_unit_per_cell_overrides(cell_in, item_in, ov)
+
+
 def merge_config_overrides_into_runtime(
     config: Mapping[str, Any],
     map_id: int,
@@ -201,6 +234,7 @@ __all__ = [
     "CSV_QUALITY_Q56",
     "CSV_QUALITY_Q5",
     "CSV_QUALITY_Q6",
+    "apply_map_overrides_to_csv_quality_groups",
     "apply_map_quality_unit_per_cell_overrides",
     "config_overrides_from_pricing",
     "load_map_quality_unit_price_refs",
