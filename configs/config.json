@@ -30,17 +30,20 @@
     "default_map": "1",
     "default_runs": 1,
     "selected_map": "210",
-    "selected_runs": 44,
+    "selected_runs": 100,
     "warehouse_auto_sort": {
       "enabled": true
     },
-    "run_cycles": 2,
-    "cycle_rest_minutes": 10.0,
+    "run_cycles": 1,
+    "cycle_rest_minutes": 0.0,
     "enable_map_entry_money_check": false,
     "enable_aisha_round4_tool_vacant_gate": false,
     "aisha_round4_tool_min_vacant": 30,
     "bid_cap_skip_when_total_above": 0,
-    "game_start_timeout_seconds": 0.0
+    "game_start_timeout_seconds": 0.0,
+    "scheduled_start_enabled": false,
+    "scheduled_start_hour": 8,
+    "scheduled_start_minute": 0
   },
   "timing": {
     "poll_seconds": 1,
