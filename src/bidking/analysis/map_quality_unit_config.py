@@ -1,4 +1,7 @@
-"""地图金/红（q5、q6、q5+q6）格单价：CSV 参考价与 ``pricing.map_quality_unit_per_cell`` 覆盖。"""
+"""地图品质组合格单价：CSV 参考价与 ``pricing.map_quality_unit_per_cell`` 覆盖。
+
+覆盖项含 q5 / q6 / q5+q6（配置键 ``q56``）/ q4+q5+q6（配置键 ``q456``）。
+"""
 
 from __future__ import annotations
 
@@ -12,13 +15,15 @@ from .map_avg_csv import map_quality_csv_path_resolved, representative_map_id_fo
 CSV_QUALITY_Q5 = "q5"
 CSV_QUALITY_Q6 = "q6"
 CSV_QUALITY_Q56 = "q5+q6"
+CSV_QUALITY_Q456 = "q4+q5+q6"
 
-# 配置键（``q56`` 写入 CSV 的 ``q5+q6``）
-CONFIG_KEYS = (CSV_QUALITY_Q5, CSV_QUALITY_Q6, "q56")
+# 配置键（``q56``→``q5+q6``，``q456``→``q4+q5+q6``）
+CONFIG_KEYS = (CSV_QUALITY_Q5, CSV_QUALITY_Q6, "q56", "q456")
 CONFIG_TO_CSV: dict[str, str] = {
     CSV_QUALITY_Q5: CSV_QUALITY_Q5,
     CSV_QUALITY_Q6: CSV_QUALITY_Q6,
     "q56": CSV_QUALITY_Q56,
+    "q456": CSV_QUALITY_Q456,
 }
 
 
@@ -106,7 +111,7 @@ def load_map_quality_unit_price_refs(
     snapshot_path_hint: Optional[str] = None,
 ) -> Dict[str, Dict[str, Optional[float]]]:
     """
-    返回 ``q5`` / ``q6`` / ``q56`` 的 CSV 参考价（件价、格价 × 均价/P25/P50）。
+    返回 ``q5`` / ``q6`` / ``q56`` / ``q456`` 的 CSV 参考价（件价、格价 × 均价/P25/P50）。
 
     ``map_id`` 会先归一化为代表 ``map_id``（与同档最小图一致）。
     """
@@ -154,7 +159,7 @@ def apply_map_quality_unit_per_cell_overrides(
     """
     将配置覆盖写入 ``per_cell`` / ``per_item``（格价为主；件价按 CSV 均价比例缩放）。
 
-    返回新 dict 与已应用的 CSV 品质键列表（``q5``、``q6``、``q5+q6``）。
+    返回新 dict 与已应用的 CSV 品质键列表（如 ``q5``、``q6``、``q5+q6``、``q4+q5+q6``）。
     """
     cell_out = dict(per_cell)
     item_out = dict(per_item)
@@ -231,6 +236,7 @@ def merge_config_overrides_into_runtime(
 __all__ = [
     "CONFIG_KEYS",
     "CONFIG_TO_CSV",
+    "CSV_QUALITY_Q456",
     "CSV_QUALITY_Q56",
     "CSV_QUALITY_Q5",
     "CSV_QUALITY_Q6",

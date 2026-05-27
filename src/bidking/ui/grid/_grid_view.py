@@ -99,7 +99,9 @@ from ._grid_overlay_payload import (
 )
 from ._overlay_reconcile import (
     apply_scan_history_to_phantom_items,
+    apply_vacant_rect_phantom_quality_pref,
     reconcile_overlay_after_refresh,
+    snapshot_auto_vacant_phantom_quality_prefs,
 )
 
 # ─── 布局常量 ──────────────────────────────────────────────────────────────
@@ -1113,8 +1115,8 @@ class GridWindow:
         placed = self._fraud_placed_items_for_overlay()
         return _grid_overlay.fraud_empty_cells_for_algorithm(
             self._fraud_empty_cells_algorithm,
-            limit,
             occupied,
+            limit,
             placed,
             fraud_empty_cells_tiling_n=self._fraud_empty_cells_tiling_n,
         )
@@ -1126,6 +1128,9 @@ class GridWindow:
         艾莎第 4 回合：空置闭合矩形 → 自动幽灵 + 手动画框；
         候选唯一品质/唯一物品时自动补齐。
         """
+        saved_auto_q = snapshot_auto_vacant_phantom_quality_prefs(
+            self._phantom_items, self._phantom_quality_pref
+        )
         self._purge_auto_vacant_rect_phantoms()
         if not self._infer_vacant_rect_phantoms:
             return
@@ -1159,12 +1164,9 @@ class GridWindow:
                 int(spec.dc),
                 int(spec.dr),
             )
-            if spec.manual_confirm_item_id is not None:
-                self._phantom_quality_pref.pop(spec.uid, None)
-            elif spec.quality is not None:
-                self._phantom_quality_pref[spec.uid] = int(spec.quality)
-            else:
-                self._phantom_quality_pref[spec.uid] = PHANTOM_Q_INFER
+            apply_vacant_rect_phantom_quality_pref(
+                spec.uid, spec, self._phantom_quality_pref, saved_auto_q
+            )
         if specs:
             apply_scan_history_to_phantom_items(self._phantom_items, self.state)
 

@@ -37,6 +37,7 @@ _MAP_QUALITY_UNIT_LABELS: dict[str, str] = {
     "q5": "金 (Q5) 格单价",
     "q6": "红 (Q6) 格单价",
     "q56": "金+红 (Q56) 格单价",
+    "q456": "紫+金+红 (Q456) 格单价",
 }
 
 # 隐秘拍卖档与 24x/25x 共用格单价（游戏侧归并）；UI 仅提示去对应明拍档编辑
@@ -479,7 +480,7 @@ class VisualConfigPanel:
 
         grp = ttk.LabelFrame(
             inner,
-            text="金/红格单价覆盖（优先于 CSV，用于估价）",
+            text="品质格单价覆盖（优先于 CSV，用于估价）",
             padding=8,
         )
         grp.grid(row=999, column=0, sticky="ew", pady=(0, 8))
@@ -517,7 +518,7 @@ class VisualConfigPanel:
 
         hint = (
             f"写入 configs/pricing.maps/{shared}.json；代表 map_id={rep_mid or '—'}。"
-            "留空或 0 表示使用 CSV 均价；填写后覆盖 q5/q6/q5+q6 格单价。"
+            "留空或 0 表示使用 CSV 均价；填写后覆盖 q5/q6/q5+q6/q4+q5+q6 格单价。"
         )
         ttk.Label(grp, text=hint, foreground="#555577", wraplength=520, justify="left").grid(
             row=0, column=0, columnspan=2, sticky="w", pady=(0, 6)
