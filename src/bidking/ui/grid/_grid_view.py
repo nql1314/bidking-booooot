@@ -35,6 +35,7 @@
   - 诈骗格规则**仅用于**上述自动空置区（计数与初始橘红），**不限制**右键手动剔除/恢复空置标记。由 ``grid_view.fraud_empty_cells_algorithm`` 指定：字符串 ``tiling_strict`` / ``none`` 等，或列表 ``["tiling", n]`` / 对象 ``{"tiling": n}`` 将铺板与 trim 写在一起。
   - 空置候选格：普通右键可手动剔除该格（不计空置、不铺橘红），再右键同一格可恢复。
   - 日志物品仍为「推算轮廓」（CSV 自动扩框、非手动画框）时：在该物品当前占格内右键可取消本次推算扩框（按锚格 1×1 显示），直至日志锁定形状或新对局。
+  - 第 4 回合起自动填充的 ``phantom_vac_*``：在占格上右键与手画幽灵相同可删除，本局内不再自动补回（新对局清空抑制表）。
 """
 
 import io
@@ -860,7 +861,7 @@ class GridWindow:
         self._infer_unknown_contour_shapes = infer_unknown_contour_shapes_enabled(
             _rt_cfg
         )
-        self._infer_vacant_rect_phantoms = infer_vacant_rect_phantoms_enabled(_rt_cfg)
+        self._runtime_raw = _rt_cfg.raw
 
         # 实时 tail：关闭画板或返回主页时置位，供后台线程退出
         self._monitor_stop = threading.Event()
@@ -891,6 +892,8 @@ class GridWindow:
         self._infer_shapes: Dict[str, Tuple[int, int, int, int]] = {}
         # 用户右键取消「推算扩框」的 uid；``_sync_infer_shapes_from_analysis`` 与快照导出均会剔除
         self._infer_suppress_uids: Set[str] = set()
+        # 用户右键取消的 ``phantom_vac_*``；重绘重算时不再自动补回
+        self._auto_vacant_rect_phantom_suppress_uids: Set[str] = set()
         # 最近一次点击「扩展日志物品」之前的 _manual_shapes 快照（用于一键还原）
         self._manual_shapes_restore_backup: Optional[
             Dict[str, Tuple[int, int, int, int]]
@@ -1121,19 +1124,27 @@ class GridWindow:
             fraud_empty_cells_tiling_n=self._fraud_empty_cells_tiling_n,
         )
 
+    def _infer_vacant_rect_phantoms_active(self) -> bool:
+        """配置开启且当前为第 4 回合及之后才做空置矩形自动幽灵。"""
+        return infer_vacant_rect_phantoms_enabled(
+            self._runtime_raw,
+            current_round=int(self.state.current_round or 1),
+        )
+
     def _sync_vacant_rect_phantoms_from_analysis(
         self, raw_pricing: Dict[str, Any]
     ) -> None:
         """
-        艾莎第 4 回合：空置闭合矩形 → 自动幽灵 + 手动画框；
+        艾莎第 4 回合及之后：空置闭合矩形 → 自动幽灵 + 手动画框；
         候选唯一品质/唯一物品时自动补齐。
         """
+        if not self._infer_vacant_rect_phantoms_active():
+            self._purge_auto_vacant_rect_phantoms()
+            return
         saved_auto_q = snapshot_auto_vacant_phantom_quality_prefs(
             self._phantom_items, self._phantom_quality_pref
         )
         self._purge_auto_vacant_rect_phantoms()
-        if not self._infer_vacant_rect_phantoms:
-            return
         occ = self._occupied_cells_for_overlay_infer()
         fraud_cells = self._fraud_cells_for_vacant_rect_infer(occ)
         specs = _grid_overlay.compute_vacant_rect_phantom_specs(
@@ -1152,6 +1163,8 @@ class GridWindow:
             enabled=True,
         )
         for spec in specs:
+            if spec.uid in self._auto_vacant_rect_phantom_suppress_uids:
+                continue
             pk = ItemKnowledge(uid=spec.uid)
             pk.box_id = int(spec.dr) * GRID_COLS + int(spec.dc)
             pk.box_id_confirmed = True
@@ -2670,6 +2683,7 @@ class GridWindow:
         self._manual_shapes.clear()
         self._infer_shapes.clear()
         self._infer_suppress_uids.clear()
+        self._auto_vacant_rect_phantom_suppress_uids.clear()
         self._phantom_quality_pref.clear()
         self._unknown_cell_quality_pref.clear()
         self._manual_shapes_restore_backup = None
@@ -2728,6 +2742,7 @@ class GridWindow:
         self._sanitize_phantom_quality_prefs()
         self._validate_manual_confirmations()
         self._sanitize_infer_suppress_uids()
+        self._sanitize_auto_vacant_rect_phantom_suppress_uids()
 
         if perf:
             _dr0 = time.perf_counter()
@@ -2772,6 +2787,13 @@ class GridWindow:
             or self.state.items[uid].shape is not None
         }
         self._infer_suppress_uids -= drop
+
+    def _sanitize_auto_vacant_rect_phantom_suppress_uids(self) -> None:
+        self._auto_vacant_rect_phantom_suppress_uids = {
+            str(uid)
+            for uid in self._auto_vacant_rect_phantom_suppress_uids
+            if _grid_overlay.is_auto_vacant_rect_phantom_uid(uid)
+        }
 
     def _validate_manual_confirmations(self) -> None:
         """校验所有物品的手动候选确认，冲突时自动清除。"""
@@ -3681,7 +3703,7 @@ class GridWindow:
             ("左键", "key"),
             ("拖；", "base"),
             ("右键", "key"),
-            ("幽灵删格；日志物品轮廓未锁时", "base"),
+            ("幽灵删格（含第4回合起自动填充）；日志物品轮廓未锁时", "base"),
             ("右键", "key"),
             ("命中可还原手动画框；", "base"),
             ("弹窗", "base"),
@@ -4395,7 +4417,8 @@ class GridWindow:
     # ── 缩放把手拖动 ──────────────────────────────────────────────────────
 
     def _on_right_click(self, event: tk.Event) -> None:
-        """右键：幽灵物品 → 删除；日志手动画框 → 清除手动画框；日志推算扩框 → 取消推算扩框；
+        """右键：幽灵物品（含自动填充 ``phantom_vac_*``）→ 删除且本局不再自动补回；
+        日志手动画框 → 清除手动画框；日志推算扩框 → 取消推算扩框；
         空格无 Ctrl → 切换手动剔除空置；Ctrl+右键 + 空格 → 拖动画红幽灵（Q6）。"""
         cx = int(self.canvas.canvasx(event.x))
         cy = int(self.canvas.canvasy(event.y))
@@ -4406,6 +4429,8 @@ class GridWindow:
             return
         uid = self._find_item_at(row, col)
         if uid and uid in self._phantom_items:
+            if _grid_overlay.is_auto_vacant_rect_phantom_uid(uid):
+                self._auto_vacant_rect_phantom_suppress_uids.add(str(uid))
             self._phantom_items.pop(uid, None)
             self._manual_shapes.pop(uid, None)
             self._phantom_quality_pref.pop(uid, None)

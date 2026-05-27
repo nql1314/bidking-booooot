@@ -235,6 +235,15 @@
       "hide": false
     },
     {
+      "path": "pricing.infer_vacant_rect_phantoms",
+      "type": "bool",
+      "label": "空置矩形自动幽灵",
+      "description": "第4回合及之后：在空置区识别近似实心矩形并自动放置 phantom_vac 手动画框（可右键取消，本局不再补回）。需 Q1–Q4 已扫且低阶轮廓齐。",
+      "scope": "config",
+      "group": "出价",
+      "hide": false
+    },
+    {
       "path": "pricing.enable_late_round_low_bid_surrender",
       "type": "bool",
       "label": "后期低价认输",

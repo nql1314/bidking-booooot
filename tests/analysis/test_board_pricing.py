@@ -780,6 +780,15 @@ class BoardPricingTests(unittest.TestCase):
                 {"pricing": {"infer_vacant_rect_phantoms": False}}
             )
         )
+        self.assertFalse(
+            infer_vacant_rect_phantoms_enabled({"pricing": {}}, current_round=3)
+        )
+        self.assertTrue(
+            infer_vacant_rect_phantoms_enabled({"pricing": {}}, current_round=4)
+        )
+        self.assertTrue(
+            infer_vacant_rect_phantoms_enabled({"pricing": {}}, current_round=5)
+        )
 
     def test_vacant_rect_phantom_specs_round4_solid_region(self) -> None:
         """第 4 回合、Q1–Q4 已扫且低阶轮廓齐：实心空置矩形生成 phantom_vac 与唯一品质/候选。"""
@@ -856,7 +865,7 @@ class BoardPricingTests(unittest.TestCase):
         self.assertEqual(sp.quality, pick_quality)
         self.assertEqual(sp.manual_confirm_item_id, pick_confirm)
 
-    def test_vacant_rect_phantom_skipped_when_not_round4(self) -> None:
+    def test_vacant_rect_phantom_skipped_before_round4(self) -> None:
         from bidking.parsing.state import GameState
 
         st = GameState()
