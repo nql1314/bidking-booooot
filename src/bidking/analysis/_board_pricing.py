@@ -34,13 +34,10 @@ UID 推断（``inferred_self_user_uid``，见 :mod:`bidking.pricing._self_uid_in
 低档总格已齐（``q14_grid_known``）时，若 ``random_avg_price_min`` 仍明显高于 ``points``（>50%），
 对 ``points`` / ``points_floor`` / ``points_ceiling`` 分别做 ``random_avg_price_min + 原值/3``（与早期回合同式）。
 
-当白绿蓝（q123）均已扫描、事件已给出紫均格（``q4_grid_avg``）、仅有 ``q4_grid_min``（且 ``> 10``）、
-未公开 ``q4_grid_count`` 时，紫最少格已从空置扣减并按 ``q4`` 单档计价，剩余空格若仍用扫描
-``q4+q5+q6`` 混合单价会偏高；早单价改为 CSV ``q4+q5+q6`` 与 ``q5+q6`` 格均价的算术平均。
-
 合并物品上 **仍无 ``shape``、品质已知且已确认占位** 时，几何占位按锚格计；``pricing.total`` 已为该档
-CSV 权重期望价。对 ``max(0, 加权等效格数 − 1)`` 之和从有效空置 ``vacant_adj`` 中扣减（见
-:func:`unknown_value.unknown_contour_vacant_weighted_excess`），使 ``空置格 × 早/金红单价`` 不因多计空格外扩。
+CSV 权重期望价。``max(0, 加权等效格数 − 1)`` 按品质从对应 ``q*_grid_min`` 的 ``tier_extra`` 格数/价值中
+扣减（见 :func:`unknown_value.unknown_contour_vacant_weighted_excess` 的 ``excess_by_quality``），不再单独从
+``vacant_adj`` 扣减，避免与 ``total`` 重复计价。
 
 已知轮廓且品质未知、CSV 为多候选（权重价）的物品（含仅日志未确认的锚格）：几何占位格在边际上视同空置，参与 ``空置格 × 空置单价``；
 但 ``total`` / ``compute_items_total`` 已含该件权重价，故在 ``points`` / ``est_*`` 基底中扣除对应权重价，避免重复计价。
