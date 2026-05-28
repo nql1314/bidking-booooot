@@ -26,7 +26,6 @@ _DEFAULT_ACCESS_TOKEN_ENV = "BIDKING_TENCENT_DOCS_ACCESS_TOKEN"
 _DEFAULT_SUMMARY_COUNT_COL = "C"
 _DEFAULT_SUMMARY_JOIN_DATE_COL = "D"
 _DEFAULT_JOIN_DATE_FORMAT = "%Y-%m-%d"
-_DEFAULT_SYNC_ROUND_MARKER = "2101:"
 _DEFAULT_SYNC_ROUND_NO = 1
 _MAX_ROUND_COLUMN_VALUE = 20
 _DEFAULT_MAX_SYNC_BID = 25000
@@ -76,14 +75,6 @@ class MergePlan:
     skipped: tuple[SkippedRow, ...]
     summary_by_uid: dict[str, SummaryBlacklistRow]
     purge_other_rounds: tuple[TempBlacklistRow, ...]
-
-
-@dataclass(frozen=True)
-class MergeApplyResult:
-    plan: MergePlan
-    synced: tuple[TempBlacklistRow, ...]
-    failed_delete_rows: tuple[int, ...]
-    note: str
 
 
 def _col_index(col: str) -> int:
@@ -170,15 +161,6 @@ def temp_row_is_sync_round(
     if r is None:
         return False
     return r == int(sync_round_no)
-
-
-def temp_row_has_round_marker(
-    parts: list[str],
-    *,
-    round_marker: str = _DEFAULT_SYNC_ROUND_MARKER,
-) -> bool:
-    """已废弃：请用 ``temp_row_is_sync_round``（按 D 列回合，非 A 列地图前缀）。"""
-    return temp_row_is_sync_round(parts)
 
 
 def build_summary_row_cells(
@@ -285,9 +267,6 @@ def resolve_blacklist_sheet_merge_source(
         ).strip().upper(),
         "join_date_format": str(
             branch.get("join_date_format") or _DEFAULT_JOIN_DATE_FORMAT
-        ).strip(),
-        "sync_round_marker": str(
-            branch.get("sync_round_marker") or _DEFAULT_SYNC_ROUND_MARKER
         ).strip(),
         "sync_round_no": int(branch.get("sync_round_no", _DEFAULT_SYNC_ROUND_NO) or _DEFAULT_SYNC_ROUND_NO),
         "max_sync_bid": int(
@@ -477,17 +456,12 @@ def _temp_row_from_parts(
     name: str,
     parts: list[str],
 ) -> TempBlacklistRow:
-    game_uid = game_marker_from_parts(parts)
-    if not game_uid:
-        head = str(parts[0] if parts else "").strip()
-        if _GAME_COLON_RE.match(head):
-            game_uid = head
     return TempBlacklistRow(
         row_index=row_index,
         uid=uid,
         name=name,
+        game_uid=game_marker_from_parts(parts),
         bid=extract_bid_from_row_parts(parts),
-        game_uid=game_uid,
         round_no=extract_round_from_row_parts(parts),
     )
 
@@ -516,7 +490,7 @@ def parse_temp_rows_from_grid(
             continue
         if not _UID_RE.fullmatch(uid):
             continue
-        if game_uid and not _GAME_COLON_RE.match(game_uid):
+        if not _GAME_COLON_RE.match(game_uid):
             game_uid = game_marker_from_parts(parts)
         round_no = _parse_optional_int(round_raw)
         bid = _parse_optional_int(bid_raw)
@@ -704,6 +678,8 @@ def validate_temp_row(
 def build_merge_plan(
     temp_rows: list[TempBlacklistRow],
     summary_rows: list[SummaryBlacklistRow],
+    *,
+    purge_rows: list[TempBlacklistRow] | None = None,
 ) -> MergePlan:
     summary_by_uid = {r.uid: r for r in summary_rows if r.uid}
     inserts: list[TempBlacklistRow] = []
@@ -725,7 +701,7 @@ def build_merge_plan(
         updates=tuple(updates),
         skipped=tuple(skipped),
         summary_by_uid=summary_by_uid,
-        purge_other_rounds=(),
+        purge_other_rounds=tuple(purge_rows or ()),
     )
 
 
@@ -807,7 +783,6 @@ def _load_temp_classification(
     temp_blob: bytes | None,
     sync_round_no: int,
     max_sync_bid: int,
-    timeout: float,
 ) -> tuple[
     list[TempBlacklistRow],
     list[TempBlacklistRow],
@@ -849,10 +824,6 @@ def _load_summary_rows(
     if summary_blob is None:
         return []
     return parse_summary_blacklist_rows_from_sheet_blob(summary_blob)
-
-
-# 兼容旧名称
-TencentSheetOpenClient = TencentSheetV3Client
 
 
 def _clear_temp_rows_on_sheet(
@@ -953,7 +924,19 @@ def sync_temp_blacklist_to_summary_sheet(
     join_date = format_sync_join_date(
         sync_on, fmt=str(cfg.get("join_date_format") or _DEFAULT_JOIN_DATE_FORMAT)
     )
+    if delete_mode not in ("clear", "delete"):
+        return False, f"无效 delete_mode: {delete_mode!r}", None
     client = _open_client_from_config(cfg, timeout=timeout)
+    if not dry_run and client is None:
+        env_name = _DEFAULT_ACCESS_TOKEN_ENV
+        api = cfg.get("openapi")
+        if isinstance(api, dict) and api.get("access_token_env"):
+            env_name = str(api["access_token_env"]).strip()
+        return (
+            False,
+            f"未配置 Open API V3（book_id、openapi、环境变量 {env_name}），无法 --apply",
+            None,
+        )
     sync_round_no = int(cfg.get("sync_round_no") or _DEFAULT_SYNC_ROUND_NO)
     max_sync_bid = int(cfg.get("max_sync_bid") or _DEFAULT_MAX_SYNC_BID)
     temp_blob: bytes | None = None
@@ -977,7 +960,6 @@ def sync_temp_blacklist_to_summary_sheet(
                 temp_blob=temp_blob,
                 sync_round_no=sync_round_no,
                 max_sync_bid=max_sync_bid,
-                timeout=timeout,
             )
         )
         summary_rows = _load_summary_rows(
@@ -988,13 +970,8 @@ def sync_temp_blacklist_to_summary_sheet(
         )
     except Exception as exc:
         return False, str(exc), None
-    plan = build_merge_plan(temp_rows, summary_rows)
-    plan = MergePlan(
-        inserts=plan.inserts,
-        updates=plan.updates,
-        skipped=plan.skipped,
-        summary_by_uid=plan.summary_by_uid,
-        purge_other_rounds=tuple(purge_temp_rows),
+    plan = build_merge_plan(
+        temp_rows, summary_rows, purge_rows=purge_temp_rows
     )
     synced_temp = list(plan.inserts) + list(plan.updates)
     purge_rows = list(plan.purge_other_rounds)
@@ -1064,9 +1041,9 @@ def sync_temp_blacklist_to_summary_sheet(
     join_date_col = cfg["summary_join_date_col"]
     max_summary_row = max(
         (r.row_index for r in plan.summary_by_uid.values()),
-        default=1,
+        default=_TEMP_SHEET_FIRST_DATA_ROW_INDEX - 1,
     )
-    start_row = max_summary_row + 1
+    start_row = max(max_summary_row + 1, _TEMP_SHEET_FIRST_DATA_ROW_INDEX)
     failed: list[int] = []
     purge_failed: list[int] = []
     try:
