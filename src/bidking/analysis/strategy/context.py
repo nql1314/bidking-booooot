@@ -42,6 +42,7 @@ class SnapshotPricingContext:
     kcw_geo: int = 0
     uc_vacant_subtract: int = 0
     uc_excess_detail: Dict[str, Any] = field(default_factory=dict)
+    phantom_unknown_detail: Dict[str, Any] = field(default_factory=dict)
 
     est_orange: float = 0.0
     est_gold_red: float = 0.0

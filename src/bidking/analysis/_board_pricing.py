@@ -39,8 +39,7 @@ CSV 权重期望价。``max(0, 加权等效格数 − 1)`` 按品质从对应 ``
 扣减（见 :func:`unknown_value.unknown_contour_vacant_weighted_excess` 的 ``excess_by_quality``），不再单独从
 ``vacant_adj`` 扣减，避免与 ``total`` 重复计价。
 
-已知轮廓且品质未知、CSV 为多候选（权重价）的物品（含仅日志未确认的锚格）：几何占位格在边际上视同空置，参与 ``空置格 × 空置单价``；
-但 ``total`` / ``compute_items_total`` 已含该件权重价，故在 ``points`` / ``est_*`` 基底中扣除对应权重价，避免重复计价。
+已知轮廓且品质未知、CSV 为多候选（权重价）的物品：标价已计入 ``pricing.total``，空置侧不再单独做 kcw 扣减/加回。
 
 完整 ``pricing`` 组装流程见 :mod:`.strategy`（公共流水线 + 各角色 enrich）。
 """

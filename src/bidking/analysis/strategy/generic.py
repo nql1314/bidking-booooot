@@ -55,4 +55,6 @@ def finalize_pricing_dict(ctx: SnapshotPricingContext) -> Dict[str, Any]:
     apply_generic_points(pricing, ctx)
     if ctx.uc_excess_detail:
         pricing["unknown_contour_vacant_weighted_excess"] = dict(ctx.uc_excess_detail)
+    if ctx.phantom_unknown_detail:
+        pricing["phantom_unknown_quality"] = dict(ctx.phantom_unknown_detail)
     return pricing

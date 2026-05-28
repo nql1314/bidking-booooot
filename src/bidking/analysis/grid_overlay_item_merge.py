@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Set, Tuple
 
 from ..parsing import item_db
 from . import unknown_value as _unknown_value
@@ -163,6 +163,19 @@ def apply_infer_shapes_to_items(items: Dict[str, Any], infer_shapes: Any) -> Non
 _PHANTOM_QUALITY_PREF_INFER = "_phantom_q_infer"
 
 
+def _excluded_qualities_set(row: Dict[str, Any]) -> Set[int]:
+    ex: Set[int] = set()
+    raw = row.get("excluded_qualities")
+    if not isinstance(raw, (list, tuple, set)):
+        return ex
+    for x in raw:
+        try:
+            ex.add(int(x))
+        except (TypeError, ValueError):
+            continue
+    return ex
+
+
 def apply_phantom_quality_pref_to_items(items: Dict[str, Any], phantom_quality_pref: Any) -> None:
     """
     将 ``grid_overlay.phantom_quality_pref`` 写入合并表中的 ``quality``。
@@ -189,14 +202,15 @@ def apply_phantom_quality_pref_to_items(items: Dict[str, Any], phantom_quality_p
                 continue
             if 1 <= vi <= 6:
                 q = vi
-        if q is not None:
+        if q is not None and q not in _excluded_qualities_set(row):
             row["quality"] = q
 
 
 def apply_phantom_default_quality_for_phantom_rows(items: Dict[str, Any], overlay: Any) -> None:
     """
     与 ``GridWindow._phantom_effective_quality`` 对齐：显式偏好应用后仍为 ``quality is None`` 的幽灵，
-    若不是推断笔（``phantom_quality_pref != _phantom_q_infer``），则默认 **Q5（金笔缺省）**。
+    若不是推断笔（``phantom_quality_pref != _phantom_q_infer``），则默认 **Q5（金笔缺省）**；
+    扫描已排除 Q5（``5 in excluded_qualities``）时不强套金，保持 None。
 
     推断笔在偏好里为 ``_phantom_q_infer`` 时不写入，保持 None。
     """
@@ -218,6 +232,8 @@ def apply_phantom_default_quality_for_phantom_rows(items: Dict[str, Any], overla
         if isinstance(raw_p, str) and raw_p.strip() == _PHANTOM_QUALITY_PREF_INFER:
             continue
         if raw_p == _PHANTOM_QUALITY_PREF_INFER:
+            continue
+        if 5 in _excluded_qualities_set(row):
             continue
         row["quality"] = 5
 

@@ -113,12 +113,7 @@ def prepare_snapshot_pricing_context(
 
 def compute_base_metrics(ctx: SnapshotPricingContext) -> None:
     """物品总价、空置格、档位占位与有效空置调整。"""
-    from .._board_pricing import (
-        _load_item_prices_db,
-        _pricing_shape_int_for_csv,
-        compute_items_total,
-        map_id_from_board_snapshot,
-    )
+    from .._board_pricing import compute_items_total
 
     t0_items = time.perf_counter()
     ctx.total_f = float(compute_items_total(ctx.snap_full))
@@ -146,6 +141,11 @@ def compute_base_metrics(ctx: SnapshotPricingContext) -> None:
 
     t0_tiers = time.perf_counter()
     ctx.cq4, ctx.cq5, ctx.cq6 = _common.confirmed_tier_footprint_q456(ctx.snap_full)
+    phantom_cr, phantom_detail = _common.phantom_unknown_tier_credit_q456(ctx.snap_full)
+    if phantom_detail:
+        ctx.phantom_unknown_detail = phantom_detail
+        ctx.cq5 += int(round(float(phantom_cr.get(5, 0.0) or 0.0)))
+        ctx.cq6 += int(round(float(phantom_cr.get(6, 0.0) or 0.0)))
 
     t0_unknown = time.perf_counter()
     mid_n = item_db.normalize_map_id(ctx.map_id if ctx.map_id else None)
@@ -176,20 +176,10 @@ def compute_base_metrics(ctx: SnapshotPricingContext) -> None:
         csv_cells=ctx.csv_cells_for_est,
         unknown_contour_excess_by_quality=uc_by_quality,
     )
-    ctx.kcw_val, ctx.kcw_geo = _common.sum_known_contour_weighted_price_and_geo_cells(
-        ctx.snap_full,
-        csv_cells_raw=ctx.csv_cells_for_est,
-        pricing_shape_int_for_csv=_pricing_shape_int_for_csv,
-        load_item_prices_db=_load_item_prices_db,
-        map_id_from_board_snapshot=map_id_from_board_snapshot,
-    )
     perf_log_elapsed("build_snapshot_pricing_dict: tier_footprint", t0_tiers)
 
-    ctx.vacant_adj = max(
-        0,
-        int(ctx.vacant_num) + int(ctx.kcw_geo) - int(ctx.tier_extra_cells),
-    )
-    ctx.vacant_pts_base = float(ctx.total_f) - float(ctx.kcw_val) + float(ctx.tier_extra_val)
+    ctx.vacant_adj = max(0, int(ctx.vacant_num) - int(ctx.tier_extra_cells))
+    ctx.vacant_pts_base = float(ctx.total_f) + float(ctx.tier_extra_val)
 
     ctx.est_orange = ctx.vacant_pts_base + float(ctx.vacant_adj) * float(ctx.u_orange)
     ctx.est_gold_red = ctx.vacant_pts_base + float(ctx.vacant_adj) * float(ctx.u_gr)
