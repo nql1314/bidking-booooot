@@ -179,6 +179,8 @@
     }
   },
   "automation": {
+    "shutdown_after_run_enabled": false,
+    "shutdown_after_run_delay_seconds": 60,
     "unknown_escape_cooldown_seconds": 2.0,
     "post_confirm_escape_block_seconds": 60.0,
     "warehouse_auto_sort": {
@@ -294,5 +296,14 @@
   "viewer": {
     "show_bot_runner": true,
     "game_report_max_matches": 1000
+  },
+  "sheet_merge": {
+    "max_sync_bid": 25000,
+    "book_id": "300000000$CHPaUrsWPlRG",
+    "openapi": {
+      "client_id": "734bb1294f3847158381d9d86dec2fbb",
+      "open_id": "5fe78e41787a47b3b4e721709d19b1b9",
+      "access_token_env": "BIDKING_TENCENT_DOCS_ACCESS_TOKEN"
+    }
   }
 }
