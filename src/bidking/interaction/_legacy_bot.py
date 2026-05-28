@@ -1920,6 +1920,7 @@ def try_resolve_express_emoji_signal_price(
         is_self_on_public_blacklist,
         maybe_update_steal_express_blacklist,
         opponent_blocks_express_emoji_signal_price,
+        record_opponent_steal_express_bids_from_snapshot,
     )
 
     opp_r1_bid = maybe_update_steal_express_blacklist(config, board_snapshot)
@@ -1973,6 +1974,8 @@ def try_resolve_express_emoji_signal_price(
         config, board_snapshot
     )
     if blocked:
+        # 对手已在黑名单仍追记异常出价（快照可能晚于首次 maybe_update 才有完整出价）
+        record_opponent_steal_express_bids_from_snapshot(config, board_snapshot)
         opp_bid_note = (
             f" 对手首回合出价={opp_r1_bid}" if opp_r1_bid is not None else ""
         )

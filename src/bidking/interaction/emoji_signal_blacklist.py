@@ -121,13 +121,14 @@ def _opponent_round1_bid(
 
 
 def _entry_matches(entry: dict[str, Any], *, uid: str, name: str) -> bool:
+    """黑名单命中须 ``uid`` 与 ``name`` 同时与条目一致（缺一不匹配）。"""
     e_uid = _norm_uid(str(entry.get("uid") or ""))
     e_name = _norm_name(str(entry.get("name") or ""))
-    if uid and e_uid and uid == e_uid:
-        return True
-    if name and e_name and name == e_name:
-        return True
-    return False
+    u = _norm_uid(uid)
+    n = _norm_name(name)
+    if not e_uid or not e_name or not u or not n:
+        return False
+    return u == e_uid and n == e_name
 
 
 def load_public_blacklist() -> list[dict[str, Any]]:
@@ -145,7 +146,7 @@ def replace_public_blacklist_csv(entries: list[dict[str, str]]) -> int:
             continue
         uid = _norm_uid(str(entry.get("uid") or ""))
         name = _norm_name(str(entry.get("name") or ""))
-        if uid or name:
+        if uid and name:
             rows.append({"uid": uid, "name": name})
     _write_csv_table(_public_path(), _PUBLIC_FIELDS, rows)
     return len(rows)
@@ -378,7 +379,7 @@ def record_steal_express_on_match_blacklist(
     if row is None:
         return False
     uid, name, _ = row
-    if not uid:
+    if not _player_identity_complete(uid, name):
         return False
 
     amount = bid
@@ -460,27 +461,27 @@ def opponent_blocks_express_emoji_signal_price(
     return False, ""
 
 
-def maybe_update_steal_express_blacklist(
+def record_opponent_steal_express_bids_from_snapshot(
     config: dict[str, Any],
     board_snapshot: dict[str, Any],
-) -> int | None:
+) -> int:
     """
-    暗号对上时：将对手各回合已出现且 > 1000 的出价写入对局黑名单；返回首回合出价。
+    将快照中对手各回合出价 > 1000 的条目写入对局黑名单 CSV。
 
-    己方在公共黑名单时不记对局黑名单：此时己方强制出 1，对手未按暗号座次价配合时
-    的高价不应视为偷快递。
+    不因对手已在公共/对局黑名单而跳过；仅要求 ``uid``、``name`` 完整可写。
+    返回本次尝试写入的条数（去重后实际新增数）。
     """
-    if is_self_on_public_blacklist(config, board_snapshot):
-        return _opponent_round1_bid(config, board_snapshot)
-
     row = _opponent_player_data(config, board_snapshot)
     if row is None:
-        return None
+        return 0
     uid, name, pdata = row
+    if not _player_identity_complete(uid, name):
+        return 0
     g_uid = _norm_uid(str(game_uid_from_snapshot(board_snapshot) or ""))
     if not g_uid:
-        return _opponent_round1_bid(config, board_snapshot)
+        return 0
 
+    appended = 0
     prices = pdata.get("prices") or {}
     if isinstance(prices, dict):
         for key in prices:
@@ -490,12 +491,34 @@ def maybe_update_steal_express_blacklist(
                 continue
             bid = player_round_price_bid(pdata, round_no)
             if bid is not None and int(bid) >= _STEAL_EXPRESS_ROUND1_BID_MIN:
-                append_match_blacklist_bid(
+                if append_match_blacklist_bid(
                     game_uid=g_uid,
                     uid=uid,
                     name=name,
                     round_no=round_no,
                     bid=int(bid),
-                )
+                ):
+                    appended += 1
+    return appended
 
+
+def _player_identity_complete(uid: str, name: str) -> bool:
+    """``uid``、``name`` 均非空方可记入对局黑名单。"""
+    return bool(_norm_uid(uid) and _norm_name(name))
+
+
+def maybe_update_steal_express_blacklist(
+    config: dict[str, Any],
+    board_snapshot: dict[str, Any],
+) -> int | None:
+    """
+    暗号对上时：将对手各回合已出现且 > 1000 的出价写入对局黑名单；返回首回合出价。
+
+    己方在公共黑名单时不记对局黑名单：此时己方强制出 1，对手未按暗号座次价配合时
+    的高价不应视为偷快递。对手已在公共/对局黑名单时仍继续追记异常出价。
+    """
+    if is_self_on_public_blacklist(config, board_snapshot):
+        return _opponent_round1_bid(config, board_snapshot)
+
+    record_opponent_steal_express_bids_from_snapshot(config, board_snapshot)
     return _opponent_round1_bid(config, board_snapshot)

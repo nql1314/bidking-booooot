@@ -55,14 +55,32 @@ def test_self_on_public_blacklist(blacklist_files: Path) -> None:
     assert bl.is_self_on_public_blacklist(_cfg(), snap) is True
 
 
-def test_public_blacklist_blocks_by_name(blacklist_files: Path) -> None:
-    snap = _snap(
+def test_public_blacklist_requires_uid_and_name(blacklist_files: Path) -> None:
+    snap_uid_only = _snap(
+        players={
+            "uid_a": {"name": "我"},
+            "bad_uid": {"name": "其他人", "prices": {"0": 50}},
+        }
+    )
+    blocked, _ = bl.opponent_blocks_express_emoji_signal_price(_cfg(), snap_uid_only)
+    assert blocked is False
+
+    snap_name_only = _snap(
         players={
             "uid_a": {"name": "我"},
             "uid_x": {"name": "坏人", "prices": {"0": 50}},
         }
     )
-    blocked, reason = bl.opponent_blocks_express_emoji_signal_price(_cfg(), snap)
+    blocked, _ = bl.opponent_blocks_express_emoji_signal_price(_cfg(), snap_name_only)
+    assert blocked is False
+
+    snap_both = _snap(
+        players={
+            "uid_a": {"name": "我"},
+            "bad_uid": {"name": "坏人", "prices": {"0": 50}},
+        }
+    )
+    blocked, reason = bl.opponent_blocks_express_emoji_signal_price(_cfg(), snap_both)
     assert blocked is True
     assert reason == "public"
 
@@ -202,6 +220,51 @@ def test_opponent_express_blacklist_banner_match(blacklist_files: Path) -> None:
     bl.record_steal_express_on_match_blacklist(_cfg(), snap)
     banner = bl.opponent_express_blacklist_banner(_cfg(), snap)
     assert banner == ("偷子", "对局")
+
+
+def test_maybe_update_records_when_opponent_on_public_blacklist(
+    blacklist_files: Path,
+) -> None:
+    snap = _snap(
+        players={
+            "uid_a": {"name": "我"},
+            "bad_uid": {"name": "坏人", "prices": {"0": 1500, "1": 1800}},
+        }
+    )
+    blocked, reason = bl.opponent_blocks_express_emoji_signal_price(_cfg(), snap)
+    assert blocked is True
+    assert reason == "public"
+    assert bl.load_match_blacklist_bids("2107:g1", uid="bad_uid") == []
+    n = bl.record_opponent_steal_express_bids_from_snapshot(_cfg(), snap)
+    assert n == 2
+    bids = bl.load_match_blacklist_bids("2107:g1", uid="bad_uid")
+    assert len(bids) == 2
+    assert {b["round"]: b["bid"] for b in bids} == {1: 1500, 2: 1800}
+
+
+def test_maybe_update_appends_new_round_when_opponent_on_match_blacklist(
+    blacklist_files: Path,
+) -> None:
+    bl.append_match_blacklist_bid(
+        game_uid="2107:g1",
+        uid="uid_b",
+        name="偷子",
+        round_no=1,
+        bid=1500,
+    )
+    snap = _snap(
+        players={
+            "uid_a": {"name": "我"},
+            "uid_b": {"name": "偷子", "prices": {"0": 1500, "1": 2200}},
+        }
+    )
+    blocked, reason = bl.opponent_blocks_express_emoji_signal_price(_cfg(), snap)
+    assert blocked is True
+    assert reason == "match"
+    assert bl.maybe_update_steal_express_blacklist(_cfg(), snap) == 1500
+    bids = bl.load_match_blacklist_bids("2107:g1", uid="uid_b")
+    assert len(bids) == 2
+    assert {b["round"]: b["bid"] for b in bids} == {1: 1500, 2: 2200}
 
 
 def test_steal_express_skipped_when_self_on_public_blacklist(
