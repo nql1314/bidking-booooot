@@ -192,6 +192,7 @@ def unknown_contour_vacant_weighted_excess(
         return 0.0, {}
     per_item: List[Dict[str, Any]] = []
     total_excess = 0.0
+    excess_by_quality: Dict[int, float] = {4: 0.0, 5: 0.0, 6: 0.0}
     n_uc = 0
     for uid, it in merged_items.items():
         if not isinstance(it, dict):
@@ -221,6 +222,8 @@ def unknown_contour_vacant_weighted_excess(
         price = w_cells * avg_cell_price_for_quality(q, csv_cells_raw, pricing)
         ex = max(0.0, w_cells - 1.0)
         total_excess += ex
+        if q in excess_by_quality:
+            excess_by_quality[q] = excess_by_quality.get(q, 0.0) + ex
         if len(per_item) < 48:
             per_item.append(
                 {
@@ -239,6 +242,9 @@ def unknown_contour_vacant_weighted_excess(
         "early_unknown_contour_vacant_linear_adjust": True,
         "unknown_contour_items": n_uc,
         "weighted_cell_excess_sum": round(total_excess, 6),
+        "excess_by_quality": {
+            str(q): round(v, 6) for q, v in excess_by_quality.items() if v > 0
+        },
         "detail_per_item": per_item,
     }
 

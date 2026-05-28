@@ -146,12 +146,35 @@ def compute_base_metrics(ctx: SnapshotPricingContext) -> None:
 
     t0_tiers = time.perf_counter()
     ctx.cq4, ctx.cq5, ctx.cq6 = _common.confirmed_tier_footprint_q456(ctx.snap_full)
+
+    t0_unknown = time.perf_counter()
+    mid_n = item_db.normalize_map_id(ctx.map_id if ctx.map_id else None)
+    _uc_excess_f, uc_excess_detail = _unknown_value.unknown_contour_vacant_weighted_excess(
+        ctx.snap_full,
+        ctx.csv_cells_for_est if ctx.csv_cells_for_est else None,
+        {},
+        mid_n,
+    )
+    perf_log_elapsed("build_snapshot_pricing_dict: unknown_contour", t0_unknown)
+    uc_by_quality: Dict[int, float] = {}
+    if isinstance(uc_excess_detail, dict):
+        raw_bq = uc_excess_detail.get("excess_by_quality")
+        if isinstance(raw_bq, dict):
+            for k, v in raw_bq.items():
+                try:
+                    uc_by_quality[int(k)] = float(v)
+                except (TypeError, ValueError):
+                    continue
+    ctx.uc_excess_detail = dict(uc_excess_detail) if uc_excess_detail else {}
+    ctx.uc_vacant_subtract = 0
+
     ctx.tier_extra_val, ctx.tier_extra_cells = _common.tier_min_extra_value_and_cells(
         ctx.st_ev,
         confirmed_q4=ctx.cq4,
         confirmed_q5=ctx.cq5,
         confirmed_q6=ctx.cq6,
         csv_cells=ctx.csv_cells_for_est,
+        unknown_contour_excess_by_quality=uc_by_quality,
     )
     ctx.kcw_val, ctx.kcw_geo = _common.sum_known_contour_weighted_price_and_geo_cells(
         ctx.snap_full,
@@ -162,24 +185,9 @@ def compute_base_metrics(ctx: SnapshotPricingContext) -> None:
     )
     perf_log_elapsed("build_snapshot_pricing_dict: tier_footprint", t0_tiers)
 
-    t0_unknown = time.perf_counter()
-    mid_n = item_db.normalize_map_id(ctx.map_id if ctx.map_id else None)
-    uc_excess_f, uc_excess_detail = _unknown_value.unknown_contour_vacant_weighted_excess(
-        ctx.snap_full,
-        ctx.csv_cells_for_est if ctx.csv_cells_for_est else None,
-        {},
-        mid_n,
-    )
-    perf_log_elapsed("build_snapshot_pricing_dict: unknown_contour", t0_unknown)
-    ctx.uc_vacant_subtract = max(0, int(round(float(uc_excess_f))))
-    ctx.uc_excess_detail = dict(uc_excess_detail) if uc_excess_detail else {}
-
     ctx.vacant_adj = max(
         0,
-        int(ctx.vacant_num)
-        + int(ctx.kcw_geo)
-        - int(ctx.tier_extra_cells)
-        - ctx.uc_vacant_subtract,
+        int(ctx.vacant_num) + int(ctx.kcw_geo) - int(ctx.tier_extra_cells),
     )
     ctx.vacant_pts_base = float(ctx.total_f) - float(ctx.kcw_val) + float(ctx.tier_extra_val)
 

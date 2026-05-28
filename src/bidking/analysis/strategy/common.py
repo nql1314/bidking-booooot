@@ -90,24 +90,6 @@ def event_stat_q4_grid_count_optional(st: Any) -> Optional[int]:
     return event_stat_grid_count_optional(st, "q4_grid_count")
 
 
-def event_stat_q4_grid_avg_optional(st: Any) -> Optional[float]:
-    if not isinstance(st, dict):
-        return None
-    v = st.get("q4_grid_avg")
-    if v is None:
-        return None
-    try:
-        f = float(v)
-    except (TypeError, ValueError):
-        return None
-    return f if f >= 0 else None
-
-
-def scan_q123_all_revealed(board_snapshot: Dict[str, Any]) -> bool:
-    hits = _scan_inference.quality_scan_hit_uids_by_value(board_snapshot)
-    return all(q in hits for q in (1, 2, 3))
-
-
 def vacant_early_unit_excluding_q4_when_q4_total_known(
     *,
     board_snapshot: Dict[str, Any],
@@ -131,21 +113,6 @@ def vacant_early_unit_excluding_q4_when_q4_total_known(
         u = int(round(float(csv_cells_for_est[qg])))
         perf_log_elapsed("_vacant_early_unit_excluding_q4 (adjusted)", t0)
         return u, str(qg), pq_ex
-    q4_grid_min = event_stat_grid_min_optional(event_stats, "q4_grid_min")
-    if (
-        scan_q123_all_revealed(board_snapshot)
-        and event_stat_q4_grid_avg_optional(event_stats) is not None
-        and q4_grid_min is not None
-        and q4_grid_min > 10
-        and 4 in pq0
-        and csv_cells_for_est
-    ):
-        u456 = csv_cells_for_est.get("q4+q5+q6")
-        u56 = csv_cells_for_est.get("q5+q6")
-        if u456 is not None and u56 is not None:
-            u = int(round((float(u456) + float(u56)) / 2))
-            perf_log_elapsed("_vacant_early_unit_q4_min_blend (adjusted)", t0)
-            return u, "q4+q5+q6~q5+q6", pq0
     return u0, qg0, pq0
 
 
@@ -215,15 +182,17 @@ def tier_min_extra_value_and_cells(
     confirmed_q5: int,
     confirmed_q6: int,
     csv_cells: Dict[str, float],
+    unknown_contour_excess_by_quality: Optional[Dict[int, float]] = None,
 ) -> Tuple[float, int]:
     if not isinstance(event_stats, dict):
         return 0.0, 0
+    uc_by_q = unknown_contour_excess_by_quality or {}
     extra_val = 0.0
-    extra_cells = 0
-    for min_k, csv_k, confirmed in (
-        ("q4_grid_min", "q4", confirmed_q4),
-        ("q5_grid_min", "q5", confirmed_q5),
-        ("q6_grid_min", "q6", confirmed_q6),
+    extra_cells_f = 0.0
+    for min_k, csv_k, confirmed, q in (
+        ("q4_grid_min", "q4", confirmed_q4, 4),
+        ("q5_grid_min", "q5", confirmed_q5, 5),
+        ("q6_grid_min", "q6", confirmed_q6, 6),
     ):
         m = event_stat_grid_min_optional(event_stats, min_k)
         if m is None:
@@ -231,10 +200,14 @@ def tier_min_extra_value_and_cells(
         need = int(m) - int(confirmed)
         if need <= 0:
             continue
+        uc_q = float(uc_by_q.get(q, 0.0) or 0.0)
+        eff_need = max(0.0, float(need) - uc_q)
+        if eff_need <= 0:
+            continue
         u = float(csv_cells.get(csv_k, 0.0))
-        extra_val += float(need) * u
-        extra_cells += need
-    return extra_val, extra_cells
+        extra_val += eff_need * u
+        extra_cells_f += eff_need
+    return extra_val, int(round(extra_cells_f))
 
 
 def event_stats_q14_grid_counts_all_known(raw: Any) -> bool:
