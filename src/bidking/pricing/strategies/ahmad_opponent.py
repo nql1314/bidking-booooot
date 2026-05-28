@@ -6,7 +6,10 @@ import random
 from typing import Any
 
 from .._multipliers import resolve_round_multiplier
-from ..opponent_adjust import evaluate_opponent_bid_possibilities
+from ..opponent_adjust import (
+    blend_bid_with_opponent_reference,
+    evaluate_opponent_bid_possibilities,
+)
 
 
 def apply_opponent_bid_adjustment_core(
@@ -33,12 +36,20 @@ def apply_opponent_bid_adjustment_core(
     if r_no >= 5:
         return bid_i + random.randint(1000, 1500), "opp_final", None
     if bid_i > adj:
-        return min(int(adj * mult),(adj + bid_i) / 2), "opp_low", None
+        blended = blend_bid_with_opponent_reference(
+            bid_i, adj, config=config, price_config=price_config
+        )
+        return min(int(adj * mult), int(round(blended))), "opp_low", None
 
     if bid_i > o_poss:
         return int(o_poss), "opp_poss", None
 
     if bid_i > int(o_prev):
-        return int(min(o_poss, (bid_i + int(o_prev)) / 2)), "opp_pre", None
+        blended = blend_bid_with_opponent_reference(
+            bid_i, int(o_prev), config=config, price_config=price_config
+        )
+        return int(min(o_poss, round(blended))), "opp_pre", None
 
-    return (bid_i + o_poss) / 2, "opp_sticky", None
+    return int(round(blend_bid_with_opponent_reference(
+        bid_i, o_poss, config=config, price_config=price_config
+    ))), "opp_sticky", None

@@ -131,7 +131,21 @@ def _launch_bot_runner(start_root: tk.Tk) -> None:
     BidKingApp(top)
 
 
+def _prime_gate_for_viewer() -> None:
+    from ..config.paths import config_overlay_path
+    from ..interaction._legacy_bot import load_merged_bot_config
+    from ..interaction.bot_startup_gate import prime_bot_gate_cache
+
+    try:
+        cfg = load_merged_bot_config(config_overlay_path())
+    except Exception:
+        cfg = {}
+    prime_bot_gate_cache(cfg)
+
+
 def _show_start_page(default_log: str, csv_path: str) -> None:
+    _prime_gate_for_viewer()
+
     root = tk.Tk()
     root.title(f"BidKing 鉴影可视化 v{__version__} - 启动")
     root.geometry("960x720")
@@ -156,6 +170,34 @@ def _show_start_page(default_log: str, csv_path: str) -> None:
 
     frame = tk.Frame(launch_tab, padx=14, pady=12)
     frame.pack(fill="both", expand=True)
+
+    from ..interaction.bot_startup_gate import get_bot_gate_status
+
+    gate_status = get_bot_gate_status()
+    remote_banner = (
+        gate_status.banner.strip()
+        if gate_status is not None and gate_status.banner.strip()
+        else ""
+    )
+
+    announce_box = tk.Frame(frame, bg="#fff8e8", highlightbackground="#e0c878", highlightthickness=1)
+    announce_box.pack(anchor="w", fill="x", pady=(0, 8))
+    tk.Label(
+        announce_box,
+        text="公告",
+        bg="#fff8e8",
+        fg="#8a4510",
+        font=("微软雅黑", 9, "bold"),
+    ).pack(anchor="w", padx=10, pady=(8, 2))
+    tk.Label(
+        announce_box,
+        text=remote_banner or "（暂无远程公告，请检查网络或文档配置）",
+        bg="#fff8e8",
+        fg="#5a3a10" if remote_banner else "#888888",
+        font=("微软雅黑", 10),
+        wraplength=900,
+        justify="left",
+    ).pack(anchor="w", padx=10, pady=(0, 8))
 
     banner_row = tk.Frame(frame)
     banner_row.pack(anchor="w", fill="x", pady=(0, 10))

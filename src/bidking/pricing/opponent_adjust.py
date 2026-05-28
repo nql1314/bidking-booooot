@@ -89,6 +89,88 @@ def resolve_secret_auction_rank_opponent_multipliers(
     return {"by_rank": by_rank, "fallback": fallback}
 
 
+# 己方估价与对手/参考价折中时的默认权重（算术平均）
+DEFAULT_OPPONENT_BID_BLEND_WEIGHT_BID: float = 0.5
+DEFAULT_OPPONENT_BID_BLEND_WEIGHT_OPPONENT: float = 0.5
+
+
+def _parse_blend_weight(raw: Any) -> float | None:
+    if raw is None:
+        return None
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return v if v >= 0 else None
+
+
+def resolve_opponent_bid_blend_weights(
+    config: dict[str, Any],
+    price_config: dict[str, Any],
+) -> tuple[float, float]:
+    """
+    解析 ``opponent_bid_blend_weights``：己方 ``bid`` 与对手/参考价 ``opponent`` 的折中权重。
+
+    读取顺序：``price_config`` → ``config["pricing"]`` → 内置默认（各 0.5）。
+    """
+    raw: Any = None
+    if isinstance(price_config, dict) and "opponent_bid_blend_weights" in price_config:
+        raw = price_config.get("opponent_bid_blend_weights")
+    pr = config.get("pricing") if isinstance(config, dict) else None
+    if raw is None and isinstance(pr, dict) and "opponent_bid_blend_weights" in pr:
+        raw = pr.get("opponent_bid_blend_weights")
+
+    w_bid = DEFAULT_OPPONENT_BID_BLEND_WEIGHT_BID
+    w_opp = DEFAULT_OPPONENT_BID_BLEND_WEIGHT_OPPONENT
+
+    if isinstance(raw, dict):
+        alias_to_slot = (
+            ("bid", "bid"),
+            ("self", "bid"),
+            ("opponent", "opp"),
+            ("opp", "opp"),
+            ("other", "opp"),
+            ("reference", "opp"),
+        )
+        for key, slot in alias_to_slot:
+            if key not in raw:
+                continue
+            parsed = _parse_blend_weight(raw.get(key))
+            if parsed is None:
+                continue
+            if slot == "bid":
+                w_bid = parsed
+            else:
+                w_opp = parsed
+
+    for src in (price_config, pr):
+        if not isinstance(src, dict):
+            continue
+        flat_bid = _parse_blend_weight(src.get("opponent_bid_blend_weight_bid"))
+        flat_opp = _parse_blend_weight(src.get("opponent_bid_blend_weight_opponent"))
+        if flat_bid is not None:
+            w_bid = flat_bid
+        if flat_opp is not None:
+            w_opp = flat_opp
+
+    return w_bid, w_opp
+
+
+def blend_bid_with_opponent_reference(
+    bid_i: int | float,
+    reference: int | float,
+    *,
+    config: dict[str, Any],
+    price_config: dict[str, Any],
+) -> float:
+    """加权折中：``(bid_i * w_bid + reference * w_opp) / (w_bid + w_opp)``。"""
+    w_bid, w_opp = resolve_opponent_bid_blend_weights(config, price_config)
+    total = w_bid + w_opp
+    if total <= 0:
+        return (float(bid_i) + float(reference)) / 2.0
+    return (float(bid_i) * w_bid + float(reference) * w_opp) / total
+
+
 def _is_secret_rank_signal(value: int) -> bool:
     return _SECRET_RANK_MIN <= int(value) <= _SECRET_RANK_MAX
 
@@ -268,10 +350,10 @@ def apply_secret_auction_rank_opponent_adjustment(
 
     出价策略（类似aisha逻辑，无r3_protect）：
     - r5+: 取max((bid+o_est)/2*1.05, o_est*1.05) + 1000
-    - bid > o_est * 1.05 + 1000: 出 (bid + adj) / 2
+    - bid > o_est * 1.05 + 1000: 出 blend(bid, adj)
     - bid > o_est: 出 o_est
-    - bid > bid_pre: 出 min(o_est, (bid + bid_pre) / 2)
-    - 其他: 出 (bid + o_est) / 2
+    - bid > bid_pre: 出 min(o_est, blend(bid, bid_pre))
+    - 其他: 出 blend(bid, o_est)
     """
     bid_i = int(bid)
     r_no = int(round_no)
@@ -338,7 +420,9 @@ def apply_secret_auction_rank_opponent_adjustment(
 
     # r5+ 特殊处理：最终轮激进出价
     if r_no >= 5:
-        out = int((bid_i + o_estimated) / 2.0 + 1000)
+        out = int(blend_bid_with_opponent_reference(
+            bid_i, o_estimated, config=config, price_config=price_config
+        ) + 1000)
         detail["final_round"] = True
         return _finish("secret_opp_final", out)
     mult = resolve_round_multiplier(round_no, price_config)
@@ -349,7 +433,9 @@ def apply_secret_auction_rank_opponent_adjustment(
     # 出价决策逻辑（类似aisha，但用bid_pre替代o_prev）
     if bid_i > adj:
         # 当前估价远高于预估对手价+缓冲，折中出价
-        out = int(round((bid_i + adj) / 2))
+        out = int(round(blend_bid_with_opponent_reference(
+            bid_i, adj, config=config, price_config=price_config
+        )))
         return _finish("secret_opp_low", out)
 
     if bid_i > o_estimated:
@@ -359,11 +445,18 @@ def apply_secret_auction_rank_opponent_adjustment(
 
     if bid_i > bid_pre:
         # 当前估价高于上回合自己出价，折中但不超过预估对手价
-        out = int(min(o_estimated, (bid_i + bid_pre) / 2))
+        out = int(min(
+            o_estimated,
+            round(blend_bid_with_opponent_reference(
+                bid_i, bid_pre, config=config, price_config=price_config
+            )),
+        ))
         return _finish("secret_opp_pre", out)
 
-    # 其他情况：保守跟进，取当前估价与预估对手价的均值
-    out = int(round((bid_i + o_estimated) / 2))
+    # 其他情况：保守跟进，取当前估价与预估对手价的加权折中
+    out = int(round(blend_bid_with_opponent_reference(
+        bid_i, o_estimated, config=config, price_config=price_config
+    )))
     return _finish("secret_opp_sticky", out)
 
 

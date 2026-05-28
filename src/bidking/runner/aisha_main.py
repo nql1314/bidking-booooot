@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 from ..config.paths import config_overlay_path
-from ..interaction._legacy_bot import run_aisha_loop
+from ..interaction._legacy_bot import load_merged_bot_config, run_aisha_loop
+from ..interaction.bot_startup_gate import BotStartupBlocked, prime_bot_gate_cache
 from ._common import configure_logging, install_snapshot_file_writer, load_all
 
 
@@ -26,8 +28,13 @@ def main(argv: list[str] | None = None) -> None:
     install_snapshot_file_writer(runtime)
 
     cfg_path = config_overlay_path()
+    prime_bot_gate_cache(load_merged_bot_config(cfg_path))
 
-    run_aisha_loop(cfg_path)
+    try:
+        run_aisha_loop(cfg_path)
+    except BotStartupBlocked as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(1) from exc
 
 
 if __name__ == "__main__":

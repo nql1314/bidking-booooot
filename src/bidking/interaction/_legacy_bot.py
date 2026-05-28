@@ -2547,6 +2547,9 @@ def run_loop(
     # 与控制台同内容的运行日志；cwd 在脚本与 PyInstaller exe 下均为进程当前工作目录
     set_app_log_file(app_log_path or (Path.cwd() / "bidking_fresh_bot.log"))
     config = load_merged_bot_config(config_path)
+    from .bot_startup_gate import BotStartupBlocked, ensure_bot_startup_allowed
+
+    ensure_bot_startup_allowed()  # 使用启动阶段已缓存的远程开关
     set_gui_log_verbose(bool((config.get("debug") or {}).get("gui_verbose", False)))
     if clear_snapshot_on_start:
         clear_board_snapshot_file(config)
@@ -3015,7 +3018,14 @@ def main() -> int:
             {"automation": {"selected_map": map_input, "selected_runs": selected_runs}},
         )
         reset_stop()
-        run_loop(config_path)
+        from .bot_startup_gate import BotStartupBlocked, prime_bot_gate_cache
+
+        prime_bot_gate_cache(load_merged_bot_config(config_path), force=True)
+        try:
+            run_loop(config_path)
+        except BotStartupBlocked as exc:
+            print(str(exc))
+            return 1
     return 0
 
 
@@ -3048,7 +3058,14 @@ def main_aisha() -> int:
         },
     )
     reset_stop()
-    run_aisha_loop(config_path)
+    from .bot_startup_gate import BotStartupBlocked, prime_bot_gate_cache
+
+    prime_bot_gate_cache(load_merged_bot_config(config_path), force=True)
+    try:
+        run_aisha_loop(config_path)
+    except BotStartupBlocked as exc:
+        print(str(exc))
+        return 1
     return 0
 
 

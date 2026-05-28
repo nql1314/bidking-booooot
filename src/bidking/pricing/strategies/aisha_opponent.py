@@ -6,7 +6,11 @@ import random
 from typing import Any
 
 from .._multipliers import resolve_round_multiplier
-from ..opponent_adjust import evaluate_opponent_bid_possibilities, _round3_protect_decision
+from ..opponent_adjust import (
+    blend_bid_with_opponent_reference,
+    evaluate_opponent_bid_possibilities,
+    _round3_protect_decision,
+)
 
 
 def apply_opponent_bid_adjustment_core(
@@ -44,9 +48,12 @@ def apply_opponent_bid_adjustment_core(
 
     r3_detail = None
     if r_no >= 5:
+        blended = blend_bid_with_opponent_reference(
+            bid_i, o_poss, config=config, price_config=price_config
+        )
         out = int(
             min(
-                (bid_i + o_poss) / 2.0 + random.randint(1000, 1500),
+                blended + random.randint(1000, 1500),
                 float(o_poss) + random.randint(1000, 1500),
             )
         )
@@ -57,18 +64,27 @@ def apply_opponent_bid_adjustment_core(
             config, board_snapshot, pricing_d, bid_i
         )
         if not bool(r3_detail.get("protect")):
-            out = int(round((bid_i + int(o_prev)) / 2))
+            out = int(round(blend_bid_with_opponent_reference(
+                bid_i, int(o_prev), config=config, price_config=price_config
+            )))
             return out, "opp_r3_no_protect", r3_detail
 
     if bid_i > adj:
         if r_no == 3:
             return int(adj), "opp_low", r3_detail
-        return int(round((bid_i + adj) / 2)), "opp_low", r3_detail
+        return int(round(blend_bid_with_opponent_reference(
+            bid_i, adj, config=config, price_config=price_config
+        ))), "opp_low", r3_detail
 
     if bid_i > o_poss:
         return int(o_poss), "opp_poss", r3_detail
 
     if bid_i > int(o_prev):
-        return int(min(o_poss, (bid_i + int(o_prev)) / 2)), "opp_pre", r3_detail
+        blended = blend_bid_with_opponent_reference(
+            bid_i, int(o_prev), config=config, price_config=price_config
+        )
+        return int(min(o_poss, round(blended))), "opp_pre", r3_detail
 
-    return int(round((bid_i + o_poss) / 2)), "opp_sticky", r3_detail
+    return int(round(blend_bid_with_opponent_reference(
+        bid_i, o_poss, config=config, price_config=price_config
+    ))), "opp_sticky", r3_detail

@@ -4,9 +4,11 @@ from __future__ import annotations
 from bidking.pricing.opponent_adjust import (
     apply_opponent_bid_adjustment,
     apply_secret_auction_rank_opponent_adjustment,
+    blend_bid_with_opponent_reference,
     board_map_bundle_key,
     board_snapshot_is_secret_auction,
     opponent_bid_adjustment_enabled,
+    resolve_opponent_bid_blend_weights,
     resolve_secret_auction_rank_opponent_multipliers,
 )
 from bidking.pricing.self_bid_cache import SELF_BID_HISTORY_SNAPSHOT_KEY
@@ -32,6 +34,20 @@ def test_board_map_bundle_key_2306_not_secret() -> None:
 
 def _minimal_config(self_uid: str) -> dict:
     return {"board_snapshot": {"self_user_uid": self_uid}}
+
+
+def test_opponent_bid_blend_weights_default_arithmetic_mean() -> None:
+    assert resolve_opponent_bid_blend_weights({}, {}) == (0.5, 0.5)
+    assert blend_bid_with_opponent_reference(100_000, 400_000, config={}, price_config={}) == 250_000.0
+
+
+def test_opponent_bid_blend_weights_configurable() -> None:
+    cfg = {"pricing": {"opponent_bid_blend_weights": {"bid": 0.25, "opponent": 0.75}}}
+    w_bid, w_opp = resolve_opponent_bid_blend_weights(cfg, {})
+    assert w_bid == 0.25
+    assert w_opp == 0.75
+    blended = blend_bid_with_opponent_reference(100_000, 400_000, config=cfg, price_config={})
+    assert blended == 100_000 * 0.25 + 400_000 * 0.75
 
 
 def test_secret_rank_multipliers_configurable() -> None:
