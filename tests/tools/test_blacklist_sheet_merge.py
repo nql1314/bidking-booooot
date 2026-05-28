@@ -4,6 +4,7 @@
 from datetime import date
 
 from bidking.tools import blacklist_sheet_merge as merge
+from bidking.tools.tencent_sheet_v3 import TencentSheetV3Client
 
 
 def test_parse_temp_rows_from_sample_blob() -> None:
@@ -129,6 +130,12 @@ def test_build_merge_plan_insert_and_update() -> None:
     assert plan.skipped[0].reason == "临时表内重复 UID"
 
 
+def test_build_merge_plan_includes_purge_rows() -> None:
+    purge = [merge.TempBlacklistRow(6, "333333333333333", "x", game_uid="2101:1")]
+    plan = merge.build_merge_plan([], [], purge_rows=purge)
+    assert len(plan.purge_other_rounds) == 1
+
+
 def test_access_token_from_env(monkeypatch) -> None:
     monkeypatch.setenv("BIDKING_TENCENT_DOCS_ACCESS_TOKEN", "secret-token")
     token = merge.resolve_openapi_access_token({"client_id": "c"})
@@ -151,7 +158,7 @@ def test_open_client_from_config(monkeypatch) -> None:
             "openapi": {"client_id": "cid", "open_id": "oid"},
         }
     )
-    assert client is not None
+    assert isinstance(client, TencentSheetV3Client)
     assert client.access_token == "tok"
 
 
@@ -197,7 +204,7 @@ def test_resolve_sheet_merge_from_runtime_top_level() -> None:
     assert resolved["summary_tab"] == "BB08J2"
     assert resolved["openapi"]["client_id"] == "cid"
     assert resolved["summary_join_date_col"] == "D"
-    assert resolved["sync_round_marker"] == "2101:"
+    assert resolved["sync_round_no"] == 1
 
 
 def test_validate_skips_example_row() -> None:
@@ -224,3 +231,11 @@ def test_iter_skips_sheet_row_2_even_without_hint() -> None:
     assert rows[0].row_index == 4
 
 
+def test_summary_append_start_row_when_sheet_empty() -> None:
+    plan = merge.build_merge_plan(
+        [merge.TempBlacklistRow(4, "111111111111111", "a", game_uid="2101:1", round_no=1)],
+        [],
+    )
+    max_row = max((r.row_index for r in plan.summary_by_uid.values()), default=3)
+    start_row = max(max_row + 1, merge._TEMP_SHEET_FIRST_DATA_ROW_INDEX)
+    assert start_row == 4

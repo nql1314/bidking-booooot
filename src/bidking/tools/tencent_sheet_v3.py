@@ -42,17 +42,6 @@ def _col_letter_to_index(col: str) -> int:
     return n
 
 
-def _col_index_to_letter(index: int) -> str:
-    if index < 1:
-        raise ValueError(f"列索引须 >= 1，收到 {index}")
-    letters: list[str] = []
-    n = index
-    while n:
-        n, rem = divmod(n - 1, 26)
-        letters.append(chr(ord("A") + rem))
-    return "".join(reversed(letters))
-
-
 def cell_value_to_text(cell: dict[str, Any] | None) -> str:
     """从 V3 ``gridData`` 单元格对象提取显示文本。"""
     if not isinstance(cell, dict):
@@ -266,11 +255,6 @@ class TencentSheetV3Client:
             ]
         )
 
-    def update_range(self, range_a1: str, values: list[list[str]]) -> None:
-        """兼容 ``sheetId!A1:B2`` 写法。"""
-        sheet_id, rng = _split_sheet_range(range_a1)
-        self.update_values(sheet_id, rng, values)
-
     def read_count_at_row(
         self,
         *,
@@ -324,26 +308,15 @@ class TencentSheetV3Client:
     ) -> list[int]:
         """按行删除（``deleteDimensionRequest``，1-based 行号）。"""
         failed: list[int] = []
-        requests = [
-            build_delete_rows_request(sheet_id=sheet_id, row_index_1based=row_index)
-            for row_index in sorted(row_indices, reverse=True)
-        ]
-        for i in range(0, len(requests), _BATCH_REQUEST_LIMIT):
-            chunk = requests[i : i + _BATCH_REQUEST_LIMIT]
+        for row_index in sorted(row_indices, reverse=True):
             try:
-                self.batch_update(chunk)
+                self.batch_update(
+                    [
+                        build_delete_rows_request(
+                            sheet_id=sheet_id, row_index_1based=row_index
+                        )
+                    ]
+                )
             except RuntimeError:
-                for req in chunk:
-                    dim = req.get("deleteDimensionRequest") or {}
-                    start = dim.get("startIndex")
-                    if isinstance(start, int):
-                        failed.append(start)
+                failed.append(row_index)
         return failed
-
-
-def _split_sheet_range(range_a1: str) -> tuple[str, str]:
-    raw = str(range_a1 or "").strip()
-    if "!" in raw:
-        sheet_id, rng = raw.split("!", 1)
-        return sheet_id.strip(), rng.strip()
-    raise ValueError(f"范围须含工作表 ID，例如 xz3aq0!A4:E10，收到 {range_a1!r}")
