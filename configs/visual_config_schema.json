@@ -334,6 +334,24 @@
       "hide": false
     },
     {
+      "path": "pricing.opponent_bid_blend_weights.bid",
+      "type": "float",
+      "label": "对手折中权重（己方估价）",
+      "description": "对手出价修正中，己方估价与对手/参考价加权折中时己方一侧权重；默认 0.5（与对手权重同为 0.5 时等价于算术平均）。",
+      "scope": "both",
+      "group": "出价",
+      "hide": false
+    },
+    {
+      "path": "pricing.opponent_bid_blend_weights.opponent",
+      "type": "float",
+      "label": "对手折中权重（对手/参考价）",
+      "description": "对手出价修正中，对手价、预估对手价、调价阈值 adj 或上回合己方出价等参考价一侧的权重；默认 0.5。",
+      "scope": "both",
+      "group": "出价",
+      "hide": false
+    },
+    {
       "path": "pricing.vacant_red_floor_ceiling_pick_mode",
       "type": "enum",
       "label": "空置红格选取模式",

@@ -541,7 +541,12 @@ class BidKingApp:
                     bot.run_loop(CONFIG_OVERLAY_PATH, progress_sink=sink)
             except bot.StopRequested:
                 self.append_log("GUI stop: stopped")
-            except Exception:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001
+                from ..interaction.bot_startup_gate import BotStartupBlocked
+
+                if isinstance(exc, BotStartupBlocked):
+                    self.append_log(str(exc))
+                    return
                 self.append_log(traceback.format_exc())
             finally:
                 self.root.after(0, self.on_worker_done)
@@ -621,6 +626,14 @@ class BidKingApp:
             self.apply_form_to_config()
         except Exception as exc:  # noqa: BLE001
             messagebox.showerror("配置错误", str(exc))
+            return
+
+        from ..interaction.bot_startup_gate import BotStartupBlocked, ensure_bot_startup_allowed
+
+        try:
+            ensure_bot_startup_allowed(self.config)
+        except BotStartupBlocked as exc:
+            messagebox.showerror("Bot 不可用", str(exc))
             return
 
         auto = self.config.get("automation") or {}
