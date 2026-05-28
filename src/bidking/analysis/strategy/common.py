@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .. import grid_overlay as _grid_overlay
 from .. import scan_inference as _scan_inference
@@ -138,6 +138,106 @@ def _geo_footprint_cells_from_shape_field(shape_val: Any) -> Optional[float]:
     return float(max(1, w * h))
 
 
+_PHANTOM_TIER_CANDIDATE_QUALITIES = frozenset({5, 6})
+
+
+def _excluded_qualities_set_from_row(row: Dict[str, Any]) -> Set[int]:
+    ex: Set[int] = set()
+    raw = row.get("excluded_qualities")
+    if not isinstance(raw, (list, tuple, set)):
+        return ex
+    for x in raw:
+        try:
+            ex.add(int(x))
+        except (TypeError, ValueError):
+            continue
+    return ex
+
+
+def _phantom_uids_from_snapshot(board_snapshot: Dict[str, Any]) -> Set[str]:
+    overlay = board_snapshot.get("grid_overlay")
+    if not isinstance(overlay, dict):
+        return set()
+    ph = overlay.get("phantom_items")
+    if not isinstance(ph, dict):
+        return set()
+    return {str(k) for k in ph}
+
+
+def phantom_unknown_tier_credit_q456(
+    board_snapshot: Dict[str, Any],
+) -> Tuple[Dict[int, float], Dict[str, Any]]:
+    """
+    品质未知幽灵（``quality is None``）按金/红候选 ``C_gr={5,6}\\excluded`` 分摊几何占位，
+    供 ``tier_min_extra`` 在 ``confirmed_q5/q6`` 上使用（一期不改 ``total``）。
+
+    返回 ``({5: cells, 6: cells}, detail)``；detail 写入 ``pricing.phantom_unknown_quality``。
+    """
+    t0 = time.perf_counter()
+    phantom_uids = _phantom_uids_from_snapshot(board_snapshot)
+    if not phantom_uids:
+        return {5: 0.0, 6: 0.0}, {}
+
+    items = _grid_overlay.merged_items_dict_from_snapshot(board_snapshot)
+    credit: Dict[int, float] = {5: 0.0, 6: 0.0}
+    per_item: List[Dict[str, Any]] = []
+
+    for uid, it in items.items():
+        if uid not in phantom_uids or not isinstance(it, dict):
+            continue
+        if it.get("quality") is not None:
+            continue
+        bid_raw = it.get("box_id")
+        if bid_raw is None:
+            continue
+        try:
+            int(bid_raw)
+        except (TypeError, ValueError):
+            continue
+        if not it.get("box_id_confirmed"):
+            continue
+        cid = it.get("item_cid")
+        if cid is not None and it.get("price") is not None:
+            continue
+        fp = _geo_footprint_cells_from_shape_field(it.get("shape"))
+        if fp is None:
+            continue
+
+        c_gr = _PHANTOM_TIER_CANDIDATE_QUALITIES - _excluded_qualities_set_from_row(it)
+        if not c_gr:
+            continue
+        n = len(c_gr)
+        share = float(fp) / float(n)
+        tier_by_q: Dict[str, float] = {}
+        for q in sorted(c_gr):
+            credit[q] = credit.get(q, 0.0) + share
+            tier_by_q[str(q)] = round(share, 6)
+        if len(per_item) < 48:
+            per_item.append(
+                {
+                    "uid": str(uid),
+                    "shape": it.get("shape"),
+                    "cells": int(round(fp)),
+                    "candidate_qualities": sorted(int(q) for q in c_gr),
+                    "tier_credit_by_quality": tier_by_q,
+                }
+            )
+
+    if not per_item and credit[5] == 0.0 and credit[6] == 0.0:
+        perf_log_elapsed("phantom_unknown_tier_credit_q456 (empty)", t0)
+        return {5: 0.0, 6: 0.0}, {}
+
+    detail: Dict[str, Any] = {
+        "items": per_item,
+        "tier_credit_q5": round(credit[5], 6),
+        "tier_credit_q6": round(credit[6], 6),
+    }
+    perf_log_elapsed(
+        f"phantom_unknown_tier_credit_q456 (items={len(per_item)})", t0
+    )
+    return credit, detail
+
+
 def confirmed_tier_footprint_q456(
     board_snapshot: Dict[str, Any],
 ) -> Tuple[int, int, int]:
@@ -267,126 +367,6 @@ def self_player_hero_cid(
     except (TypeError, ValueError):
         return None
     return hc if hc > 0 else None
-
-
-def sum_known_contour_weighted_price_and_geo_cells(
-    board_snapshot: Dict[str, Any],
-    *,
-    csv_cells_raw: Dict[str, float],
-    pricing_shape_int_for_csv,
-    load_item_prices_db,
-    map_id_from_board_snapshot,
-) -> Tuple[float, int]:
-    """已知轮廓、品质未知、多候选权重价物品的 (权重价之和, 几何格数之和)。"""
-    from ...parsing import item_db
-    from ...parsing.item_db import _weighted_est_price, map_category_ratios, query_item
-
-    t0 = time.perf_counter()
-    mid = map_id_from_board_snapshot(board_snapshot)
-    mid_n = item_db.normalize_map_id(mid)
-    items = _grid_overlay.merged_items_dict_from_snapshot(board_snapshot)
-    csv_index, csv_items = load_item_prices_db()
-    if not csv_items:
-        return 0.0, 0
-    weights = map_category_ratios(mid) or {}
-    sum_val = 0.0
-    sum_geo = 0
-
-    def _int_set_from_field(raw: Any) -> Set[int]:
-        out: Set[int] = set()
-        if not isinstance(raw, list):
-            return out
-        for x in raw:
-            try:
-                out.add(int(x))
-            except (TypeError, ValueError):
-                continue
-        return out
-
-    for _uid, it in items.items():
-        if not isinstance(it, dict):
-            continue
-        bid_raw = it.get("box_id")
-        if bid_raw is None:
-            continue
-        try:
-            int(bid_raw)
-        except (TypeError, ValueError):
-            continue
-
-        sh_geo = _parse_shape_int(it.get("shape"))
-        if sh_geo is None:
-            continue
-
-        cid_raw = it.get("item_cid")
-        try:
-            item_cid_i = int(cid_raw) if cid_raw is not None else None
-        except (TypeError, ValueError):
-            item_cid_i = None
-        price_raw = it.get("price")
-        if item_cid_i is not None and price_raw is not None:
-            continue
-
-        q_raw = it.get("quality")
-        try:
-            q = int(q_raw) if q_raw is not None else None
-        except (TypeError, ValueError):
-            q = None
-        if q is not None:
-            continue
-
-        cats = _int_set_from_field(it.get("categories"))
-        cats_any = _int_set_from_field(it.get("categories_any"))
-        excl_q = _int_set_from_field(it.get("excluded_qualities"))
-        excl_c = _int_set_from_field(it.get("excluded_categories"))
-
-        sh_csv = pricing_shape_int_for_csv(it)
-
-        best, count, unique, est, _label = query_item(
-            sh_csv,
-            q,
-            cats,
-            item_cid_i,
-            csv_index,
-            csv_items,
-            excluded_categories=excl_c if excl_c else None,
-            excluded_qualities=excl_q if excl_q else None,
-            max_shape_wh=None,
-            map_category_weights=weights if weights else None,
-            map_id=mid_n,
-            categories_any=cats_any if cats_any else None,
-        )
-        if best is None or count == 0 or unique:
-            continue
-
-        w_est = est
-        if w_est is None and csv_items:
-            cand = list(csv_items)
-            if sh_csv is not None:
-                cand = [i for i in cand if i.shape == sh_csv]
-            if q is not None:
-                cand = [i for i in cand if i.quality == q]
-            if excl_q:
-                cand = [i for i in cand if i.quality not in excl_q]
-            if cats:
-                wc = [i for i in cand if all(c in i.category_tags for c in cats)]
-                if wc:
-                    cand = wc
-            if cats_any:
-                wa = [i for i in cand if cats_any.intersection(i.category_tags)]
-                if wa:
-                    cand = wa
-            if excl_c:
-                cand = [i for i in cand if not any(c in excl_c for c in i.category_tags)]
-            w_est = _weighted_est_price(cand, weights if weights else None, mid_n)
-        val = float(w_est) if w_est is not None else float(best.base_value)
-
-        w, h = shape_wh_from_snapshot(sh_geo)
-        geo = max(1, int(w) * int(h))
-        sum_val += val
-        sum_geo += geo
-    perf_log_elapsed("sum_known_contour_weighted_price_and_geo_cells", t0)
-    return sum_val, sum_geo
 
 
 def _find_continuous_regions(

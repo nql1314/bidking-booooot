@@ -530,6 +530,88 @@ class BoardPricingTests(unittest.TestCase):
         m = grid_overlay_mod.merged_items_dict(snap)
         self.assertIsNone(m["phantom_1"].get("quality"))
 
+    def test_merged_items_phantom_default_skips_q5_when_q5_excluded(self) -> None:
+        """普查/扫描排除 Q5 时不再缺省写入 Q5（与 ``_phantom_effective_quality`` 一致）。"""
+        snap = {
+            "game_state": {"items": {}},
+            "grid_overlay": {
+                "phantom_items": {
+                    "phantom_1": {
+                        "uid": "phantom_1",
+                        "box_id": 0,
+                        "box_id_confirmed": True,
+                        "shape": 11,
+                        "quality": None,
+                        "categories": [],
+                        "item_cid": None,
+                        "price": None,
+                        "manual_confirm_item_id": None,
+                        "excluded_categories": [],
+                        "excluded_qualities": [5, 6],
+                    }
+                },
+                "manual_shapes": {"phantom_1": [1, 1, 0, 0]},
+            },
+        }
+        m = grid_overlay_mod.merged_items_dict(snap)
+        self.assertIsNone(m["phantom_1"].get("quality"))
+
+    def test_merged_items_phantom_pref_falls_back_q5_when_only_q6_excluded(self) -> None:
+        """红笔偏好但仅排除 Q6 时：显式档无效，仍缺省 Q5（与 ``_phantom_effective_quality``）。"""
+        snap = {
+            "game_state": {"items": {}},
+            "grid_overlay": {
+                "phantom_items": {
+                    "phantom_9": {
+                        "uid": "phantom_9",
+                        "box_id": 0,
+                        "box_id_confirmed": True,
+                        "shape": 22,
+                        "quality": None,
+                        "categories": [],
+                        "item_cid": None,
+                        "price": None,
+                        "manual_confirm_item_id": None,
+                        "excluded_categories": [],
+                        "excluded_qualities": [6],
+                    }
+                },
+                "manual_shapes": {"phantom_9": [2, 2, 0, 0]},
+                "phantom_quality_pref": {"phantom_9": 6},
+            },
+        }
+        m = grid_overlay_mod.merged_items_dict(snap)
+        self.assertEqual(m["phantom_9"].get("quality"), 5)
+
+    def test_merged_items_phantom_pref_and_default_blocked_when_q5_q6_excluded(
+        self,
+    ) -> None:
+        """金红皆已排除时：显式红笔与缺省金笔均不写入 ``quality``。"""
+        snap = {
+            "game_state": {"items": {}},
+            "grid_overlay": {
+                "phantom_items": {
+                    "phantom_9": {
+                        "uid": "phantom_9",
+                        "box_id": 0,
+                        "box_id_confirmed": True,
+                        "shape": 22,
+                        "quality": None,
+                        "categories": [],
+                        "item_cid": None,
+                        "price": None,
+                        "manual_confirm_item_id": None,
+                        "excluded_categories": [],
+                        "excluded_qualities": [5, 6],
+                    }
+                },
+                "manual_shapes": {"phantom_9": [2, 2, 0, 0]},
+                "phantom_quality_pref": {"phantom_9": 6},
+            },
+        }
+        m = grid_overlay_mod.merged_items_dict(snap)
+        self.assertIsNone(m["phantom_9"].get("quality"))
+
     def test_merged_items_applies_unknown_cell_quality_pref(self) -> None:
         """``unknown_cell_quality_pref`` 须并入合并表 ``quality``，与弹窗候选品质手选一致。"""
         snap = {
@@ -1417,6 +1499,131 @@ class BoardPricingTests(unittest.TestCase):
         self.assertNotEqual(p.get("early_vacant_csv_group"), "q4+q5+q6~q5+q6")
         self.assertNotEqual(p.get("early_vacant_unit_from_scan"), 7500)
 
+    def _phantom_only_snapshot(
+        self,
+        *,
+        quality_pref: int | str,
+        excluded_qualities: list | None = None,
+    ) -> dict:
+        excl = list(excluded_qualities) if excluded_qualities is not None else []
+        return {
+            "game_state": {"items": {}, "map_id": 0, "current_round": 5},
+            "skill_logs": [],
+            "map_id": 0,
+            "current_round": 5,
+            "grid_overlay": {
+                "phantom_items": {
+                    "phantom_9": {
+                        "uid": "phantom_9",
+                        "box_id": 0,
+                        "box_id_confirmed": True,
+                        "shape": 22,
+                        "quality": None,
+                        "categories": [],
+                        "item_cid": None,
+                        "price": None,
+                        "manual_confirm_item_id": None,
+                        "excluded_categories": [],
+                        "excluded_qualities": excl,
+                    }
+                },
+                "manual_shapes": {"phantom_9": [2, 2, 0, 0]},
+                "phantom_quality_pref": {"phantom_9": quality_pref},
+            },
+        }
+
+    def test_phantom_known_q6_in_pricing_total_and_tier_footprint(self) -> None:
+        """显式红笔幽灵：计入 ``pricing.total``，且 ``q6_grid_min`` 按 2×2 占位抵扣 tier_extra。"""
+        snap = self._phantom_only_snapshot(quality_pref=6)
+        raw = {
+            "csv_quality_groups_avg_per_cell": {
+                "q4": 10.0,
+                "q5": 100.0,
+                "q6": 200.0,
+                "q5+q6": 150.0,
+                "all": 1000.0,
+            },
+            "event_stats": {
+                "q1_grid_count": 1,
+                "q2_grid_count": 1,
+                "q3_grid_count": 1,
+                "q4_grid_count": 1,
+                "q6_grid_min": 4,
+            },
+        }
+        item_total = bp.compute_items_total(snap)
+        self.assertGreater(item_total, 0.0)
+        p = bp.build_snapshot_pricing_dict({**snap, "raw_pricing": raw}, snapshot_path_hint=None)
+        self.assertAlmostEqual(float(p["total"]), item_total)
+        self.assertEqual(int(p.get("tier_extra_cells") or 0), 0)
+        self.assertAlmostEqual(float(p.get("tier_extra_value") or 0.0), 0.0)
+
+    def test_phantom_infer_tier_credit_splits_q5_q6_grid_min(self) -> None:
+        """推断笔 2×2：金红候选占位各 2 格，``q5/q6_grid_min`` 均为 2 时无 tier_extra。"""
+        snap = self._phantom_only_snapshot(quality_pref="_phantom_q_infer")
+        raw = {
+            "csv_quality_groups_avg_per_cell": {
+                "q5": 100.0,
+                "q6": 200.0,
+                "q5+q6": 150.0,
+                "all": 1000.0,
+            },
+            "event_stats": {
+                "q1_grid_count": 1,
+                "q2_grid_count": 1,
+                "q3_grid_count": 1,
+                "q4_grid_count": 1,
+                "q5_grid_min": 2,
+                "q6_grid_min": 2,
+            },
+        }
+        p = bp.build_snapshot_pricing_dict({**snap, "raw_pricing": raw}, snapshot_path_hint=None)
+        self.assertEqual(int(p.get("tier_extra_cells") or 0), 0)
+        puq = p.get("phantom_unknown_quality")
+        self.assertIsInstance(puq, dict)
+        self.assertAlmostEqual(float(puq.get("tier_credit_q5") or 0), 2.0)
+        self.assertAlmostEqual(float(puq.get("tier_credit_q6") or 0), 2.0)
+
+    def test_phantom_infer_excluded_gr_no_tier_credit(self) -> None:
+        """金红皆排除：无 phantom tier 分摊，``q6_grid_min`` 仍全额补格。"""
+        snap = self._phantom_only_snapshot(
+            quality_pref="_phantom_q_infer",
+            excluded_qualities=[5, 6],
+        )
+        raw = {
+            "csv_quality_groups_avg_per_cell": {"q6": 200.0, "all": 1000.0},
+            "event_stats": {
+                "q1_grid_count": 1,
+                "q2_grid_count": 1,
+                "q3_grid_count": 1,
+                "q4_grid_count": 1,
+                "q6_grid_min": 4,
+            },
+        }
+        p = bp.build_snapshot_pricing_dict({**snap, "raw_pricing": raw}, snapshot_path_hint=None)
+        self.assertNotIn("phantom_unknown_quality", p)
+        self.assertEqual(int(p.get("tier_extra_cells") or 0), 4)
+        self.assertAlmostEqual(float(p.get("tier_extra_value") or 0.0), 800.0)
+
+    def test_phantom_infer_partial_credit_when_only_q6_grid_min(self) -> None:
+        """仅 ``q6_grid_min``：2×2 推断笔对 Q6 分摊 2 格，仍剩 2 格 tier_extra。"""
+        snap = self._phantom_only_snapshot(quality_pref="_phantom_q_infer")
+        raw = {
+            "csv_quality_groups_avg_per_cell": {"q6": 200.0, "all": 1000.0},
+            "event_stats": {
+                "q1_grid_count": 1,
+                "q2_grid_count": 1,
+                "q3_grid_count": 1,
+                "q4_grid_count": 1,
+                "q6_grid_min": 4,
+            },
+        }
+        p = bp.build_snapshot_pricing_dict({**snap, "raw_pricing": raw}, snapshot_path_hint=None)
+        self.assertEqual(int(p.get("tier_extra_cells") or 0), 2)
+        self.assertAlmostEqual(float(p.get("tier_extra_value") or 0.0), 400.0)
+        puq = p.get("phantom_unknown_quality") or {}
+        self.assertAlmostEqual(float(puq.get("tier_credit_q6") or 0), 2.0)
+
     def test_tier_grid_min_no_extra_when_min_le_confirmed(self) -> None:
         """``q4_grid_min`` 不大于已确认紫格占位时，与未填 ``q4_grid_min`` 的 points 一致。"""
         gs = {
@@ -1840,15 +2047,12 @@ class BoardPricingTests(unittest.TestCase):
         self.assertEqual(p.get("vacant_unit_all_red"), 333)
         self.assertEqual(p.get("vacant"), 2)
         t = float(p.get("total") or 0.0)
-        kcw = float(p.get("known_contour_weighted_price") or 0.0)
-        kg = int(p.get("known_contour_weighted_cells") or 0)
         vac = int(p.get("vacant") or 0)
-        self.assertEqual(
-            p.get("est_orange"),
-            int(round(t - kcw + float(vac + kg) * 111.0)),
-        )
-        self.assertEqual(p.get("vacant_pts_base"), t - kcw)
-        self.assertEqual(p.get("vacant_adj"), vac + kg)
+        self.assertEqual(p.get("known_contour_weighted_price"), 0.0)
+        self.assertEqual(p.get("known_contour_weighted_cells"), 0)
+        self.assertEqual(p.get("est_orange"), int(round(t + float(vac) * 111.0)))
+        self.assertEqual(p.get("vacant_pts_base"), t)
+        self.assertEqual(p.get("vacant_adj"), vac)
 
     def test_blend_random_avg_helper_q14_separate_floor_ceiling(self) -> None:
         ev = {"random_avg_price_min": 1_531_348}
