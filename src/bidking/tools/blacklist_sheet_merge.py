@@ -1,7 +1,13 @@
 """将腾讯文档「临时表」有效行合并到「汇总表」，并清理已同步的临时行。
 
+汇总主键为 ``uid+name``；缺 UID/昵称的行忽略。可对久未更新的汇总行自动扣减或删除
+（见 ``summary_decay_*`` 配置）。
+
 读写使用 [腾讯文档 Open API V3 在线表格](https://docs.qq.com/open/document/app/openapi/v3/sheet/overview.html)
 （见 ``docs/tencent_sheet_openapi_v3.md``）。未配置 token 时仅能用 ``dop-api`` 粗略预览（常缺 round/bid 列）。
+python -m bidking.tools.blacklist_sheet_sync
+确认输出里的 [新]、[更]、[删] 行符合预期
+再执行：python -m bidking.tools.blacklist_sheet_sync --apply
 """
 
 from __future__ import annotations
@@ -9,8 +15,8 @@ from __future__ import annotations
 import os
 import re
 from datetime import date, datetime
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, replace
+from typing import Any, Iterable
 
 from bidking.interaction.public_blacklist_sync import (
     _DEFAULT_SHEET_ID,
@@ -18,19 +24,29 @@ from bidking.interaction.public_blacklist_sync import (
     _fetch_sheet_chunk_blob,
     parse_qq_sheet_url,
 )
-from bidking.tools.tencent_sheet_v3 import TencentSheetV3Client
+from bidking.tools.tencent_sheet_v3 import (
+    TencentSheetV3Client,
+    build_sheet_cell,
+    parse_a1_range,
+)
 
 _DEFAULT_TEMP_TAB = "xz3aq0"
 _DEFAULT_SUMMARY_TAB = "BB08J2"
 _DEFAULT_ACCESS_TOKEN_ENV = "BIDKING_TENCENT_DOCS_ACCESS_TOKEN"
 _DEFAULT_SUMMARY_COUNT_COL = "C"
 _DEFAULT_SUMMARY_JOIN_DATE_COL = "D"
+# None = 不写 cellFormat，继承汇总表已有样式（避免行高/字号与默认行不一致）
+_DEFAULT_SUMMARY_FONT_SIZE: int | None = None
 _DEFAULT_JOIN_DATE_FORMAT = "%Y-%m-%d"
 _DEFAULT_SYNC_ROUND_NO = 1
 _MAX_ROUND_COLUMN_VALUE = 20
 _DEFAULT_MAX_SYNC_BID = 25000
 _DEFAULT_TEMP_READ_RANGE = "A4:E500"
 _DEFAULT_SUMMARY_READ_RANGE = "A4:D500"
+# 汇总表：加入日期超过该天数且满足次数条件时自动扣减或删除
+_DEFAULT_SUMMARY_DECAY_DAYS = 7
+_DEFAULT_SUMMARY_DECAY_DELETE_MAX_COUNT = 5
+_DEFAULT_SUMMARY_DECAY_DEDUCT = 5
 _MAX_REASONABLE_BID = 99_999_999
 _SKIP_HINT_RE = re.compile(r"示例|误删|测试|test|demo", re.I)
 _GAME_COLON_RE = re.compile(r"^\d{4}:\d+")
@@ -66,6 +82,15 @@ class SummaryBlacklistRow:
     uid: str
     name: str
     count: int = 0
+    join_date: date | None = None
+
+
+@dataclass(frozen=True)
+class SummaryDecayUpdate:
+    """汇总表扣减：次数减少并刷新加入日期。"""
+
+    row: SummaryBlacklistRow
+    new_count: int
 
 
 @dataclass(frozen=True)
@@ -73,8 +98,10 @@ class MergePlan:
     inserts: tuple[TempBlacklistRow, ...]
     updates: tuple[TempBlacklistRow, ...]
     skipped: tuple[SkippedRow, ...]
-    summary_by_uid: dict[str, SummaryBlacklistRow]
+    summary_by_key: dict[str, SummaryBlacklistRow]
     purge_other_rounds: tuple[TempBlacklistRow, ...]
+    decay_deletes: tuple[SummaryBlacklistRow, ...] = ()
+    decay_updates: tuple[SummaryDecayUpdate, ...] = ()
 
 
 def _col_index(col: str) -> int:
@@ -122,6 +149,54 @@ def parse_count_cell(value: str) -> int:
         return max(0, int(float(raw)))
     except ValueError:
         return 0
+
+
+def parse_join_date_cell(
+    value: str,
+    *,
+    fmt: str | None = None,
+) -> date | None:
+    """解析汇总表「加入日期」单元格。"""
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    pattern = (fmt or _DEFAULT_JOIN_DATE_FORMAT).strip() or _DEFAULT_JOIN_DATE_FORMAT
+    for candidate in (pattern, "%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d"):
+        try:
+            return datetime.strptime(raw, candidate).date()
+        except ValueError:
+            continue
+    return None
+
+
+def summary_row_key(uid: str, name: str) -> tuple[str, str]:
+    """汇总表主键：``(uid, name)``。"""
+    return (str(uid or "").strip(), str(name or "").strip())
+
+
+def summary_row_key_str(uid: str, name: str) -> str:
+    u, n = summary_row_key(uid, name)
+    return f"{u}\x1f{n}"
+
+
+def is_summary_row_complete(uid: str, name: str) -> bool:
+    """UID 与昵称均有效时方可参与汇总/扣减。"""
+    u, n = summary_row_key(uid, name)
+    return bool(_UID_RE.fullmatch(u) and n)
+
+
+def index_summary_rows(
+    rows: Iterable[SummaryBlacklistRow],
+) -> dict[str, SummaryBlacklistRow]:
+    """按 ``uid+name`` 去重索引汇总行（保留首次出现）。"""
+    out: dict[str, SummaryBlacklistRow] = {}
+    for row in rows:
+        if not is_summary_row_complete(row.uid, row.name):
+            continue
+        key = summary_row_key_str(row.uid, row.name)
+        if key not in out:
+            out[key] = row
+    return out
 
 
 def game_marker_from_parts(parts: list[str]) -> str:
@@ -173,22 +248,34 @@ def build_summary_row_cells(
     name_col: str,
     join_date_col: str,
     count_col: str | None,
-) -> tuple[str, str, list[str]]:
-    """构造汇总表一行单元格（A–D：UID / 昵称 / 次数 / 加入日期）。"""
-    cells: dict[str, str] = {
+    font_size: int | None = _DEFAULT_SUMMARY_FONT_SIZE,
+) -> tuple[str, str, list[dict[str, Any]]]:
+    """构造汇总表一行 V3 单元格（A–D：UID / 昵称 / 次数[数字] / 加入日期）。
+
+    ``font_size`` 为 ``None`` 时不写入 ``cellFormat``，与表内默认样式一致。
+    """
+    col_values: dict[str, str | int] = {
         uid_col: uid,
         name_col: name,
         join_date_col: join_date,
     }
-    if count_col:
-        cells[count_col] = str(max(0, int(count)))
-    ordered_cols = sorted(cells, key=_col_index)
+    count_key = str(count_col or _DEFAULT_SUMMARY_COUNT_COL).strip().upper()
+    count_n = max(0, int(count))
+    if count_key:
+        col_values[count_key] = count_n
+    ordered_cols = sorted(col_values, key=_col_index)
     left, right = ordered_cols[0], ordered_cols[-1]
-    values: list[str] = []
+    row_cells: list[dict[str, Any]] = []
     for idx in range(_col_index(left), _col_index(right) + 1):
         letter = _col_letter(idx)
-        values.append(cells.get(letter, ""))
-    return left, right, values
+        val = col_values.get(letter, "")
+        if letter == count_key:
+            row_cells.append(
+                build_sheet_cell(count_n, as_number=True, font_size=font_size)
+            )
+        else:
+            row_cells.append(build_sheet_cell(val, font_size=font_size))
+    return left, right, row_cells
 
 
 def _merge_sheet_merge_branch(
@@ -279,7 +366,33 @@ def resolve_blacklist_sheet_merge_source(
         "summary_read_range": str(
             branch.get("summary_read_range") or _DEFAULT_SUMMARY_READ_RANGE
         ).strip().upper(),
+        "summary_font_size": _parse_optional_font_size(branch.get("summary_font_size")),
+        "summary_decay_days": int(
+            branch.get("summary_decay_days", _DEFAULT_SUMMARY_DECAY_DAYS)
+            or _DEFAULT_SUMMARY_DECAY_DAYS
+        ),
+        "summary_decay_delete_max_count": int(
+            branch.get(
+                "summary_decay_delete_max_count",
+                _DEFAULT_SUMMARY_DECAY_DELETE_MAX_COUNT,
+            )
+            or _DEFAULT_SUMMARY_DECAY_DELETE_MAX_COUNT
+        ),
+        "summary_decay_deduct": int(
+            branch.get("summary_decay_deduct", _DEFAULT_SUMMARY_DECAY_DEDUCT)
+            or _DEFAULT_SUMMARY_DECAY_DEDUCT
+        ),
     }
+
+
+def _parse_optional_font_size(raw: Any) -> int | None:
+    if raw is None or raw == "":
+        return None
+    try:
+        size = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return size if size > 0 else None
 
 
 def _read_length_prefixed_field(blob: bytes, pos: int) -> tuple[str | None, int]:
@@ -515,26 +628,43 @@ def parse_summary_rows_from_grid(
     grid_rows: list[list[str]],
     *,
     first_row_index: int = _TEMP_SHEET_FIRST_DATA_ROW_INDEX,
+    first_col: str = "A",
+    count_col: str = _DEFAULT_SUMMARY_COUNT_COL,
+    join_date_col: str = _DEFAULT_SUMMARY_JOIN_DATE_COL,
+    join_date_format: str = _DEFAULT_JOIN_DATE_FORMAT,
 ) -> list[SummaryBlacklistRow]:
-    """从 V3 网格解析汇总表行（A=UID, B=昵称）。"""
+    """从 V3 网格解析汇总表行（A=UID, B=昵称, C=次数, D=加入日期）。"""
+    base = _col_index(first_col)
+    count_idx = _col_index(count_col) - base
+    if count_idx < 0:
+        count_idx = _col_index(_DEFAULT_SUMMARY_COUNT_COL) - base
+    join_idx = _col_index(join_date_col) - base
+    if join_idx < 0:
+        join_idx = _col_index(_DEFAULT_SUMMARY_JOIN_DATE_COL) - base
+    pad_len = max(4, count_idx + 1, join_idx + 1)
     rows: list[SummaryBlacklistRow] = []
     for offset, cells in enumerate(grid_rows):
         row_index = int(first_row_index) + offset
-        padded = (list(cells) + [""] * 2)[:2]
+        padded = list(cells) + [""] * pad_len
         uid = str(padded[0] or "").strip()
         name = str(padded[1] or "").strip()
-        if not _UID_RE.fullmatch(uid):
+        if not is_summary_row_complete(uid, name):
             continue
         if _is_sheet_example_row(row_index):
             continue
+        count = parse_count_cell(padded[count_idx] if count_idx < len(padded) else "")
+        join_raw = padded[join_idx] if join_idx < len(padded) else ""
+        join_date = parse_join_date_cell(join_raw, fmt=join_date_format)
         rows.append(
-            SummaryBlacklistRow(row_index=row_index, uid=uid, name=name, count=0)
+            SummaryBlacklistRow(
+                row_index=row_index,
+                uid=uid,
+                name=name,
+                count=count,
+                join_date=join_date,
+            )
         )
-    by_uid: dict[str, SummaryBlacklistRow] = {}
-    for row in rows:
-        if row.uid not in by_uid:
-            by_uid[row.uid] = row
-    return list(by_uid.values())
+    return list(index_summary_rows(rows).values())
 
 
 def classify_temp_rows(
@@ -646,33 +776,107 @@ def parse_summary_blacklist_rows_from_sheet_blob(
             parts.append(fields[j])
             j += 1
         name = _extract_name_from_row_parts(parts)
-        if not _is_sheet_example_row(row_index):
+        if not _is_sheet_example_row(row_index) and is_summary_row_complete(uid, name):
             rows.append(
                 SummaryBlacklistRow(row_index=row_index, uid=uid, name=name, count=0)
             )
         row_index += 1
         i = j if j > i + 1 else i + 1
-    by_uid: dict[str, SummaryBlacklistRow] = {}
-    for row in rows:
-        if row.uid not in by_uid:
-            by_uid[row.uid] = row
-    return list(by_uid.values())
+    return list(index_summary_rows(rows).values())
 
 
 def validate_temp_row(
     row: TempBlacklistRow,
     *,
-    seen_temp_uids: set[str],
+    seen_temp_keys: set[str],
 ) -> str | None:
     """校验待写入汇总的临时行；通过返回 ``None``，否则返回跳过原因。"""
     uid = row.uid.strip()
+    name = row.name.strip()
     if not _UID_RE.fullmatch(uid):
         return "UID 格式无效"
-    if uid in seen_temp_uids:
-        return "临时表内重复 UID"
-    if _SKIP_HINT_RE.search(f"{row.name}"):
+    if not name:
+        return "缺少昵称"
+    key = summary_row_key_str(uid, name)
+    if key in seen_temp_keys:
+        return "临时表内重复 UID+昵称"
+    if _SKIP_HINT_RE.search(name):
         return "示例/测试行"
     return None
+
+
+def build_summary_decay_actions(
+    summary_rows: list[SummaryBlacklistRow],
+    *,
+    today: date | None = None,
+    decay_days: int = _DEFAULT_SUMMARY_DECAY_DAYS,
+    delete_max_count: int = _DEFAULT_SUMMARY_DECAY_DELETE_MAX_COUNT,
+    deduct: int = _DEFAULT_SUMMARY_DECAY_DEDUCT,
+    skip_keys: set[str] | None = None,
+) -> tuple[list[SummaryBlacklistRow], list[SummaryDecayUpdate]]:
+    """
+    对久未更新的汇总行扣减或删除。
+
+    加入日期距今 >= ``decay_days`` 且次数 <= ``delete_max_count`` 时删除；
+    次数更大则减去 ``deduct`` 并刷新加入日期（由调用方写入）。
+    缺少加入日期或本次临时表将更新的主键跳过。
+    """
+    if today is None:
+        today = date.today()
+    elif isinstance(today, datetime):
+        today = today.date()
+    stale_days = max(0, int(decay_days))
+    max_delete = max(0, int(delete_max_count))
+    deduct_n = max(0, int(deduct))
+    skip = skip_keys or set()
+    deletes: list[SummaryBlacklistRow] = []
+    updates: list[SummaryDecayUpdate] = []
+    for row in summary_rows:
+        if not is_summary_row_complete(row.uid, row.name):
+            continue
+        key = summary_row_key_str(row.uid, row.name)
+        if key in skip:
+            continue
+        if row.join_date is None:
+            continue
+        age_days = (today - row.join_date).days
+        if age_days < stale_days:
+            continue
+        if row.count <= max_delete:
+            deletes.append(row)
+        elif deduct_n > 0:
+            updates.append(
+                SummaryDecayUpdate(row=row, new_count=max(0, row.count - deduct_n))
+            )
+    return deletes, updates
+
+
+def attach_summary_decay_to_plan(
+    plan: MergePlan,
+    summary_rows: list[SummaryBlacklistRow],
+    *,
+    today: date | None = None,
+    decay_days: int = _DEFAULT_SUMMARY_DECAY_DAYS,
+    delete_max_count: int = _DEFAULT_SUMMARY_DECAY_DELETE_MAX_COUNT,
+    deduct: int = _DEFAULT_SUMMARY_DECAY_DEDUCT,
+) -> MergePlan:
+    """为合并计划附加汇总表扣减/过期动作（跳过本批待更新的主键）。"""
+    skip_keys = {
+        summary_row_key_str(r.uid, r.name) for r in (*plan.inserts, *plan.updates)
+    }
+    deletes, updates = build_summary_decay_actions(
+        summary_rows,
+        today=today,
+        decay_days=decay_days,
+        delete_max_count=delete_max_count,
+        deduct=deduct,
+        skip_keys=skip_keys,
+    )
+    return replace(
+        plan,
+        decay_deletes=tuple(deletes),
+        decay_updates=tuple(updates),
+    )
 
 
 def build_merge_plan(
@@ -681,18 +885,19 @@ def build_merge_plan(
     *,
     purge_rows: list[TempBlacklistRow] | None = None,
 ) -> MergePlan:
-    summary_by_uid = {r.uid: r for r in summary_rows if r.uid}
+    summary_by_key = index_summary_rows(summary_rows)
     inserts: list[TempBlacklistRow] = []
     updates: list[TempBlacklistRow] = []
     skipped: list[SkippedRow] = []
     seen: set[str] = set()
     for row in temp_rows:
-        reason = validate_temp_row(row, seen_temp_uids=seen)
+        reason = validate_temp_row(row, seen_temp_keys=seen)
         if reason:
             skipped.append(SkippedRow(row=row, reason=reason))
             continue
-        seen.add(row.uid)
-        if row.uid in summary_by_uid:
+        seen.add(summary_row_key_str(row.uid, row.name))
+        key = summary_row_key_str(row.uid, row.name)
+        if key in summary_by_key:
             updates.append(row)
         else:
             inserts.append(row)
@@ -700,7 +905,7 @@ def build_merge_plan(
         inserts=tuple(inserts),
         updates=tuple(updates),
         skipped=tuple(skipped),
-        summary_by_uid=summary_by_uid,
+        summary_by_key=summary_by_key,
         purge_other_rounds=tuple(purge_rows or ()),
     )
 
@@ -718,6 +923,7 @@ def _write_summary_row(
     name: str,
     count: int,
     join_date: str,
+    font_size: int | None = _DEFAULT_SUMMARY_FONT_SIZE,
 ) -> None:
     left, right, cells = build_summary_row_cells(
         uid=uid,
@@ -728,6 +934,7 @@ def _write_summary_row(
         name_col=name_col,
         join_date_col=join_date_col,
         count_col=count_col,
+        font_size=font_size,
     )
     client.update_values(sheet_id, f"{left}{row_index}:{right}{row_index}", [cells])
 
@@ -743,6 +950,7 @@ def _append_summary_rows(
     join_date: str,
     count_col: str | None,
     rows: list[TempBlacklistRow],
+    font_size: int | None = _DEFAULT_SUMMARY_FONT_SIZE,
 ) -> None:
     if not rows:
         return
@@ -756,8 +964,9 @@ def _append_summary_rows(
         name_col=name_col,
         join_date_col=join_date_col,
         count_col=count_col,
+        font_size=font_size,
     )
-    values: list[list[str]] = []
+    values: list[list[dict[str, Any]]] = []
     for row in rows:
         _, _, cells = build_summary_row_cells(
             uid=row.uid,
@@ -768,6 +977,7 @@ def _append_summary_rows(
             name_col=name_col,
             join_date_col=join_date_col,
             count_col=count_col,
+            font_size=font_size,
         )
         values.append(cells)
     client.update_values(
@@ -817,10 +1027,22 @@ def _load_summary_rows(
     summary_tab: str,
     summary_read_range: str,
     summary_blob: bytes | None,
+    summary_count_col: str = _DEFAULT_SUMMARY_COUNT_COL,
+    summary_join_date_col: str = _DEFAULT_SUMMARY_JOIN_DATE_COL,
+    join_date_format: str = _DEFAULT_JOIN_DATE_FORMAT,
 ) -> list[SummaryBlacklistRow]:
     if client is not None:
         first_row, _, grid = client.get_range_grid(summary_tab, summary_read_range)
-        return parse_summary_rows_from_grid(grid, first_row_index=first_row)
+        raw_range = summary_read_range.split("!", 1)[-1].strip()
+        _, col_start, _, _ = parse_a1_range(raw_range)
+        return parse_summary_rows_from_grid(
+            grid,
+            first_row_index=first_row,
+            first_col=_col_letter(col_start),
+            count_col=summary_count_col,
+            join_date_col=summary_join_date_col,
+            join_date_format=join_date_format,
+        )
     if summary_blob is None:
         return []
     return parse_summary_blacklist_rows_from_sheet_blob(summary_blob)
@@ -887,12 +1109,22 @@ def _open_client_from_config(
     access_token = resolve_openapi_access_token(api)
     if not all((file_id, client_id, open_id, access_token)):
         return None
+    request_log_path = None
+    request_log: bool | None = None
+    if isinstance(api, dict):
+        if api.get("request_log") is False:
+            request_log = False
+        raw_log = str(api.get("request_log_path") or "").strip()
+        if raw_log:
+            request_log_path = raw_log
     return TencentSheetV3Client(
         file_id=file_id,
         client_id=client_id,
         open_id=open_id,
         access_token=access_token,
         timeout=timeout,
+        request_log_path=request_log_path,
+        request_log=request_log,
     )
 
 
@@ -909,7 +1141,10 @@ def sync_temp_blacklist_to_summary_sheet(
 
     仅 D 列回合为 ``sync_round_no``（默认 1）且 A 列含 ``地图ID:局号`` 的行写入汇总。
     回合 > 1 或出价超 ``max_sync_bid`` 且有局号的行只删临时表、不写汇总。
-    无局号行不汇总也不删。新 UID 次数 ``1``；已有 UID 次数 ``+1``。
+    无局号行不汇总也不删。汇总主键为 ``uid+name``，缺数据行忽略。
+    新主键次数 ``1``；已有主键次数 ``+1``。加入日期超过 ``summary_decay_days``（默认 7）
+    且次数 <= ``summary_decay_delete_max_count``（默认 5）的汇总行删除；次数更大则减
+    ``summary_decay_deduct``（默认 5）并刷新日期（本批待同步的主键不参与扣减）。
     ``delete_mode``: ``clear``（默认）或 ``delete``。须配置 Open API V3 凭证；无 token 时仅用 dop-api 预览。
     """
     cfg = resolve_blacklist_sheet_merge_source(config)
@@ -962,16 +1197,36 @@ def sync_temp_blacklist_to_summary_sheet(
                 max_sync_bid=max_sync_bid,
             )
         )
+        summary_count_col = str(
+            cfg.get("summary_count_col") or _DEFAULT_SUMMARY_COUNT_COL
+        ).strip().upper()
+        summary_join_date_col = str(
+            cfg.get("summary_join_date_col") or _DEFAULT_SUMMARY_JOIN_DATE_COL
+        ).strip().upper()
+        join_date_fmt = str(
+            cfg.get("join_date_format") or _DEFAULT_JOIN_DATE_FORMAT
+        ).strip()
         summary_rows = _load_summary_rows(
             client,
             summary_tab=summary_tab,
             summary_read_range=summary_read_range,
             summary_blob=summary_blob,
+            summary_count_col=summary_count_col,
+            summary_join_date_col=summary_join_date_col,
+            join_date_format=join_date_fmt,
         )
     except Exception as exc:
         return False, str(exc), None
-    plan = build_merge_plan(
-        temp_rows, summary_rows, purge_rows=purge_temp_rows
+    plan = attach_summary_decay_to_plan(
+        build_merge_plan(temp_rows, summary_rows, purge_rows=purge_temp_rows),
+        summary_rows,
+        today=sync_on if sync_on is not None else date.today(),
+        decay_days=int(cfg.get("summary_decay_days") or _DEFAULT_SUMMARY_DECAY_DAYS),
+        delete_max_count=int(
+            cfg.get("summary_decay_delete_max_count")
+            or _DEFAULT_SUMMARY_DECAY_DELETE_MAX_COUNT
+        ),
+        deduct=int(cfg.get("summary_decay_deduct") or _DEFAULT_SUMMARY_DECAY_DEDUCT),
     )
     synced_temp = list(plan.inserts) + list(plan.updates)
     purge_rows = list(plan.purge_other_rounds)
@@ -985,8 +1240,24 @@ def sync_temp_blacklist_to_summary_sheet(
         lines = [
             f"[预览/{source_note}] 第一回合：新增 {len(plan.inserts)}，"
             f"更新 {len(plan.updates)}，跳过 {len(plan.skipped)}；"
+            f"汇总过期删 {len(plan.decay_deletes)}、扣减 {len(plan.decay_updates)}；"
             f"将清理临时表 {len(purge_rows)} 行（非第一回合或出价>{max_sync_bid}）",
         ]
+        for row in plan.decay_deletes[:8]:
+            lines.append(
+                f"  [过期删] 行{row.row_index}: {row.uid} {row.name} "
+                f"次数={row.count} 加入日期={row.join_date}"
+            )
+        if len(plan.decay_deletes) > 8:
+            lines.append(f"  … 另有 {len(plan.decay_deletes) - 8} 行待删除")
+        for item in plan.decay_updates[:8]:
+            row = item.row
+            lines.append(
+                f"  [过期减] 行{row.row_index}: {row.uid} {row.name} "
+                f"次数 {row.count}→{item.new_count} 加入日期→{join_date}"
+            )
+        if len(plan.decay_updates) > 8:
+            lines.append(f"  … 另有 {len(plan.decay_updates) - 8} 行待扣减")
         if ignored_no_game:
             lines.append(f"；无局号忽略 {len(ignored_no_game)} 行")
         if ignored_other:
@@ -1005,7 +1276,7 @@ def sync_temp_blacklist_to_summary_sheet(
                 f"次数=1 加入日期={join_date}"
             )
         for row in plan.updates[:12]:
-            prev = plan.summary_by_uid.get(row.uid)
+            prev = plan.summary_by_key.get(summary_row_key_str(row.uid, row.name))
             prev_n = prev.count if prev else 0
             bid_note = f" 出价={row.bid}" if row.bid is not None else ""
             lines.append(
@@ -1024,7 +1295,12 @@ def sync_temp_blacklist_to_summary_sheet(
                 f"环境变量 {env_name}），未写入文档。"
                 "说明见 docs/tencent_sheet_openapi_v3.md"
             )
-        if not synced_temp and not purge_rows:
+        if (
+            not synced_temp
+            and not purge_rows
+            and not plan.decay_deletes
+            and not plan.decay_updates
+        ):
             if ignored_no_game or ignored_other:
                 parts = ["无待同步/清理行"]
                 if ignored_no_game:
@@ -1039,14 +1315,38 @@ def sync_temp_blacklist_to_summary_sheet(
     uid_col = cfg["summary_uid_col"]
     name_col = cfg["summary_name_col"]
     join_date_col = cfg["summary_join_date_col"]
+    summary_font_size = cfg.get("summary_font_size")
+    if summary_font_size is not None and not isinstance(summary_font_size, int):
+        summary_font_size = _parse_optional_font_size(summary_font_size)
     max_summary_row = max(
-        (r.row_index for r in plan.summary_by_uid.values()),
+        (r.row_index for r in plan.summary_by_key.values()),
         default=_TEMP_SHEET_FIRST_DATA_ROW_INDEX - 1,
     )
     start_row = max(max_summary_row + 1, _TEMP_SHEET_FIRST_DATA_ROW_INDEX)
     failed: list[int] = []
     purge_failed: list[int] = []
+    decay_delete_failed: list[int] = []
     try:
+        if plan.decay_deletes:
+            decay_delete_failed = client.delete_rows(
+                sheet_id=summary_tab,
+                row_indices=[r.row_index for r in plan.decay_deletes],
+            )
+        for item in plan.decay_updates:
+            _write_summary_row(
+                client,
+                sheet_id=summary_tab,
+                row_index=item.row.row_index,
+                uid_col=uid_col,
+                name_col=name_col,
+                join_date_col=join_date_col,
+                count_col=count_col,
+                uid=item.row.uid,
+                name=item.row.name,
+                count=item.new_count,
+                join_date=join_date,
+                font_size=summary_font_size,
+            )
         if purge_rows:
             purge_failed = _clear_temp_rows_on_sheet(
                 client,
@@ -1056,15 +1356,8 @@ def sync_temp_blacklist_to_summary_sheet(
                 delete_mode=delete_mode,
             )
         for row in plan.updates:
-            prev = plan.summary_by_uid[row.uid]
+            prev = plan.summary_by_key[summary_row_key_str(row.uid, row.name)]
             name = row.name.strip() or prev.name
-            current = client.read_count_at_row(
-                sheet_id=summary_tab,
-                row_index=prev.row_index,
-                count_col=count_col or _DEFAULT_SUMMARY_COUNT_COL,
-                fallback=prev.count,
-                parse_count=parse_count_cell,
-            )
             _write_summary_row(
                 client,
                 sheet_id=summary_tab,
@@ -1075,8 +1368,9 @@ def sync_temp_blacklist_to_summary_sheet(
                 count_col=count_col,
                 uid=row.uid,
                 name=name,
-                count=current + 1,
+                count=prev.count + 1,
                 join_date=join_date,
+                font_size=summary_font_size,
             )
         if plan.inserts:
             _append_summary_rows(
@@ -1089,6 +1383,7 @@ def sync_temp_blacklist_to_summary_sheet(
                 join_date=join_date,
                 count_col=count_col,
                 rows=list(plan.inserts),
+                font_size=summary_font_size,
             )
         if synced_temp:
             failed = _clear_temp_rows_on_sheet(
@@ -1102,6 +1397,13 @@ def sync_temp_blacklist_to_summary_sheet(
         return False, f"写入腾讯文档失败: {exc}", plan
 
     parts: list[str] = []
+    if plan.decay_deletes or plan.decay_updates:
+        n_del = len(plan.decay_deletes) - len(decay_delete_failed)
+        parts.append(
+            f"汇总过期：删除 {n_del} 行、扣减 {len(plan.decay_updates)} 行"
+        )
+        if decay_delete_failed:
+            parts.append(f"（删除失败 {len(decay_delete_failed)} 行: {decay_delete_failed}）")
     if synced_temp:
         parts.append(
             f"已同步第一回合 {len(synced_temp)} 行（新增 {len(plan.inserts)}，"

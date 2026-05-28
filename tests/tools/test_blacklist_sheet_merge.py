@@ -116,10 +116,10 @@ def test_build_merge_plan_insert_and_update() -> None:
     temp = [
         merge.TempBlacklistRow(2, "111111111111111", "a"),
         merge.TempBlacklistRow(3, "222222222222222", "b"),
-        merge.TempBlacklistRow(4, "111111111111111", "dup"),
+        merge.TempBlacklistRow(4, "111111111111111", "a"),
     ]
     summary = [
-        merge.SummaryBlacklistRow(5, "222222222222222", "old", count=2),
+        merge.SummaryBlacklistRow(5, "222222222222222", "b", count=2),
     ]
     plan = merge.build_merge_plan(temp, summary)
     assert len(plan.inserts) == 1
@@ -127,7 +127,7 @@ def test_build_merge_plan_insert_and_update() -> None:
     assert len(plan.updates) == 1
     assert plan.updates[0].uid == "222222222222222"
     assert len(plan.skipped) == 1
-    assert plan.skipped[0].reason == "临时表内重复 UID"
+    assert plan.skipped[0].reason == "临时表内重复 UID+昵称"
 
 
 def test_build_merge_plan_includes_purge_rows() -> None:
@@ -174,7 +174,11 @@ def test_build_summary_row_cells() -> None:
         count_col="C",
     )
     assert (left, right) == ("A", "D")
-    assert cells == ["884144787915084", "一切亦虚幻", "3", "2026-05-28"]
+    assert cells[0]["cellValue"] == {"text": "884144787915084"}
+    assert cells[1]["cellValue"] == {"text": "一切亦虚幻"}
+    assert cells[2]["cellValue"] == {"number": 3}
+    assert cells[3]["cellValue"] == {"text": "2026-05-28"}
+    assert "cellFormat" not in cells[0]
 
 
 def test_format_sync_join_date() -> None:
@@ -209,7 +213,7 @@ def test_resolve_sheet_merge_from_runtime_top_level() -> None:
 
 def test_validate_skips_example_row() -> None:
     row = merge.TempBlacklistRow(2, "333333333333333", "示例勿用")
-    reason = merge.validate_temp_row(row, seen_temp_uids=set())
+    reason = merge.validate_temp_row(row, seen_temp_keys=set())
     assert reason == "示例/测试行"
 
 
@@ -231,11 +235,72 @@ def test_iter_skips_sheet_row_2_even_without_hint() -> None:
     assert rows[0].row_index == 4
 
 
+def test_summary_key_uid_and_name() -> None:
+    summary = [
+        merge.SummaryBlacklistRow(5, "111111111111111", "a", count=1),
+        merge.SummaryBlacklistRow(6, "111111111111111", "b", count=2),
+    ]
+    plan = merge.build_merge_plan(
+        [merge.TempBlacklistRow(4, "111111111111111", "b")],
+        summary,
+    )
+    assert len(plan.updates) == 1
+    assert len(plan.inserts) == 0
+
+
+def test_parse_summary_grid_skips_incomplete_rows() -> None:
+    rows = merge.parse_summary_rows_from_grid(
+        [
+            ["111111111111111", "", "3", "2026-05-01"],
+            ["222222222222222", "ok", "1", "2026-05-01"],
+        ]
+    )
+    assert len(rows) == 1
+    assert rows[0].uid == "222222222222222"
+
+
+def test_build_summary_decay_delete_and_deduct() -> None:
+    old = date(2026, 5, 1)
+    today = date(2026, 5, 28)
+    rows = [
+        merge.SummaryBlacklistRow(4, "111111111111111", "a", count=3, join_date=old),
+        merge.SummaryBlacklistRow(5, "222222222222222", "b", count=8, join_date=old),
+        merge.SummaryBlacklistRow(6, "333333333333333", "c", count=2, join_date=date(2026, 5, 22)),
+    ]
+    deletes, updates = merge.build_summary_decay_actions(
+        rows, today=today, decay_days=7, delete_max_count=5, deduct=5
+    )
+    assert len(deletes) == 1
+    assert deletes[0].uid == "111111111111111"
+    assert len(updates) == 1
+    assert updates[0].new_count == 3
+    assert updates[0].row.uid == "222222222222222"
+
+
+def test_decay_skips_rows_updated_this_batch() -> None:
+    old = date(2026, 5, 1)
+    today = date(2026, 5, 28)
+    summary = [
+        merge.SummaryBlacklistRow(5, "111111111111111", "a", count=3, join_date=old),
+    ]
+    plan = merge.attach_summary_decay_to_plan(
+        merge.build_merge_plan(
+            [merge.TempBlacklistRow(4, "111111111111111", "a")],
+            summary,
+        ),
+        summary,
+        today=today,
+        decay_days=7,
+    )
+    assert not plan.decay_deletes
+    assert not plan.decay_updates
+
+
 def test_summary_append_start_row_when_sheet_empty() -> None:
     plan = merge.build_merge_plan(
         [merge.TempBlacklistRow(4, "111111111111111", "a", game_uid="2101:1", round_no=1)],
         [],
     )
-    max_row = max((r.row_index for r in plan.summary_by_uid.values()), default=3)
+    max_row = max((r.row_index for r in plan.summary_by_key.values()), default=3)
     start_row = max(max_row + 1, merge._TEMP_SHEET_FIRST_DATA_ROW_INDEX)
     assert start_row == 4
