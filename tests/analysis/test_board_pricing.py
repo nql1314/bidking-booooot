@@ -927,6 +927,10 @@ class BoardPricingTests(unittest.TestCase):
                     continue
                 occ.add((r, c))
         max_box_id = (dr + h) * 10 + (dc + w)
+        for bid in range(max_box_id + 1):
+            r, c = bid // 10, bid % 10
+            if r < dr - 1 or r > dr + h or c < dc - 1 or c > dc + w:
+                occ.add((r, c))
         specs = grid_overlay_mod.compute_vacant_rect_phantom_specs(
             game_state=st,
             manual_shapes={},
@@ -995,6 +999,110 @@ class BoardPricingTests(unittest.TestCase):
             s.uid for s in specs if s.h == 1 and s.dr + s.h - 1 >= prefix_bottom
         }
         self.assertEqual(bottom_uids, set())
+
+    def test_vacant_rect_pass1_temp_ghost_not_emitted(self) -> None:
+        """四面围住的孤立 1×1 仅作临时占格，最终不出现在 phantom_vac 列表中。"""
+        from bidking.parsing.state import GameState, ItemKnowledge
+
+        st = GameState()
+        st.current_round = 4
+        st.map_id = 2101
+        for q in (1, 2, 3, 4):
+            st._scan_history.append(("quality", q, frozenset({"log_q%d" % q})))
+        anchors = [(0, 0), (0, 9), (9, 0), (9, 9)]
+        for q, (r, c) in zip((1, 2, 3, 4), anchors):
+            uid = f"log_q{q}"
+            st.items[uid] = ItemKnowledge(
+                uid=uid,
+                box_id=r * 10 + c,
+                box_id_confirmed=True,
+                shape=11,
+                quality=q,
+            )
+        pocket = (1, 1)
+        max_box_id = pocket[0] * 10 + pocket[1]
+        occ = {(r, c) for r, c in anchors}
+        for bid in range(max_box_id + 1):
+            r, c = bid // 10, bid % 10
+            if (r, c) != pocket:
+                occ.add((r, c))
+        specs = grid_overlay_mod.compute_vacant_rect_phantom_specs(
+            game_state=st,
+            manual_shapes={},
+            phantom_items={},
+            phantom_quality_pref={},
+            occupied_cells=occ,
+            vacant_manual_suppress=set(),
+            max_box_id=max_box_id,
+            raw_pricing={"event_stats": {"q5_count": 99, "q6_count": 99}},
+            current_round=4,
+            fraud_cells=set(),
+            enabled=True,
+        )
+        self.assertEqual(specs, [])
+
+    def test_vacant_rect_pass1_temp_ghost_splits_larger_bbox(self) -> None:
+        """三面围住的 1×1 临时占格后，外侧 2×2 仍可单独推断，且不含该 1×1。"""
+        from bidking.parsing.state import GameState, ItemKnowledge
+
+        _, csv_items = bp._load_item_prices_db()
+        excl_q = {1, 2, 3, 4}
+        pool = [
+            i
+            for i in csv_items
+            if int(i.shape) == 22
+            and 1 <= int(i.quality) <= 6
+            and int(i.quality) not in excl_q
+        ]
+        if len(pool) != 1:
+            self.skipTest("need shape 22 with single Q5/Q6 quality in CSV")
+        pick_quality = int(pool[0].quality)
+        w, h = 2, 2
+
+        st = GameState()
+        st.current_round = 4
+        st.map_id = 2101
+        for q in (1, 2, 3, 4):
+            st._scan_history.append(("quality", q, frozenset({"log_q%d" % q})))
+        anchors = [(0, 0), (0, 9), (9, 0), (9, 9)]
+        for q, (r, c) in zip((1, 2, 3, 4), anchors):
+            st.items[uid] = ItemKnowledge(
+                uid=f"log_q{q}",
+                box_id=r * 10 + c,
+                box_id_confirmed=True,
+                shape=11,
+                quality=q,
+            )
+        dr, dc = 3, 3
+        ghost = (dr, dc)
+        occ = {(r, c) for r, c in anchors}
+        occ.add((dr - 1, dc))
+        occ.add((dr, dc - 1))
+        occ.add((dr, dc + 1))
+        max_box_id = (dr + 1) * 10 + (dc + w)
+        specs = grid_overlay_mod.compute_vacant_rect_phantom_specs(
+            game_state=st,
+            manual_shapes={},
+            phantom_items={},
+            phantom_quality_pref={},
+            occupied_cells=occ,
+            vacant_manual_suppress=set(),
+            max_box_id=max_box_id,
+            raw_pricing={"event_stats": {f"q{pick_quality}_count": 99}},
+            current_round=4,
+            fraud_cells=set(),
+            enabled=True,
+        )
+        self.assertEqual(len(specs), 1)
+        sp = specs[0]
+        self.assertEqual((sp.w, sp.h, sp.dc, sp.dr), (w, h, dc + 1, dr))
+        self.assertEqual(sp.quality, pick_quality)
+        ghost_cells = {
+            (sp.dr + ddr, sp.dc + ddc)
+            for ddr in range(sp.h)
+            for ddc in range(sp.w)
+        }
+        self.assertNotIn(ghost, ghost_cells)
 
     def test_vacant_rect_phantom_skipped_before_round4(self) -> None:
         from bidking.parsing.state import GameState

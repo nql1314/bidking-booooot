@@ -70,7 +70,7 @@
       "path": "automation.aisha_round4_tool_min_vacant",
       "type": "int",
       "label": "第4回合金道具空置门槛",
-      "description": "爱莎第4回合道具门控：棋盘上空置格数量须 ≥ 此值，且金统计未知时，才允许使用道具。",
+      "description": "爱莎第4回合道具门控：几何空置格 + 自动 phantom_vac_* 占格须 ≥ 此值，且金统计未知时，才允许使用道具。",
       "scope": "both",
       "group": "自动化",
       "hide": false
@@ -382,13 +382,14 @@
       "path": "pricing.vacant_red_floor_ceiling_pick_mode",
       "type": "enum",
       "label": "空置红格选取模式",
-      "description": "normal / aggressive：红格在全橙和金红之间的参考价倾向。",
+      "description": "normal / aggressive / force_gold_red：红格在全橙和金红之间的参考价倾向；force_gold_red 强制采用金红价。",
       "scope": "map",
       "group": "出价",
       "hide": false,
       "choices": [
         "normal",
-        "aggressive"
+        "aggressive",
+        "force_gold_red"
       ]
     },
     {

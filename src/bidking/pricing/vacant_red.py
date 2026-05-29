@@ -13,6 +13,7 @@ from .snapshot_players import (
 
 _VACANT_RED_PICK_MODE_NORMAL = "normal"
 _VACANT_RED_PICK_MODE_AGGRESSIVE = "aggressive"
+_VACANT_RED_PICK_MODE_FORCE_GOLD_RED = "force_gold_red"
 
 # 暗图（440/450 隐秘拍卖档）：积极模式不比较对手价，规则 7 之后统一均价
 _AGGRESSIVE_DARK_MAP_BUNDLE_KEYS = frozenset({"440", "450"})
@@ -161,9 +162,16 @@ def _automation_selected_map_config_key(config: dict[str, Any]) -> str:
 
 
 def resolve_vacant_red_floor_ceiling_pick_mode(config: dict[str, Any]) -> str:
-    """``pricing.vacant_red_floor_ceiling_pick_mode``：``normal``（默认）或 ``aggressive``。"""
+    """``pricing.vacant_red_floor_ceiling_pick_mode``：``normal``（默认）、``aggressive`` 或 ``force_gold_red``。"""
     raw = (config.get("pricing") or {}).get("vacant_red_floor_ceiling_pick_mode")
     mode = str(raw or _VACANT_RED_PICK_MODE_NORMAL).strip().lower()
+    if mode in (
+        _VACANT_RED_PICK_MODE_FORCE_GOLD_RED,
+        "force_gold_red",
+        "强制金红",
+        "强制",
+    ):
+        return _VACANT_RED_PICK_MODE_FORCE_GOLD_RED
     if mode in (_VACANT_RED_PICK_MODE_AGGRESSIVE, "激进", "积极"):
         return _VACANT_RED_PICK_MODE_AGGRESSIVE
     return _VACANT_RED_PICK_MODE_NORMAL
@@ -261,10 +269,13 @@ def apply_vacant_red_floor_ceiling_pick(
     if r not in (3, 4, 5):
         return int(fin), {"applied": False, "reason": "not_round_3_4_or_5"}
 
-    # 第3回合：仅在低档总格已划定且激进模式下启用
+    # 第3回合：仅在低档总格已划定且激进/强制金红模式下启用
     if r == 3:
         pick_mode = resolve_vacant_red_floor_ceiling_pick_mode(config)
-        if pick_mode != _VACANT_RED_PICK_MODE_AGGRESSIVE:
+        if pick_mode not in (
+            _VACANT_RED_PICK_MODE_AGGRESSIVE,
+            _VACANT_RED_PICK_MODE_FORCE_GOLD_RED,
+        ):
             return int(fin), {"applied": False, "reason": "round_3_requires_aggressive_mode"}
         # 检查低档总格是否已划定 (q12+q3+q4)
         raw = board_snapshot.get("raw_pricing") if isinstance(board_snapshot, dict) else None
@@ -293,6 +304,18 @@ def apply_vacant_red_floor_ceiling_pick(
         return int(fin), {"applied": False, "reason": "missing_vacant"}
     vac_i = int(vac_m)
     pick_mode = resolve_vacant_red_floor_ceiling_pick_mode(config)
+
+    if pick_mode == _VACANT_RED_PICK_MODE_FORCE_GOLD_RED:
+        return pc_i, {
+            "applied": True,
+            "pick_mode": _VACANT_RED_PICK_MODE_FORCE_GOLD_RED,
+            "decision_rule": "force_gold_red_ceiling",
+            "chosen_points": pc_i,
+            "points_floor": pf_i,
+            "points_ceiling": pc_i,
+            "before_pick": int(fin),
+            "after_pick": pc_i,
+        }
 
     if pick_mode == _VACANT_RED_PICK_MODE_AGGRESSIVE:
         dark_map = board_snapshot_aggressive_dark_map(board_snapshot)
