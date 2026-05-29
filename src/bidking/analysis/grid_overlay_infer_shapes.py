@@ -2,14 +2,22 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Mapping, Optional, Set, Tuple
+from typing import Any, Dict, List, Mapping, NamedTuple, Optional, Set, Tuple
 
 from ..parsing import item_db
 from ..parsing.state import GameState, ItemKnowledge
 from ._shape_wh import shape_wh_from_snapshot
-from .grid_overlay_dims import GRID_COLS, GRID_ROWS, _INFER_DEFAULT_PRICE_BAND_REL
+from .grid_overlay_dims import GRID_COLS, GRID_ROWS, AISHA_VACANT_RECT_INFER_ROUND, rect_cells_wh
 from .grid_overlay_item_merge import _load_item_prices_db
 from .grid_overlay_vacant_zone import _live_shape_wh
+from .phantom_pricing_ui_sync import PHANTOM_Q_INFER, phantom_quality_pref_explicit_quality
+
+
+class InferShapesResult(NamedTuple):
+    """``infer_shapes`` 推断结果及被日志物品吸收的品质未定幽灵 uid。"""
+
+    shapes: Dict[str, List[int]]
+    absorbed_phantom_uids: frozenset[str]
 
 
 def _event_stats_q14_grid_counts_all_known(raw: Any) -> bool:
@@ -95,82 +103,6 @@ def _infer_pseudo_blocked(
     return inferred_occ | (baseline_occ - self_base)
 
 
-def _infer_pick_wh_from_candidates(
-    candidates: List[Any],
-    map_category_weights: Optional[Dict[int, float]],
-    map_id_n: Optional[int],
-) -> Optional[Tuple[int, int]]:
-    """
-    多候选时：先在权重期望价 ±:data:`_INFER_DEFAULT_PRICE_BAND_REL` 价带内的候选中取掉落概率最高者；
-    价带内无候选（或无法得到正期望价）时，回退为在全候选中按概率选优（概率相同则价更接近期望、再 ``item_id``）。
-    """
-    if not candidates:
-        return None
-    if len(candidates) == 1:
-        return shape_wh_from_snapshot(candidates[0].shape)
-    est = item_db._weighted_est_price(candidates, map_category_weights, map_id_n)
-    probs = item_db.candidate_probabilities(candidates, map_category_weights, map_id_n)
-
-    def _pick_best(pool: List[Any]) -> Any:
-        best_c: Any = None
-        best_key: Optional[Tuple[float, float, int]] = None
-        for c in pool:
-            p = float(probs.get(c.item_id, 0.0))
-            dist = (
-                abs(float(c.base_value) - float(est))
-                if est is not None and float(est) > 0
-                else 0.0
-            )
-            key = (-p, dist, int(c.item_id))
-            if best_key is None or key < best_key:
-                best_key = key
-                best_c = c
-        return best_c
-
-    if est is not None and float(est) > 0:
-        e = float(est)
-        band = _INFER_DEFAULT_PRICE_BAND_REL
-        lo, hi = e * (1.0 - band), e * (1.0 + band)
-        in_band = [c for c in candidates if lo <= float(c.base_value) <= hi]
-        if in_band:
-            best = _pick_best(in_band)
-            if best is not None:
-                return shape_wh_from_snapshot(best.shape)
-
-    best = _pick_best(candidates)
-    if best is None:
-        return None
-    return shape_wh_from_snapshot(best.shape)
-
-
-def _infer_ordered_wh_for_default_infer(
-    filt: List[Any],
-    map_category_weights: Optional[Dict[int, float]],
-    map_id_n: Optional[int],
-) -> List[Tuple[int, int]]:
-    """
-    默认推断路径下依次尝试的 ``(w,h)``：
-    先 :func:`_infer_pick_wh_from_candidates`，再按各外形对应候选的最高掉落概率降序尝试其余外形。
-    """
-    primary = _infer_pick_wh_from_candidates(filt, map_category_weights, map_id_n)
-    probs = item_db.candidate_probabilities(filt, map_category_weights, map_id_n)
-    by_wh: Dict[Tuple[int, int], float] = {}
-    for c in filt:
-        wh = shape_wh_from_snapshot(c.shape)
-        if wh is None:
-            continue
-        p = float(probs.get(c.item_id, 0.0))
-        by_wh[wh] = max(by_wh.get(wh, 0.0), p)
-    ranked = sorted(by_wh.keys(), key=lambda wh: (-by_wh[wh], wh))
-    out: List[Tuple[int, int]] = []
-    if primary is not None:
-        out.append(primary)
-    for wh in ranked:
-        if wh not in out:
-            out.append(wh)
-    return out
-
-
 def _infer_free_cells_in_prefix(
     pseudo_blocked: Set[Tuple[int, int]],
     suppress: Set[Tuple[int, int]],
@@ -185,27 +117,6 @@ def _infer_free_cells_in_prefix(
             continue
         free.add((r, c))
     return free
-
-
-def _infer_connected_free_region(
-    ar: int,
-    ac: int,
-    free: Set[Tuple[int, int]],
-) -> Set[Tuple[int, int]]:
-    """与 ``(ar,ac)`` 四连通的 ``free`` 子集；锚不在 ``free`` 时返回空集。"""
-    seed = (int(ar), int(ac))
-    if seed not in free:
-        return set()
-    region: Set[Tuple[int, int]] = {seed}
-    queue: List[Tuple[int, int]] = [seed]
-    while queue:
-        r, c = queue.pop()
-        for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
-            cell = (r + dr, c + dc)
-            if cell in free and cell not in region:
-                region.add(cell)
-                queue.append(cell)
-    return region
 
 
 def _infer_solid_rectangle_bbox(
@@ -231,53 +142,370 @@ def _infer_solid_rectangle_bbox(
     return (w, h, min_c, min_r)
 
 
-def _infer_try_q56_rectangular_vacant_fill(
+def _infer_restore_occupied_empty(
+    occupied_cells: Set[Tuple[int, int]],
+) -> InferShapesResult:
+    base = set(occupied_cells)
+    occupied_cells.clear()
+    occupied_cells.update(base)
+    return InferShapesResult({}, frozenset())
+
+
+def _infer_phantom_absorbable(
+    puid: str,
+    phantom_rects: Mapping[str, Tuple[int, int, int, int]],
+    *,
+    inferred_occ: Set[Tuple[int, int]],
+    rects: Mapping[str, Tuple[int, int, int, int]],
+    uid: str,
+) -> bool:
+    """幽灵须未被先前品质批次推断占用，且未与他件当前推断矩形重叠。"""
+    cells = rect_cells_wh(*phantom_rects[str(puid)])
+    if cells & inferred_occ:
+        return False
+    for ouid, rect in rects.items():
+        if ouid == uid:
+            continue
+        if cells & rect_cells_wh(*rect):
+            return False
+    return True
+
+
+def _infer_sets_orthogonally_adjacent(
+    a: Set[Tuple[int, int]],
+    b: Set[Tuple[int, int]],
+) -> bool:
+    for r, c in a:
+        for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            if (r + dr, c + dc) in b:
+                return True
+    return False
+
+
+def _infer_anchor_inside_rect(
+    ar: int,
+    ac: int,
+    rect: Tuple[int, int, int, int],
+    *,
+    box_id_confirmed: bool,
+) -> bool:
+    w, h, dc, dr = rect
+    if box_id_confirmed:
+        return int(dr) == int(ar) and int(dc) == int(ac)
+    return int(dr) <= int(ar) < int(dr) + int(h) and int(dc) <= int(ac) < int(dc) + int(w)
+
+
+def _infer_filt_has_shape_wh(filt: List[Any], w: int, h: int) -> bool:
+    wh = (int(w), int(h))
+    for c in filt:
+        cwh = shape_wh_from_snapshot(c.shape)
+        if cwh == wh:
+            return True
+    return False
+
+
+def _infer_phantom_quality_undetermined(
+    uid: str,
+    k: ItemKnowledge,
+    phantom_quality_pref: Mapping[str, Any],
+) -> bool:
+    """手画幽灵品质未定时（推断笔或无显式档位）可与日志物品合并扩充。"""
+    pref = phantom_quality_pref.get(uid)
+    if pref == PHANTOM_Q_INFER:
+        return True
+    if isinstance(pref, str) and pref.strip() == PHANTOM_Q_INFER:
+        return True
+    if phantom_quality_pref_explicit_quality(pref) is not None:
+        return False
+    return k.quality is None
+
+
+def _infer_undetermined_phantom_peer_rects(
+    phantom_items: Mapping[str, ItemKnowledge],
+    manual_shapes: Mapping[str, Tuple[int, int, int, int]],
+    phantom_quality_pref: Mapping[str, Any],
+) -> Dict[str, Tuple[int, int, int, int]]:
+    out: Dict[str, Tuple[int, int, int, int]] = {}
+    for uid, k in phantom_items.items():
+        suid = str(uid)
+        if suid not in manual_shapes:
+            continue
+        if not _infer_phantom_quality_undetermined(suid, k, phantom_quality_pref):
+            continue
+        rect = manual_shapes[suid]
+        out[suid] = (int(rect[0]), int(rect[1]), int(rect[2]), int(rect[3]))
+    return out
+
+
+def _infer_merge_expand_options(
     ar: int,
     ac: int,
     *,
     box_id_confirmed: bool,
-    cand_wh: Set[Tuple[int, int]],
-    pseudo_blocked: Set[Tuple[int, int]],
+    w: int,
+    h: int,
+    dc: int,
+    dr: int,
+    vacant: Set[Tuple[int, int]],
+    peer_rects: Mapping[str, Tuple[int, int, int, int]],
+    phantom_peer_rects: Mapping[str, Tuple[int, int, int, int]],
+) -> List[Tuple[Tuple[int, int, int, int], Set[str], Set[str]]]:
+    """
+    从当前矩形出发，尝试与一侧空置条带、同品质邻接矩形或品质未定幽灵格合并。
+    返回 ``(新矩形, 被吸收的同品质 uid, 被吸收的品质未定幽灵 uid)``。
+    """
+    cur = rect_cells_wh(w, h, dc, dr)
+    opts: List[Tuple[Tuple[int, int, int, int], Set[str], Set[str]]] = []
+
+    def _try_strip(
+        edge: Set[Tuple[int, int]],
+        new_rect: Tuple[int, int, int, int],
+    ) -> None:
+        if not edge or not all(cell in vacant for cell in edge):
+            return
+        if not _infer_anchor_inside_rect(ar, ac, new_rect, box_id_confirmed=box_id_confirmed):
+            return
+        opts.append((new_rect, set(), set()))
+
+    def _try_peer_union(
+        puid: str,
+        peer: Tuple[int, int, int, int],
+        *,
+        as_phantom: bool,
+    ) -> None:
+        pw, ph, pdc, pdr = peer
+        pcells = rect_cells_wh(pw, ph, pdc, pdr)
+        if not _infer_sets_orthogonally_adjacent(cur, pcells):
+            return
+        bbox = _infer_solid_rectangle_bbox(cur | pcells)
+        if bbox is None:
+            return
+        if not _infer_anchor_inside_rect(ar, ac, bbox, box_id_confirmed=box_id_confirmed):
+            return
+        if as_phantom:
+            opts.append((bbox, set(), {str(puid)}))
+        else:
+            opts.append((bbox, {str(puid)}, set()))
+
+    if int(dc) + int(w) < GRID_COLS:
+        _try_strip(
+            {(r, int(dc) + int(w)) for r in range(int(dr), int(dr) + int(h))},
+            (int(w) + 1, int(h), int(dc), int(dr)),
+        )
+    if int(dc) > 0:
+        _try_strip(
+            {(r, int(dc) - 1) for r in range(int(dr), int(dr) + int(h))},
+            (int(w) + 1, int(h), int(dc) - 1, int(dr)),
+        )
+    if int(dr) + int(h) < GRID_ROWS:
+        _try_strip(
+            {(int(dr) + int(h), c) for c in range(int(dc), int(dc) + int(w))},
+            (int(w), int(h) + 1, int(dc), int(dr)),
+        )
+    if int(dr) > 0:
+        _try_strip(
+            {(int(dr) - 1, c) for c in range(int(dc), int(dc) + int(w))},
+            (int(w), int(h) + 1, int(dc), int(dr) - 1),
+        )
+
+    for puid, peer in peer_rects.items():
+        _try_peer_union(puid, peer, as_phantom=False)
+
+    for puid, peer in phantom_peer_rects.items():
+        _try_peer_union(puid, peer, as_phantom=True)
+
+    return opts
+
+
+def _infer_merge_rect_feasible(
+    new_rect: Tuple[int, int, int, int],
+    *,
+    uid: str,
+    absorbed_uids: Set[str],
+    absorbed_phantom_uids: Set[str],
+    phantom_rects: Mapping[str, Tuple[int, int, int, int]],
+    rects: Mapping[str, Tuple[int, int, int, int]],
+    anchors: Mapping[str, Tuple[int, int]],
+    baseline_occ: Set[Tuple[int, int]],
+    inferred_occ: Set[Tuple[int, int]],
+    manual_shapes: Mapping[str, Tuple[int, int, int, int]],
+    items_by_uid: Mapping[str, ItemKnowledge],
     suppress: Set[Tuple[int, int]],
     max_bid: int,
-) -> Optional[Tuple[int, int, int, int]]:
-    """
-    锚点所在四连通空置区为完整矩形、且 CSV 候选含该区 ``(w,h)`` 时，直接以该区外接矩形占领。
+) -> bool:
+    w, h, dc, dr = new_rect
+    new_cells = rect_cells_wh(w, h, dc, dr)
+    blocked = set(baseline_occ) | set(inferred_occ)
+    for ouid, rect in rects.items():
+        if ouid == uid or ouid in absorbed_uids:
+            continue
+        blocked |= rect_cells_wh(*rect)
+    for puid in absorbed_uids:
+        ar_p, ac_p = anchors[str(puid)]
+        blocked.add((int(ar_p), int(ac_p)))
+    for puid in absorbed_phantom_uids:
+        pw, ph, pdc, pdr = phantom_rects[str(puid)]
+        ph_cells = rect_cells_wh(pw, ph, pdc, pdr)
+        blocked -= ph_cells - inferred_occ
 
-    ``box_id_confirmed`` 时顶左须为 ``(ar,ac)``；未确认时顶左为外接矩形左上角（锚必落在矩形内）。
-    """
-    free = _infer_free_cells_in_prefix(pseudo_blocked, suppress, max_bid)
-    region = _infer_connected_free_region(ar, ac, free)
-    if not region:
-        return None
-    bbox = _infer_solid_rectangle_bbox(region)
-    if bbox is None:
-        return None
-    w, h, dc, dr = bbox
-    if (w, h) not in cand_wh:
-        return None
-    if box_id_confirmed and (dr != ar or dc != ac):
-        return None
-    if not box_id_confirmed and not (dr <= ar < dr + h and dc <= ac < dc + w):
-        return None
-    if not _infer_rect_feasible(dr, dc, dr + h - 1, dc + w - 1, pseudo_blocked, suppress, max_bid):
-        return None
-    return (w, h, dr, dc)
+    k = items_by_uid[str(uid)]
+    self_base = _infer_base_occupied_cells_for_uid(uid, k, manual_shapes)
+    allowed = set(self_base)
+    for puid in absorbed_uids:
+        ar_p, ac_p = anchors[str(puid)]
+        allowed.add((int(ar_p), int(ac_p)))
+    for puid in absorbed_phantom_uids:
+        pw, ph, pdc, pdr = phantom_rects[str(puid)]
+        allowed.add((int(pdr), int(pdc)))
+    pseudo = _infer_pseudo_blocked(blocked, set(), allowed)
+    return _infer_rect_feasible(
+        int(dr),
+        int(dc),
+        int(dr) + int(h) - 1,
+        int(dc) + int(w) - 1,
+        pseudo,
+        suppress,
+        max_bid,
+    )
 
 
-def _q56_overlay_wh_sort_key(wh: Tuple[int, int]) -> Tuple[int, int, float, int, int]:
+def _infer_iterative_merge_expand_batch(
+    batch: List[Tuple[str, ItemKnowledge, List[Any], int, int, bool]],
+    *,
+    baseline_occ: Set[Tuple[int, int]],
+    inferred_occ: Set[Tuple[int, int]],
+    manual_shapes: Mapping[str, Tuple[int, int, int, int]],
+    phantom_peer_rects: Mapping[str, Tuple[int, int, int, int]],
+    consumed_phantoms: Set[str],
+    suppress: Set[Tuple[int, int]],
+    max_bid: int,
+) -> Dict[str, Tuple[int, int, int, int]]:
     """
-    金红 ``use_rect_q56`` 路径下 ``(w,h)`` 的尝试顺序（升序 = 优先）。
+    第 4 回合后：各件自 1×1 起，反复与空置格、同品质邻接矩形或品质未定幽灵格合并，直至无法扩大。
+    """
+    if not batch:
+        return {}
+    rects: Dict[str, Tuple[int, int, int, int]] = {}
+    anchors: Dict[str, Tuple[int, int]] = {}
+    confirmed: Dict[str, bool] = {}
+    filts: Dict[str, List[Any]] = {}
+    items_by_uid: Dict[str, ItemKnowledge] = {}
+    for uid, k, filt, ar, ac, confirmed_tl in batch:
+        suid = str(uid)
+        rects[suid] = (1, 1, int(ac), int(ar))
+        anchors[suid] = (int(ar), int(ac))
+        confirmed[suid] = bool(confirmed_tl)
+        filts[suid] = filt
+        items_by_uid[suid] = k
 
-    在面积基础上兼顾外形：同面积时更「方」的矩形优先于 ``1×n`` / ``n×1`` 长条；
-    且 ``min(w,h)==1`` 且 ``max(w,h) > 4`` 的长条整段置后。
-    """
-    w, h = int(wh[0]), int(wh[1])
-    a = w * h
-    lo, hi = (w, h) if w <= h else (h, w)
-    long_line = 1 if lo == 1 and hi > 4 else 0
-    aspect_pen = (hi / lo) - 1.0 if lo > 0 else float("inf")
-    return (long_line, -a, aspect_pen, w, h)
+    phantoms_absorbed_by: Dict[str, Set[str]] = {}
+    phantom_rects = dict(phantom_peer_rects)
+
+    while True:
+        occ_rects: Set[Tuple[int, int]] = set()
+        for rect in rects.values():
+            occ_rects |= rect_cells_wh(*rect)
+        vacant = _infer_free_cells_in_prefix(
+            baseline_occ | inferred_occ | occ_rects,
+            suppress,
+            max_bid,
+        )
+
+        best_key: Optional[Tuple[int, ...]] = None
+        best_apply: Optional[
+            Tuple[str, Tuple[int, int, int, int], Set[str], Set[str]]
+        ] = None
+
+        active_phantoms = {
+            u: r for u, r in phantom_rects.items() if u not in consumed_phantoms
+        }
+
+        for uid in sorted(rects.keys()):
+            w, h, dc, dr = rects[uid]
+            ar, ac = anchors[uid]
+            peers = {u: r for u, r in rects.items() if u != uid}
+            for new_rect, absorbed, absorbed_ph in _infer_merge_expand_options(
+                ar,
+                ac,
+                box_id_confirmed=confirmed[uid],
+                w=w,
+                h=h,
+                dc=dc,
+                dr=dr,
+                vacant=vacant,
+                peer_rects=peers,
+                phantom_peer_rects=active_phantoms,
+            ):
+                if any(
+                    not _infer_phantom_absorbable(
+                        puid,
+                        phantom_rects,
+                        inferred_occ=inferred_occ,
+                        rects=rects,
+                        uid=uid,
+                    )
+                    for puid in absorbed_ph
+                ):
+                    continue
+                nw, nh, _, _ = new_rect
+                if not _infer_filt_has_shape_wh(filts[uid], nw, nh):
+                    continue
+                if not _infer_merge_rect_feasible(
+                    new_rect,
+                    uid=uid,
+                    absorbed_uids=absorbed,
+                    absorbed_phantom_uids=absorbed_ph,
+                    phantom_rects=phantom_rects,
+                    rects=rects,
+                    anchors=anchors,
+                    baseline_occ=baseline_occ,
+                    inferred_occ=inferred_occ,
+                    manual_shapes=manual_shapes,
+                    items_by_uid=items_by_uid,
+                    suppress=suppress,
+                    max_bid=max_bid,
+                ):
+                    continue
+                gain = int(nw) * int(nh) - int(w) * int(h)
+                key = (int(gain), int(nw) * int(nh), uid)
+                if best_key is None or key > best_key:
+                    best_key = key
+                    best_apply = (uid, new_rect, absorbed, absorbed_ph)
+
+        if best_apply is None:
+            break
+        uid, new_rect, absorbed, absorbed_ph = best_apply
+        rects[uid] = new_rect
+        for puid in absorbed:
+            ar_p, ac_p = anchors[puid]
+            rects[puid] = (1, 1, int(ac_p), int(ar_p))
+        if absorbed_ph:
+            consumed_phantoms |= absorbed_ph
+            phantoms_absorbed_by.setdefault(uid, set()).update(absorbed_ph)
+
+    out: Dict[str, Tuple[int, int, int, int]] = {}
+    for uid, rect in rects.items():
+        w, h, dc, dr = rect
+        if not _infer_filt_has_shape_wh(filts[uid], w, h):
+            continue
+        if not _infer_merge_rect_feasible(
+            rect,
+            uid=uid,
+            absorbed_uids=set(),
+            absorbed_phantom_uids=phantoms_absorbed_by.get(uid, set()),
+            phantom_rects=phantom_rects,
+            rects=rects,
+            anchors=anchors,
+            baseline_occ=baseline_occ,
+            inferred_occ=inferred_occ,
+            manual_shapes=manual_shapes,
+            items_by_uid=items_by_uid,
+            suppress=suppress,
+            max_bid=max_bid,
+        ):
+            continue
+        out[uid] = rect
+    return out
 
 
 def _infer_unknown_contour_item_eligible(
@@ -351,11 +579,10 @@ def _infer_default_placement_candidates(
     box_id_confirmed: bool,
 ) -> List[Tuple[int, int]]:
     """
-    默认推断路径下矩形左上角 ``(dr, dc)``（行、列）候选。
+    矩形左上角 ``(dr, dc)``（行、列）候选（供 UI 扩展等复用）。
 
     ``box_id_confirmed=True`` 时 BoxId 为顶左格，仅 ``(ar, ac)``；
-    否则 BoxId 仅为占格内某一命中格（见 :class:`ItemKnowledge`），枚举所有使 ``(ar,ac)``
-    落在 ``w×h`` 矩形内的顶左，按 ``(dr, dc)`` 字典序优先以便稳定输出。
+    否则枚举所有使 ``(ar,ac)`` 落在 ``w×h`` 矩形内的顶左。
     """
     if box_id_confirmed:
         return [(ar, ac)]
@@ -371,6 +598,9 @@ def _infer_default_placement_candidates(
     return opts
 
 
+_MERGE_EXPAND_QUALITY_ORDER: Tuple[int, ...] = (5, 6, 4, 3, 2, 1)
+
+
 def compute_grid_overlay_infer_shapes(
     *,
     game_state: GameState,
@@ -379,50 +609,47 @@ def compute_grid_overlay_infer_shapes(
     vacant_manual_suppress: Set[Tuple[int, int]],
     max_box_id: int,
     raw_pricing: Dict[str, Any],
+    phantom_items: Optional[Mapping[str, ItemKnowledge]] = None,
+    phantom_quality_pref: Optional[Mapping[str, Any]] = None,
     infer_unknown_contour_shapes: bool = True,
-) -> Dict[str, List[int]]:
+    current_round: int = 1,
+) -> InferShapesResult:
     """
     对 **品质已知、轮廓未知** 且未手动画框的日志物品，估计 ``[w,h,dc,dr]``（与 ``manual_shapes`` 同形）。
 
-    ``infer_unknown_contour_shapes=False`` 时（可由 ``configs`` 里 ``pricing.infer_unknown_contour_shapes`` 关闭）
-    不读价库、不做推断，返回 ``{}``；``occupied_cells`` 保持为传入的基底占位（与有推断时最终不含推断格的效果一致）。
+    第 4 回合前不做任何轮廓扩充。第 4 回合起与空格自动填充共用开关（``pricing.infer_vacant_rect_phantoms``）；
+    须在空格填充占位已并入 ``occupied_cells`` 之后再调用本函数。
 
-    - 默认：在权重期望价 ±20% 价带内的 CSV 候选中取掉落概率最高者定 ``(w,h)``；
-      价带为空时回退为全候选按概率。
-      **原点**：``box_id_confirmed`` 时 BoxId 即顶左；**未确认** 时 BoxId 仅为占格内某一命中格，
-      枚举所有包含该格的 ``w×h`` 顶左位置，再按阻挡约束取可行解（``(dr,dc)`` 字典序优先）。
-      矩形须完全落在 ``max_box_id`` 前缀区内，且不与 ``vacant_manual_suppress`` 相交；
-      与其它物品的冲突：基底占位中他人的锚格/已确认格 **以及** 本轮中先前物品已推断出的矩形并集；
-      仅允许覆盖当前物品自身的基底占位格（通常为锚格），但若该格已被先前推断占用则不可再放。
-      首选外形不满足时按掉落概率依次尝试其余候选外形，仍无解则跳过该件推断。
-    - 当 ``raw_pricing.event_stats`` 中低档总格 **q12+q3+q4** 齐备（或 ``q1+q2+q3+q4`` 等价已知），且扫描史已覆盖品质
-      1–4、场上 Q1–Q4 物品轮廓与锚格均已锁定时：对 **金 (5)、红 (6)** 在已有 CSV 候选（与默认路径相同的 ``filter_csv_candidates_for_query`` 结果非空）前提下，
-      **优先**：锚点四连通空置区（相对当前 ``pseudo_blocked`` / 手动画板抑制 / ``max_box_id`` 前缀，无其它物品占位）若恰为实心矩形且候选含该区 ``(w,h)``，则直接以该外接矩形占领；
-      否则将候选去重为 ``(w,h)`` 集合，再按 **面积与长宽比综合**（更大面积优先；同面积时更偏方块优先于 ``1×n``/``n×1`` 长条；``1×n``/``n×1`` 且 ``n>4`` 的长条整段置后；再 ``(w,h)`` 字典序稳定）在阻挡语义与 ``max_box_id`` 下尝试放置（与默认路径相同的 ``box_id_confirmed`` 顶左/枚举规则），
-      取 **首个可行** 者；若均不可行则跳过该件（与低档件无解时一致）。
-      金优先于红；每推断成功一件即将其矩形并入后续件的阻挡集。
+    ``infer_unknown_contour_shapes=False`` 时（与空置自动填充开关一致）返回空 ``InferShapesResult``。
+
+    当 ``raw_pricing.event_stats`` 低档总格齐备、扫描史已覆盖 Q1–Q4 且低阶轮廓已锁定时：
+    各件自 **1×1** 锚格起，按品质批次（金 → 红 → 紫 → …）反复与四邻空置格、同品质邻接推断矩形或
+    品质未定幽灵格合并；仅当合并后外形在 CSV 候选中且几何可行时才采纳，直至全局无法再扩大。
     """
     if not infer_unknown_contour_shapes:
-        base = set(occupied_cells)
-        occupied_cells.clear()
-        occupied_cells.update(base)
-        return {}
+        return _infer_restore_occupied_empty(occupied_cells)
+    if int(current_round) < AISHA_VACANT_RECT_INFER_ROUND:
+        return _infer_restore_occupied_empty(occupied_cells)
     csv_index, csv_items = _load_item_prices_db()
     if not csv_items:
         return {}
-    mid_raw = int(game_state.map_id or 0) or None
-    mid_n = item_db.normalize_map_id(mid_raw)
-    map_w = item_db.map_category_ratios(mid_raw) if mid_raw else None
-    if not map_w:
-        map_w = None
 
-    use_rect_q56 = _event_stats_q14_grid_counts_all_known(raw_pricing) and _infer_q1234_scan_and_q14_contours_ready(
+    use_merge_expand = _event_stats_q14_grid_counts_all_known(raw_pricing) and _infer_q1234_scan_and_q14_contours_ready(
         game_state, manual_shapes
     )
+    if not use_merge_expand:
+        return _infer_restore_occupied_empty(occupied_cells)
+
     sup = set(vacant_manual_suppress)
     mx = int(max_box_id)
     baseline_occ: Set[Tuple[int, int]] = set(occupied_cells)
     inferred_occ: Set[Tuple[int, int]] = set()
+    phantom_peer_rects = _infer_undetermined_phantom_peer_rects(
+        phantom_items or {},
+        manual_shapes,
+        phantom_quality_pref or {},
+    )
+    consumed_phantoms: Set[str] = set()
 
     targets: List[Tuple[str, ItemKnowledge, int]] = []
     for uid, k in game_state.items.items():
@@ -434,17 +661,7 @@ def compute_grid_overlay_infer_shapes(
             continue
         targets.append((str(uid), k, q))
 
-    def _sort_key(t: Tuple[str, ItemKnowledge, int]) -> Tuple[Any, ...]:
-        u, k, qq = t
-        bid = int(k.box_id or 0)
-        if use_rect_q56 and qq == 5:
-            return (0, bid, u)
-        if use_rect_q56 and qq == 6:
-            return (1, bid, u)
-        return (2, qq, bid, u)
-
-    targets.sort(key=_sort_key)
-    out: Dict[str, List[int]] = {}
+    quality_batches: Dict[int, List[Tuple[str, ItemKnowledge, List[Any], int, int, bool]]] = {}
     for uid, k, q in targets:
         try:
             item_cid_i = int(k.item_cid) if k.item_cid is not None else None
@@ -466,61 +683,36 @@ def compute_grid_overlay_infer_shapes(
             continue
         bid_i = int(k.box_id)
         ar, ac = bid_i // GRID_COLS, bid_i % GRID_COLS
-        self_base = _infer_base_occupied_cells_for_uid(uid, k, manual_shapes)
-        pseudo_blocked = _infer_pseudo_blocked(baseline_occ, inferred_occ, self_base)
-        if use_rect_q56 and q in (5, 6):
-            confirmed_tl = bool(getattr(k, "box_id_confirmed", False))
-            cand_wh: Set[Tuple[int, int]] = set()
-            for c in filt:
-                wh = shape_wh_from_snapshot(c.shape)
-                cand_wh.add(wh)
-            ordered_wh = sorted(cand_wh, key=_q56_overlay_wh_sort_key)
-            chosen_q56 = _infer_try_q56_rectangular_vacant_fill(
-                ar,
-                ac,
-                box_id_confirmed=confirmed_tl,
-                cand_wh=cand_wh,
-                pseudo_blocked=pseudo_blocked,
-                suppress=sup,
-                max_bid=mx,
-            )
-            if chosen_q56 is None:
-                for w, h in ordered_wh:
-                    for dr, dc in _infer_default_placement_candidates(
-                        ar, ac, w, h, box_id_confirmed=confirmed_tl
-                    ):
-                        if _infer_rect_feasible(dr, dc, dr + h - 1, dc + w - 1, pseudo_blocked, sup, mx):
-                            chosen_q56 = (w, h, dr, dc)
-                            break
-                    if chosen_q56 is not None:
-                        break
-            if chosen_q56 is None:
-                continue
-            w, h, dr, dc = chosen_q56
+        confirmed_tl = bool(getattr(k, "box_id_confirmed", False))
+        quality_batches.setdefault(int(q), []).append(
+            (uid, k, filt, int(ar), int(ac), confirmed_tl)
+        )
+
+    out: Dict[str, List[int]] = {}
+    ordered_qualities = list(_MERGE_EXPAND_QUALITY_ORDER) + sorted(
+        q for q in quality_batches if q not in _MERGE_EXPAND_QUALITY_ORDER
+    )
+    for qq in ordered_qualities:
+        batch = quality_batches.get(int(qq))
+        if not batch:
+            continue
+        merged = _infer_iterative_merge_expand_batch(
+            batch,
+            baseline_occ=baseline_occ,
+            inferred_occ=inferred_occ,
+            manual_shapes=manual_shapes,
+            phantom_peer_rects=phantom_peer_rects,
+            consumed_phantoms=consumed_phantoms,
+            suppress=sup,
+            max_bid=mx,
+        )
+        for uid, (w, h, dc, dr) in merged.items():
             out[uid] = [w, h, int(dc), int(dr)]
             for ddr in range(h):
                 for ddc in range(w):
                     inferred_occ.add((dr + ddr, dc + ddc))
-        else:
-            confirmed_tl = bool(getattr(k, "box_id_confirmed", False))
-            chosen_tpl: Optional[Tuple[int, int, int, int]] = None
-            for w, h in _infer_ordered_wh_for_default_infer(filt, map_w, mid_n):
-                for dr, dc in _infer_default_placement_candidates(
-                    ar, ac, w, h, box_id_confirmed=confirmed_tl
-                ):
-                    if _infer_rect_feasible(dr, dc, dr + h - 1, dc + w - 1, pseudo_blocked, sup, mx):
-                        chosen_tpl = (w, h, dr, dc)
-                        break
-                if chosen_tpl is not None:
-                    break
-            if chosen_tpl is None:
-                continue
-            w, h, dr, dc = chosen_tpl
-            out[uid] = [w, h, int(dc), int(dr)]
-            for ddr in range(h):
-                for ddc in range(w):
-                    inferred_occ.add((dr + ddr, dc + ddc))
+
     occupied_cells.clear()
     occupied_cells.update(baseline_occ)
     occupied_cells.update(inferred_occ)
-    return out
+    return InferShapesResult(out, frozenset(consumed_phantoms))

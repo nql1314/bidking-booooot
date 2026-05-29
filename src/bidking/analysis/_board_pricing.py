@@ -50,7 +50,12 @@ import time
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from ..parsing import item_db
-from ..parsing.item_db import _weighted_est_price, map_category_ratios, query_item
+from ..parsing.item_db import (
+    _weighted_est_price,
+    map_category_ratios,
+    query_item,
+    weighted_est_max_item_base_value,
+)
 from . import grid_overlay as _grid_overlay
 from . import strategy as _strategy
 from ..logsys.perf_log import perf_log_elapsed
@@ -226,7 +231,12 @@ def _item_value(
                 cand = wa
         if excl_c:
             cand = [i for i in cand if not any(c in excl_c for c in i.category_tags)]
-        w_est = _weighted_est_price(cand, map_category_weights or None, map_id_normalized)
+        w_est = _weighted_est_price(
+            cand,
+            map_category_weights or None,
+            map_id_normalized,
+            max_item_base_value=weighted_est_max_item_base_value(sh),
+        )
     result = float(w_est) if w_est is not None else float(best.base_value)
     perf_log_elapsed("_item_value (weighted)", t0)
     return result

@@ -78,7 +78,10 @@ from ...analysis._board_pricing import (
     build_snapshot_pricing_dict,
     estimate_snapshot_item_price_for_uid,
 )
-from ...analysis.phantom_pricing_ui_sync import sync_phantom_items_from_overlay_after_pricing
+from ...analysis.phantom_pricing_ui_sync import (
+    clear_phantom_auto_resolution_on_item,
+    sync_phantom_items_from_overlay_after_pricing,
+)
 from ...analysis import grid_overlay as _grid_overlay
 from ...analysis.raw_pricing import (
     build_raw_pricing_dict,
@@ -89,7 +92,6 @@ from ...analysis.raw_pricing import (
 from ...analysis.snapshot import game_state_to_json, item_knowledge_to_json
 from ...config.runtime import (
     infer_fraud_empty_cells_algorithm_and_trim,
-    infer_unknown_contour_shapes_enabled,
     infer_vacant_rect_phantoms_enabled,
     load_runtime,
 )
@@ -856,9 +858,6 @@ class GridWindow:
         self._grid_avg_infer_max_grid_count = resolve_grid_avg_infer_max_grid_count(
             pricing_dict=_pricing_rt if isinstance(_pricing_rt, dict) else {}
         )
-        self._infer_unknown_contour_shapes = infer_unknown_contour_shapes_enabled(
-            _rt_cfg
-        )
         self._runtime_raw = _rt_cfg.raw
 
         # 实时 tail：关闭画板或返回主页时置位，供后台线程退出
@@ -888,6 +887,7 @@ class GridWindow:
         self._manual_shapes: Dict[str, Tuple[int, int, int, int]] = {}
         # 推算轮廓（与快照 grid_overlay.infer_shapes 同源）；手动画框优先覆盖
         self._infer_shapes: Dict[str, Tuple[int, int, int, int]] = {}
+        self._infer_absorbed_phantoms: Set[str] = set()
         # 用户右键取消「推算扩框」的 uid；``_sync_infer_shapes_from_analysis`` 与快照导出均会剔除
         self._infer_suppress_uids: Set[str] = set()
         # 用户右键取消的 ``phantom_vac_*``；重绘重算时不再自动补回
@@ -914,6 +914,7 @@ class GridWindow:
         self._phantom_items: Dict[str, ItemKnowledge] = {}
         # 幽灵品质偏好：无键=金默认（Q5）；PHANTOM_Q_INFER=原推断；否则为显式 Q1–Q6
         self._phantom_quality_pref: Dict[str, Union[int, str]] = {}
+        self._phantom_quality_user_locked: Set[str] = set()
         self._phantom_pricing_busy = False
         # 日志物品品质未知（非幽灵）：手选 Q1–Q6 筛选候选；无键=不限品质
         self._unknown_cell_quality_pref: Dict[str, int] = {}
@@ -1043,6 +1044,16 @@ class GridWindow:
         out.update(self._manual_shapes)
         return out
 
+    def _phantom_items_for_occupancy(self) -> Dict[str, ItemKnowledge]:
+        """占位/定价用：已被日志 ``infer_shapes`` 吸收的幽灵不再单独计格。"""
+        if not self._infer_absorbed_phantoms:
+            return self._phantom_items
+        return {
+            uid: pk
+            for uid, pk in self._phantom_items.items()
+            if uid not in self._infer_absorbed_phantoms
+        }
+
     def _occupied_cells_for_overlay_infer(self) -> Set[Tuple[int, int]]:
         """
         计算 ``infer_shapes`` 时用的占位图：不含推算矩形（避免互依赖），
@@ -1061,6 +1072,13 @@ class GridWindow:
             ),
         )
 
+    def _infer_round4_auto_fill_active(self) -> bool:
+        """第 4 回合起：空格自动填充 + 已知品质未知轮廓扩充共用开关。"""
+        return infer_vacant_rect_phantoms_enabled(
+            self._runtime_raw,
+            current_round=int(self.state.current_round or 1),
+        )
+
     def _sync_infer_shapes_from_analysis(self) -> None:
         """按当前局面刷新 ``_infer_shapes``（与 ``build_grid_overlay_export_dict`` 中 infer 一致）。"""
         rp = build_raw_pricing_dict(
@@ -1072,8 +1090,14 @@ class GridWindow:
             grid_avg_infer_max_grid_count=self._grid_avg_infer_max_grid_count,
         )
         self._last_raw_pricing = rp
+        if not self._infer_round4_auto_fill_active():
+            self._purge_auto_vacant_rect_phantoms()
+            self._infer_shapes = {}
+            self._infer_absorbed_phantoms = set()
+            return
+        self._sync_vacant_rect_phantoms_from_analysis(rp)
         occ = self._occupied_cells_for_overlay_infer()
-        raw = _grid_overlay.compute_grid_overlay_infer_shapes(
+        infer_result = _grid_overlay.compute_grid_overlay_infer_shapes(
             game_state=self.state,
             manual_shapes=self._manual_shapes,
             occupied_cells=set(occ),
@@ -1082,14 +1106,18 @@ class GridWindow:
                 self.state.items, self._phantom_items
             ),
             raw_pricing=rp,
-            infer_unknown_contour_shapes=self._infer_unknown_contour_shapes,
+            phantom_items=self._phantom_items,
+            phantom_quality_pref=self._phantom_quality_pref,
+            infer_unknown_contour_shapes=self._infer_round4_auto_fill_active(),
+            current_round=int(self.state.current_round or 1),
         )
+        raw = infer_result.shapes
+        self._infer_absorbed_phantoms = set(infer_result.absorbed_phantom_uids)
         self._infer_shapes = {
             str(uid): (int(t[0]), int(t[1]), int(t[2]), int(t[3]))
             for uid, t in raw.items()
             if len(t) >= 4 and str(uid) not in self._infer_suppress_uids
         }
-        self._sync_vacant_rect_phantoms_from_analysis(rp)
 
     def _purge_auto_vacant_rect_phantoms(self) -> None:
         """移除上一轮自动推断的 ``phantom_vac_*``，保留用户手画幽灵。"""
@@ -1123,13 +1151,6 @@ class GridWindow:
             fraud_empty_cells_tiling_n=self._fraud_empty_cells_tiling_n,
         )
 
-    def _infer_vacant_rect_phantoms_active(self) -> bool:
-        """配置开启且当前为第 4 回合及之后才做空置矩形自动幽灵。"""
-        return infer_vacant_rect_phantoms_enabled(
-            self._runtime_raw,
-            current_round=int(self.state.current_round or 1),
-        )
-
     def _sync_vacant_rect_phantoms_from_analysis(
         self, raw_pricing: Dict[str, Any]
     ) -> None:
@@ -1137,7 +1158,7 @@ class GridWindow:
         艾莎第 4 回合及之后：空置闭合矩形 → 自动幽灵 + 手动画框；
         候选唯一品质/唯一物品时自动补齐。
         """
-        if not self._infer_vacant_rect_phantoms_active():
+        if not self._infer_round4_auto_fill_active():
             self._purge_auto_vacant_rect_phantoms()
             return
         saved_auto_q = snapshot_auto_vacant_phantom_quality_prefs(
@@ -1189,9 +1210,10 @@ class GridWindow:
         """
         return _grid_overlay.build_occupied_cells(
             items=self.state.items,
-            phantom_items=self._phantom_items,
+            phantom_items=self._phantom_items_for_occupancy(),
             manual_shapes=self._manual_shapes_merged_for_occupied(),
             exclude_uid=exclude_uid,
+            exclude_phantom_uids=self._infer_absorbed_phantoms,
             item_shape_wh=lambda u, kk: self._effective_shape_wh(
                 u, kk, with_infer=True
             ),
@@ -1206,9 +1228,10 @@ class GridWindow:
             self._perf_fraud_placed_overlay_calls += 1
         return _grid_overlay.fraud_placed_items_from_build_occupied_like(
             items=self.state.items,
-            phantom_items=self._phantom_items,
+            phantom_items=self._phantom_items_for_occupancy(),
             manual_shapes=self._manual_shapes_merged_for_occupied(),
             exclude_uid="",
+            exclude_phantom_uids=self._infer_absorbed_phantoms,
             item_shape_wh=lambda u, kk: self._effective_shape_wh(
                 u, kk, with_infer=True
             ),
@@ -1216,6 +1239,13 @@ class GridWindow:
                 u, kk, with_infer=True
             ),
         )
+
+    def _apply_phantom_manual_quality_override(self, uid: str) -> None:
+        """用户手改幽灵品质偏好：清分摊写回并锁定，不再参与自动分摊（含原推断看权重）。"""
+        pk = self._phantom_items.get(uid)
+        if pk is not None:
+            clear_phantom_auto_resolution_on_item(pk)
+        self._phantom_quality_user_locked.add(uid)
 
     def _phantom_effective_quality(self, uid: str) -> Optional[int]:
         """幽灵用于筛选的品质：原推断为 None；显式 int；缺省为金 Q5（若扫描已排除 Q5 则不再强套金）。"""
@@ -1308,10 +1338,21 @@ class GridWindow:
 
     def _effective_quality_for_query(self, uid: str, k: ItemKnowledge) -> Optional[int]:
         """候选筛选 / query_item 用品质：日志已知品质优先，其次幽灵金默认/手选。"""
+        if uid in self._phantom_items:
+            pq = self._phantom_quality_pref.get(uid)
+            if pq == PHANTOM_Q_INFER:
+                return None
+            if isinstance(pq, int) and 1 <= pq <= 6:
+                if pq in (k.excluded_qualities or set()):
+                    return None
+                return pq
+            if k.quality is not None:
+                return k.quality
+            if 5 in (k.excluded_qualities or set()):
+                return None
+            return 5
         if k.quality is not None:
             return k.quality
-        if uid in self._phantom_items:
-            return self._phantom_effective_quality(uid)
         if self._unknown_quality_pref_eligible(uid, k):
             q = self._unknown_cell_quality_pref.get(uid)
             if isinstance(q, int) and 1 <= q <= 6:
@@ -1541,19 +1582,15 @@ class GridWindow:
 
     def _display_quality(self, uid: str, k: ItemKnowledge) -> Optional[int]:
         """返回用于显示的品质；候选品质唯一时也补齐显示颜色。"""
+        if uid in self._phantom_items:
+            eq = self._phantom_effective_quality(uid)
+            if eq is not None:
+                return eq
         manual_item = self._valid_manual_confirm_item(uid, k)
         if manual_item is not None:
             return manual_item.quality
         if k.quality is not None:
             return k.quality
-        if uid in self._phantom_items:
-            p = self._phantom_quality_pref.get(uid)
-            if p == PHANTOM_Q_INFER:
-                pass
-            elif isinstance(p, int) and 1 <= p <= 6:
-                return p
-            else:
-                return 5
         if self._unknown_quality_pref_eligible(uid, k):
             uq = self._unknown_cell_quality_pref.get(uid)
             if isinstance(uq, int) and 1 <= uq <= 6:
@@ -2019,10 +2056,15 @@ class GridWindow:
         self._manual_shapes[phid] = (w, h, col, row)
         if use_infer_quality:
             self._phantom_quality_pref[phid] = PHANTOM_Q_INFER
+            self._phantom_quality_user_locked.add(phid)
         elif default_phantom_quality == 6:
             self._phantom_quality_pref[phid] = 6
+            self._phantom_quality_user_locked.add(phid)
         elif default_phantom_quality is not None and 1 <= default_phantom_quality <= 5:
             self._phantom_quality_pref[phid] = default_phantom_quality
+            self._phantom_quality_user_locked.add(phid)
+        else:
+            self._phantom_quality_user_locked.add(phid)
         apply_scan_history_to_phantom_items(self._phantom_items, self.state)
         return True
 
@@ -2502,16 +2544,20 @@ class GridWindow:
             phantom_items=self._phantom_items,
             manual_shapes=self._manual_shapes,
             phantom_quality_pref=self._phantom_quality_pref,
+            phantom_quality_user_locked=self._phantom_quality_user_locked,
             unknown_cell_quality_pref=self._unknown_cell_quality_pref,
             vacant_manual_suppress=self._vacant_manual_suppress,
             occupied_cells=occ_for_infer,
             max_box_id=max_anchor_box_id_from_overlay_ui(
                 self.state.items, self._phantom_items
             ),
-            infer_unknown_contour_shapes=self._infer_unknown_contour_shapes,
+            infer_unknown_contour_shapes=self._infer_round4_auto_fill_active(),
+            current_round=int(self.state.current_round or 1),
             infer_suppress_uids=self._infer_suppress_uids,
         )
         inf = export.get("infer_shapes") or {}
+        absorbed_raw = export.get(_grid_overlay.INFER_ABSORBED_PHANTOM_UIDS_KEY) or []
+        self._infer_absorbed_phantoms = {str(u) for u in absorbed_raw}
         self._infer_shapes = {
             str(uid): (int(v[0]), int(v[1]), int(v[2]), int(v[3]))
             for uid, v in inf.items()
@@ -2716,9 +2762,11 @@ class GridWindow:
         self._phantom_draw_state = None
         self._manual_shapes.clear()
         self._infer_shapes.clear()
+        self._infer_absorbed_phantoms.clear()
         self._infer_suppress_uids.clear()
         self._auto_vacant_rect_phantom_suppress_uids.clear()
         self._phantom_quality_pref.clear()
+        self._phantom_quality_user_locked.clear()
         self._unknown_cell_quality_pref.clear()
         self._manual_shapes_restore_backup = None
         self._vacant_manual_suppress.clear()
@@ -4040,8 +4088,8 @@ class GridWindow:
                     continue
                 self._draw_item(uid, k)
 
-            # ── 3. 幽灵物品格子（手动画框）────────────────────────────────────
-            for phid, pk in self._phantom_items.items():
+            # ── 3. 幽灵物品格子（手动画框；已被 infer 吸收的不绘制）────────────────
+            for phid, pk in self._phantom_items_for_occupancy().items():
                 if phid in self._manual_shapes:
                     self._draw_item(phid, pk)
             if perf:
@@ -4472,6 +4520,7 @@ class GridWindow:
             self._phantom_items.pop(uid, None)
             self._manual_shapes.pop(uid, None)
             self._phantom_quality_pref.pop(uid, None)
+            self._phantom_quality_user_locked.discard(uid)
             self._refresh()
             return
         if uid is not None and uid in self.state.items:
@@ -4927,9 +4976,7 @@ class GridWindow:
             if max_w < GRID_COLS or max_h < GRID_ROWS:
                 hdr_parts.append(f"形状: ≤{max_w}x{max_h}（推断上界，非精确）")
         display_quality = self._display_quality(uid, k)
-        if k.quality is not None:
-            hdr_parts.append(f"品质: Q{k.quality}")
-        elif uid in self._phantom_items:
+        if uid in self._phantom_items:
             pq = self._phantom_quality_pref.get(uid)
             if pq == PHANTOM_Q_INFER:
                 if display_quality:
@@ -4940,6 +4987,8 @@ class GridWindow:
                 hdr_parts.append(f"品质: Q{pq}（幽灵指定）")
             else:
                 hdr_parts.append("品质: Q5（金默认）")
+        elif k.quality is not None:
+            hdr_parts.append(f"品质: Q{k.quality}")
         elif display_quality:
             if self._unknown_quality_pref_eligible(uid, k) and isinstance(
                 self._unknown_cell_quality_pref.get(uid), int
@@ -5017,6 +5066,7 @@ class GridWindow:
                         self._phantom_quality_pref[uid] = PHANTOM_Q_INFER
                     else:
                         self._phantom_quality_pref.pop(uid, None)
+                    self._apply_phantom_manual_quality_override(uid)
                     _phantom_q_apply_and_reopen()
 
                 tk.Checkbutton(
@@ -5051,15 +5101,19 @@ class GridWindow:
                     return
                 if val == "金默认（Q5）":
                     self._phantom_quality_pref.pop(uid, None)
+                    self._apply_phantom_manual_quality_override(uid)
                 elif val == "原推断（含金/红）":
                     self._phantom_quality_pref[uid] = PHANTOM_Q_INFER
+                    self._apply_phantom_manual_quality_override(uid)
                 elif val and val[0] == "Q" and len(val) >= 2:
                     self._phantom_quality_pref[uid] = int(val[1:])
+                    self._apply_phantom_manual_quality_override(uid)
                 else:
                     return
                 pk = self._phantom_items.get(uid)
                 if pk and not self._candidate_items_for_grid(uid, pk):
                     self._phantom_quality_pref[uid] = PHANTOM_Q_INFER
+                    self._apply_phantom_manual_quality_override(uid)
                     messagebox.showwarning(
                         "幽灵品质",
                         "当前形状/类别/扫描排除等约束下没有匹配该品质的物品，已改为「原推断」式筛选。",
@@ -5325,6 +5379,9 @@ class GridWindow:
             if item is None:
                 return
             k.manual_confirm_item_id = item.item_id
+            if uid in self._phantom_items:
+                clear_phantom_auto_resolution_on_item(k)
+                self._phantom_quality_user_locked.add(uid)
             self._refresh()
             popup.destroy()
 
@@ -5333,6 +5390,8 @@ class GridWindow:
                 popup.destroy()
                 return
             k.manual_confirm_item_id = None
+            if uid in self._phantom_items:
+                self._phantom_quality_user_locked.discard(uid)
             self._refresh()
             popup.destroy()
 

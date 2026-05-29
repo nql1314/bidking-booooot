@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Mapping, Optional, Set, Tuple
 
 from ..parsing import item_db
 from ..parsing.state import GameState, ItemKnowledge
-from .grid_overlay_dims import GRID_COLS, GRID_ROWS
+from .grid_overlay_dims import GRID_COLS, GRID_ROWS, AISHA_VACANT_RECT_INFER_ROUND, rect_cells_wh
 from .grid_overlay_infer_shapes import (
     _infer_q1234_scan_and_q14_contours_ready,
     _infer_solid_rectangle_bbox,
@@ -17,7 +17,6 @@ from .scan_inference import census_absent_qualities_from_board_snapshot
 from .strategy.common import _find_continuous_regions
 
 AUTO_VACANT_RECT_PHANTOM_PREFIX = "phantom_vac_"
-AISHA_VACANT_RECT_INFER_ROUND = 4  # 自该回合起（含第 4 回合及以后）启用
 DEFAULT_VACANT_RECT_MAX_HOLE_CELLS = 2
 DEFAULT_VACANT_RECT_MIN_BBOX_AREA = 1
 
@@ -159,7 +158,7 @@ def _event_stats_allows_quality(
 
 
 def _rect_cells(dr: int, dc: int, w: int, h: int) -> Set[Tuple[int, int]]:
-    return {(dr + ddr, dc + ddc) for ddr in range(h) for ddc in range(w)}
+    return rect_cells_wh(w, h, dc, dr)
 
 
 def _skip_bottom_boundary_1xn_vacant_phantom(
@@ -264,8 +263,8 @@ def _vacant_blocked_sides(r: int, c: int, vacant: Set[Tuple[int, int]]) -> int:
     return n
 
 
-def _pass1_temp_ghost_1x1(vacant: Set[Tuple[int, int]]) -> Set[Tuple[int, int]]:
-    """三面或四面被围住的 1×1 空格 → 临时占位（最终不输出幽灵）。"""
+def _pass1_collect_temp_ghost_1x1(vacant: Set[Tuple[int, int]]) -> Set[Tuple[int, int]]:
+    """三面或四面被围住的 1×1 空格 → 临时占位（不输出幽灵）。"""
     out: Set[Tuple[int, int]] = set()
     for cell in vacant:
         if _vacant_blocked_sides(cell[0], cell[1], vacant) >= 3:
@@ -332,6 +331,8 @@ class _VacantRectInferCtx:
 def _try_emit_rect_phantom(
     ctx: _VacantRectInferCtx,
     bbox: Tuple[int, int, int, int],
+    *,
+    block_temp_ghost: bool = True,
 ) -> bool:
     w, h, dc, dr = bbox
     if _skip_bottom_boundary_1xn_vacant_phantom(
@@ -339,7 +340,7 @@ def _try_emit_rect_phantom(
     ):
         return False
     cells = _rect_cells(dr, dc, w, h)
-    if cells & ctx.temp_ghost_1x1:
+    if block_temp_ghost and cells & ctx.temp_ghost_1x1:
         return False
     if cells & ctx.base_occupied:
         return False
@@ -390,7 +391,7 @@ def _try_emit_rect_phantom(
 
 
 def _pass_full_rect_fill(ctx: _VacantRectInferCtx) -> None:
-    """连通空置区 → 近似实心矩形幽灵（原第二轮 / 第四轮逻辑）。"""
+    """连通空置区 → 近似实心矩形幽灵。"""
     work = ctx.vacant - ctx.taken
     if not work:
         return
@@ -412,8 +413,108 @@ def _pass_full_rect_fill(ctx: _VacantRectInferCtx) -> None:
         _try_emit_rect_phantom(ctx, bbox)
 
 
+def _rect_edge_is_blocked(
+    edge_cells: List[Tuple[int, int]],
+    work: Set[Tuple[int, int]],
+) -> bool:
+    """矩形外侧整边皆非空置（含盘外缘）。"""
+    for r, c in edge_cells:
+        if 0 <= r < GRID_ROWS and 0 <= c < GRID_COLS and (r, c) in work:
+            return False
+    return True
+
+
+def _rect_snapped_blocked_edges(
+    dr: int,
+    dc: int,
+    w: int,
+    h: int,
+    work: Set[Tuple[int, int]],
+) -> int:
+    """矩形四边中，外侧整边皆非空置的边数。"""
+    n = 0
+    if _rect_edge_is_blocked([(dr - 1, c) for c in range(dc, dc + w)], work):
+        n += 1
+    if _rect_edge_is_blocked([(dr + h, c) for c in range(dc, dc + w)], work):
+        n += 1
+    if _rect_edge_is_blocked([(r, dc - 1) for r in range(dr, dr + h)], work):
+        n += 1
+    if _rect_edge_is_blocked([(r, dc + w) for r in range(dr, dr + h)], work):
+        n += 1
+    return n
+
+
+def _three_sided_rect_candidates(
+    work: Set[Tuple[int, int]],
+    local: Set[Tuple[int, int]],
+    seeds: Set[Tuple[int, int]],
+    *,
+    min_bbox_area: int,
+) -> List[Tuple[int, int, int, int]]:
+    """在 ``local`` 内、外侧相对 ``work`` 三面贴边且覆盖 ``seeds`` 的矩形，按面积降序。"""
+    if not local or not seeds:
+        return []
+    rows = [r for r, _ in local]
+    cols = [c for _, c in local]
+    min_r, max_r = min(rows), max(rows)
+    min_c, max_c = min(cols), max(cols)
+
+    ranked: List[Tuple[int, int, Tuple[int, int, int, int]]] = []
+    for dr in range(min_r, max_r + 1):
+        for dc in range(min_c, max_c + 1):
+            for h in range(1, max_r - dr + 2):
+                for w in range(1, max_c - dc + 2):
+                    area = w * h
+                    if area < min_bbox_area:
+                        continue
+                    cells = _rect_cells(dr, dc, w, h)
+                    if not cells <= local:
+                        continue
+                    if not cells & seeds:
+                        continue
+                    snapped = _rect_snapped_blocked_edges(dr, dc, w, h, work)
+                    if snapped < 3:
+                        continue
+                    ranked.append((area, snapped, (w, h, dc, dr)))
+
+    ranked.sort(key=lambda item: (-item[0], -item[1]))
+    return [item[2] for item in ranked]
+
+
+def _three_sided_fill_scope_recursive(
+    ctx: _VacantRectInferCtx,
+    scope: Set[Tuple[int, int]],
+) -> None:
+    """单块不规则空置区：先贴三面取最大可发矩形，剩余再递归同样逻辑。"""
+    while True:
+        work = ctx.vacant - ctx.taken
+        local = scope & work
+        if not local:
+            return
+        seeds = {
+            cell
+            for cell in local
+            if _vacant_blocked_sides(cell[0], cell[1], work) >= 3
+        }
+        if not seeds:
+            return
+
+        emitted = False
+        for bbox in _three_sided_rect_candidates(
+            work,
+            local,
+            seeds,
+            min_bbox_area=ctx.min_bbox_area,
+        ):
+            if _try_emit_rect_phantom(ctx, bbox):
+                emitted = True
+                break
+        if not emitted:
+            return
+
+
 def _pass_three_sided_rect_fill(ctx: _VacantRectInferCtx) -> None:
-    """不规则剩余区：三面被围住的空格簇外接成矩形后再推断幽灵。"""
+    """不规则剩余区：三面围住簇递归贴边取最大矩形推断幽灵。"""
     work = ctx.vacant - ctx.taken
     if not work:
         return
@@ -428,31 +529,19 @@ def _pass_three_sided_rect_fill(ctx: _VacantRectInferCtx) -> None:
     components = _find_continuous_regions(seeds, ctx.infer_occupied)
     components.sort(key=lambda reg: -len(reg))
 
+    work_regions = _find_continuous_regions(work, ctx.infer_occupied)
     for comp in components:
         comp = set(comp) & seeds
         if not comp:
             continue
-        rows = [r for r, _ in comp]
-        cols = [c for _, c in comp]
-        min_r, max_r = min(rows), max(rows)
-        min_c, max_c = min(cols), max(cols)
-        region = {
-            (r, c)
-            for r in range(min_r, max_r + 1)
-            for c in range(min_c, max_c + 1)
-            if (r, c) in work
-        }
-        if not region:
+        scope: Optional[Set[Tuple[int, int]]] = None
+        for wreg in work_regions:
+            if wreg & comp:
+                scope = set(wreg)
+                break
+        if not scope:
             continue
-        bbox = _region_to_bbox_or_none(
-            region,
-            fraud_cells=ctx.fraud_cells,
-            max_hole_cells=ctx.max_hole_cells,
-            min_bbox_area=ctx.min_bbox_area,
-        )
-        if bbox is None:
-            continue
-        _try_emit_rect_phantom(ctx, bbox)
+        _three_sided_fill_scope_recursive(ctx, scope)
 
 
 def compute_vacant_rect_phantom_specs(
@@ -476,9 +565,7 @@ def compute_vacant_rect_phantom_specs(
 
     1. 三面/四面围住的 1×1 → 临时幽灵占格（不输出）；
     2. 连通区近似实心矩形（原逻辑）；
-    3. 不规则剩余区：三面围住簇 → 外接矩形；
-    4. 再次做第 2 轮矩形填充；
-    5. 临时 1×1 占格还原为空置（不出现在返回列表中）。
+    3. 不规则剩余区：三面围住簇 → 递归贴三面取最大矩形，剩余重复。
 
     - 须有 CSV 候选（扫描负向 + ``event_stats`` 件数配额）；
     - 候选品质唯一 → 写入 ``quality``；
@@ -510,7 +597,7 @@ def compute_vacant_rect_phantom_specs(
     if not vacant:
         return []
 
-    temp_ghost_1x1 = _pass1_temp_ghost_1x1(vacant)
+    temp_ghost_1x1 = _pass1_collect_temp_ghost_1x1(vacant)
     vacant -= temp_ghost_1x1
     infer_occupied = base_occupied | temp_ghost_1x1
 
@@ -535,13 +622,11 @@ def compute_vacant_rect_phantom_specs(
 
     _pass_full_rect_fill(ctx)
     _pass_three_sided_rect_fill(ctx)
-    _pass_full_rect_fill(ctx)
 
     return ctx.out
 
 
 __all__ = [
-    "AISHA_VACANT_RECT_INFER_ROUND",
     "vacant_rect_phantom_infer_round_active",
     "AUTO_VACANT_RECT_PHANTOM_PREFIX",
     "DEFAULT_VACANT_RECT_MAX_HOLE_CELLS",
