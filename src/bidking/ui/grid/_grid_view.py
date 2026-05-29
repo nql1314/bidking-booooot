@@ -21,7 +21,8 @@
   - 通过 queue.SimpleQueue 传信号给 UI 主线程
   - UI 主线程每 300ms 通过 root.after() 轮询队列，按需重绘
   - 新对局开始（S2C_33）时：若配置了快照路径则先备份至该路径同级 ``run/`` 再删除旧快照文件（``run/`` 内 ``*.json`` 超过 100 个时按修改时间删最早的），随后清空并重置界面并写入新快照
-  - 日志 tail 解析到新事件后，主线程 ``_poll_updates`` 触发的 ``_refresh(write_snapshot=True)`` 才会写出 ``snapshot_path``；
+  - 日志 tail 解析到新事件后，主线程 ``_poll_updates`` 触发的 ``_refresh(write_snapshot=True)`` 写出 ``snapshot_path``；
+    本地自动填充 / 幽灵分摊导致 ``pricing`` 变化时亦会写盘（见 ``_maybe_sync_board_snapshot_file_after_pricing``）。
     手动画框、拖调轮廓、回放翻页等本地操作只刷新界面，不落盘，避免频繁 JSON 序列化导致卡顿
 
 看板角色（board_mode）：
@@ -829,6 +830,8 @@ class GridWindow:
         self._last_compute_price: Optional[int] = None
         self._last_compute_payload: Optional[Dict[str, Any]] = None
         self._header_compute_sig: Optional[Tuple[Any, ...]] = None
+        # 定价结果变化时写回 ``board_snapshot.json``（与 bot ``compute_price`` 重算同源）
+        self._last_emitted_pricing_sig: Optional[Tuple[Any, ...]] = None
         self._express_players_sig: Optional[Tuple[Any, ...]] = None
         # 地图类别权重：与定价 ``_board_pricing`` 一致，未传入时用 ``map_category_ratios``；
         # 勿留空（item_db 会退回各类别 1.0），否则弹窗概率/权重价与估算总价脱节。
@@ -2521,9 +2524,51 @@ class GridWindow:
             )
             self._apply_phantom_pricing_resolution_to_ui(base)
             self._last_pricing_for_tooltips = pricing
+            self._maybe_sync_board_snapshot_file_after_pricing(
+                pricing, raw_pricing=raw_pricing
+            )
             return pricing
         finally:
             self._phantom_pricing_busy = False
+
+    def _pricing_emit_signature(self, pricing: Dict[str, Any]) -> Tuple[Any, ...]:
+        ph = pricing.get("phantom_unknown_quality")
+        ph_items = (ph.get("items") if isinstance(ph, dict) else None) or []
+        resolved = tuple(
+            sorted(
+                (
+                    str(row.get("uid") or ""),
+                    row.get("resolved_quality"),
+                    row.get("resolved_item_id"),
+                )
+                for row in ph_items
+                if isinstance(row, dict)
+            )
+        )
+        return (
+            pricing.get("points"),
+            pricing.get("total"),
+            pricing.get("tier_extra_value"),
+            pricing.get("tier_extra_cells"),
+            pricing.get("vacant"),
+            resolved,
+        )
+
+    def _maybe_sync_board_snapshot_file_after_pricing(
+        self,
+        pricing: Dict[str, Any],
+        *,
+        raw_pricing: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """定价与画板不同步时写回快照，避免 bot 读到陈旧 ``pricing``。"""
+        if not self._snapshot_path or not isinstance(pricing, dict):
+            return
+        sig = self._pricing_emit_signature(pricing)
+        if sig == self._last_emitted_pricing_sig:
+            return
+        self._last_emitted_pricing_sig = sig
+        with self._lock:
+            self._emit_board_snapshot_unlocked(raw_pricing)
 
     def _build_pricing_snapshot_dict(self) -> dict:
         return self._refresh_pricing_and_phantom_ui()
@@ -2627,6 +2672,11 @@ class GridWindow:
             with open(tmp_path, "w", encoding="utf-8") as wf:
                 wf.write(text)
             os.replace(tmp_path, path)
+            pricing_written = payload.get("pricing")
+            if isinstance(pricing_written, dict):
+                self._last_emitted_pricing_sig = self._pricing_emit_signature(
+                    pricing_written
+                )
         except OSError:
             try:
                 if os.path.isfile(tmp_path):

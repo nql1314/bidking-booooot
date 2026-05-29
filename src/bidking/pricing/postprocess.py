@@ -1,24 +1,38 @@
 from __future__ import annotations
 
-import random
 from typing import Any
 
 from ._numeric import parse_int_config
 
 
+def _thousands_digit_tail_pattern(high: int) -> int:
+    """千分位数字重复 3 次，如千位为 3 → 333，为 9 → 999。"""
+    return (high % 10) * 111
+
+
 def apply_human_like_price_tail(fin: int, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
-    """千分位尾数：333 / 666 / 888；抽到「000」模式则千位进一。"""
+    """千分位尾数：按千分位数字重复该数字 3 次（如 13321→13333，299333→299999）。"""
     fin = int(fin)
     before = fin
+    if fin < 1000:
+        payload["human_price_tail"] = {
+            "before": before,
+            "after": fin,
+            "pattern": "skip_lt_1000",
+        }
+        return fin, payload
+
     high, _low = divmod(fin, 1000)
-    pattern = random.choice((333, 666, 888, None))
-    if pattern is None:
-        fin = (high + 1) * 1000
-        tag = "000_carry"
-    else:
-        cand = high * 1000 + pattern
-        fin = cand if cand >= fin else (high + 1) * 1000 + pattern
+    pattern = _thousands_digit_tail_pattern(high)
+    cand = high * 1000 + pattern
+    if cand >= fin:
+        fin = cand
         tag = str(pattern)
+    else:
+        high += 1
+        pattern = _thousands_digit_tail_pattern(high)
+        fin = high * 1000 + pattern
+        tag = f"{pattern}_carry"
     payload["human_price_tail"] = {"before": before, "after": fin, "pattern": tag}
     return fin, payload
 

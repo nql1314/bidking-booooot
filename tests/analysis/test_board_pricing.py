@@ -1165,8 +1165,8 @@ class BoardPricingTests(unittest.TestCase):
         }
         self.assertEqual(bottom_uids, set())
 
-    def test_vacant_rect_pass1_enclosed_1x1_not_emitted(self) -> None:
-        """四面围住的孤立 1×1 仅作临时占格，不输出幽灵。"""
+    def test_vacant_rect_pass1_enclosed_1x1_deferred_emit(self) -> None:
+        """四面围住的孤立 1×1 先作临时占格，2/3 步后再输出幽灵。"""
         from bidking.parsing.state import GameState, ItemKnowledge
 
         st = GameState()
@@ -1185,6 +1185,7 @@ class BoardPricingTests(unittest.TestCase):
                 quality=q,
             )
         pocket = (2, 2)
+        pr, pc = pocket
         max_box_id = 35
         occ = {(r, c) for r, c in anchors}
         for bid in range(max_box_id + 1):
@@ -1204,7 +1205,55 @@ class BoardPricingTests(unittest.TestCase):
             fraud_cells=set(),
             enabled=True,
         )
-        self.assertEqual(specs, [])
+        one_by_one = [s for s in specs if s.w == 1 and s.h == 1]
+        self.assertEqual(len(one_by_one), 1)
+        lp = one_by_one[0]
+        self.assertEqual((lp.w, lp.h, lp.dc, lp.dr), (1, 1, pc, pr))
+
+    def test_vacant_rect_pass5_merge_adjacent_1x1_phantoms(self) -> None:
+        """第 5 步：相邻 1×1 幽灵并集为矩形时合并，合并结果继续重复。"""
+        from bidking.parsing.state import GameState, ItemKnowledge
+
+        st = GameState()
+        st.current_round = 4
+        st.map_id = 2101
+        for q in (1, 2, 3, 4):
+            st._scan_history.append(("quality", q, frozenset({"log_q%d" % q})))
+        anchors = [(0, 0), (0, 9), (9, 0), (9, 9)]
+        for q, (r, c) in zip((1, 2, 3, 4), anchors):
+            st.items[f"log_q{q}"] = ItemKnowledge(
+                uid=f"log_q{q}",
+                box_id=r * 10 + c,
+                box_id_confirmed=True,
+                shape=11,
+                quality=q,
+            )
+        pockets = [(1, 3), (1, 4), (1, 5)]
+        occ = {(r, c) for r, c in anchors}
+        for pr, pc in pockets:
+            occ.update({(pr - 1, pc), (pr + 1, pc)})
+        occ.update({(1, 2), (1, 6)})
+        max_box_id = 2 * 10 + 5
+        for bid in range(max_box_id + 1):
+            r, c = bid // 10, bid % 10
+            if (r, c) not in pockets:
+                occ.add((r, c))
+        specs = grid_overlay_mod.compute_vacant_rect_phantom_specs(
+            game_state=st,
+            manual_shapes={},
+            phantom_items={},
+            phantom_quality_pref={},
+            occupied_cells=occ,
+            vacant_manual_suppress=set(),
+            max_box_id=max_box_id,
+            raw_pricing={"event_stats": {"q5_count": 99, "q6_count": 99}},
+            current_round=4,
+            fraud_cells=set(),
+            enabled=True,
+        )
+        self.assertEqual(len(specs), 1)
+        sp = specs[0]
+        self.assertEqual((sp.w, sp.h, sp.dc, sp.dr), (3, 1, 3, 1))
 
     def test_vacant_rect_pass1_enclosed_1x1_before_larger_fill(self) -> None:
         """三面围住的 1×1 临时占格后，外侧仍可推断更大矩形，且不输出该 1×1。"""
@@ -1272,14 +1321,12 @@ class BoardPricingTests(unittest.TestCase):
         }
         self.assertNotIn(ghost, ghost_cells)
 
-    def test_vacant_rect_phantom_skipped_before_round4(self) -> None:
+    def test_vacant_rect_phantom_skipped_until_q1234_ready(self) -> None:
+        """扫描史未覆盖 Q1–Q4 时不推断 phantom_vac（与回合数无关）。"""
         from bidking.parsing.state import GameState
 
         st = GameState()
-        st.current_round = 3
         st.map_id = 2101
-        for q in (1, 2, 3, 4):
-            st._scan_history.append(("quality", q, frozenset()))
         specs = grid_overlay_mod.compute_vacant_rect_phantom_specs(
             game_state=st,
             manual_shapes={},
@@ -1289,7 +1336,7 @@ class BoardPricingTests(unittest.TestCase):
             vacant_manual_suppress=set(),
             max_box_id=30,
             raw_pricing={},
-            current_round=3,
+            current_round=4,
             enabled=True,
         )
         self.assertEqual(specs, [])
