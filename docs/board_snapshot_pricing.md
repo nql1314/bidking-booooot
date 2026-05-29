@@ -187,6 +187,8 @@ pts_e = vacant_pts_base + vacant_adj × (q1+q2+q3 格均价 × ahmad_abde_scale)
 
 画板 `pricing` 产出后，`pricing/strategies/aisha_base` 以 `pricing.points` 为锚，第 3–5 回合可在 `points_floor` 与 `points_ceiling` 之间做「空置红择优」（`vacant_red_floor_ceiling_pick`）。**不改变** `vacant_pts_base` / `vacant_adj` 的计算。
 
+`compute_price` 在基础估价与回合处理之后还会根据对手历史出价做修正，详见 [基于对手价调整](./opponent_bid_adjustment.md)。
+
 ---
 
 ## 七、`pricing` 字段速查
@@ -234,6 +236,9 @@ pts_e = vacant_pts_base + vacant_adj × (q1+q2+q3 格均价 × ahmad_abde_scale)
 | `analysis/grid_overlay_item_merge.py` | `merged_items_dict` |
 | `analysis/strategy/ahmad.py` | Ahmad 多候选主价 |
 | `pricing/strategies/aisha_base.py` | 爱莎出价锚定与 floor/ceiling 择优 |
+| `pricing/opponent_adjust.py` | 对手价调整入口与隐秘图分支 |
+| `pricing/strategies/aisha_opponent.py` | 艾莎对手价决策 |
+| `pricing/strategies/ahmad_opponent.py` | Ahmad 对手价决策 |
 
 ---
 

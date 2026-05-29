@@ -21,6 +21,8 @@ AISHA_VACANT_RECT_INFER_ROUND = 4  # 自该回合起（含第 4 回合及以后�
 DEFAULT_VACANT_RECT_MAX_HOLE_CELLS = 2
 DEFAULT_VACANT_RECT_MIN_BBOX_AREA = 1
 
+_ORTHO_DELTAS = ((-1, 0), (1, 0), (0, -1), (0, 1))
+
 
 def vacant_rect_phantom_infer_round_active(current_round: int) -> bool:
     """第 4 回合及之后才做空置矩形自动幽灵推断。"""
@@ -42,6 +44,33 @@ class VacantRectPhantomSpec:
 
 def is_auto_vacant_rect_phantom_uid(uid: str) -> bool:
     return str(uid).startswith(AUTO_VACANT_RECT_PHANTOM_PREFIX)
+
+
+def auto_vacant_rect_phantom_cell_count_from_snapshot(
+    board_snapshot: Mapping[str, Any],
+) -> int:
+    """快照中自动 ``phantom_vac_*`` 在 ``manual_shapes`` 上的 footprint 格数之和。"""
+    overlay = board_snapshot.get("grid_overlay")
+    if not isinstance(overlay, dict):
+        return 0
+    phantom_items = overlay.get("phantom_items")
+    manual_shapes = overlay.get("manual_shapes")
+    if not isinstance(phantom_items, dict) or not isinstance(manual_shapes, dict):
+        return 0
+    total = 0
+    for uid in phantom_items:
+        if not is_auto_vacant_rect_phantom_uid(str(uid)):
+            continue
+        entry = manual_shapes.get(uid)
+        if not isinstance(entry, (list, tuple)) or len(entry) < 2:
+            continue
+        try:
+            w, h = int(entry[0]), int(entry[1])
+        except (TypeError, ValueError):
+            continue
+        if w > 0 and h > 0:
+            total += w * h
+    return int(total)
 
 
 def _scan_exclusions_for_vacant_phantom(
@@ -223,6 +252,27 @@ def _collect_prefix_vacant_cells(
     return out
 
 
+def _vacant_blocked_sides(r: int, c: int, vacant: Set[Tuple[int, int]]) -> int:
+    """四邻中有几格不在当前空置集合内（含棋盘外缘）。"""
+    n = 0
+    for dr, dc in _ORTHO_DELTAS:
+        nr, nc = r + dr, c + dc
+        if not (0 <= nr < GRID_ROWS and 0 <= nc < GRID_COLS):
+            n += 1
+        elif (nr, nc) not in vacant:
+            n += 1
+    return n
+
+
+def _pass1_temp_ghost_1x1(vacant: Set[Tuple[int, int]]) -> Set[Tuple[int, int]]:
+    """三面或四面被围住的 1×1 空格 → 临时占位（最终不输出幽灵）。"""
+    out: Set[Tuple[int, int]] = set()
+    for cell in vacant:
+        if _vacant_blocked_sides(cell[0], cell[1], vacant) >= 3:
+            out.add(cell)
+    return out
+
+
 def _candidates_for_vacant_rect(
     w: int,
     h: int,
@@ -259,6 +309,152 @@ def _candidates_for_vacant_rect(
     ]
 
 
+@dataclass
+class _VacantRectInferCtx:
+    vacant: Set[Tuple[int, int]]
+    base_occupied: Set[Tuple[int, int]]
+    infer_occupied: Set[Tuple[int, int]]
+    temp_ghost_1x1: Set[Tuple[int, int]]
+    taken: Set[Tuple[int, int]]
+    out: List[VacantRectPhantomSpec]
+    excl_q: Set[int]
+    excl_c: Set[int]
+    csv_index: Dict[int, Any]
+    csv_items: List[Any]
+    raw_pricing: Dict[str, Any]
+    quality_counts: Dict[int, int]
+    fraud_cells: Optional[Set[Tuple[int, int]]]
+    max_box_id: int
+    max_hole_cells: int
+    min_bbox_area: int
+
+
+def _try_emit_rect_phantom(
+    ctx: _VacantRectInferCtx,
+    bbox: Tuple[int, int, int, int],
+) -> bool:
+    w, h, dc, dr = bbox
+    if _skip_bottom_boundary_1xn_vacant_phantom(
+        w, h, dr, max_box_id=ctx.max_box_id
+    ):
+        return False
+    cells = _rect_cells(dr, dc, w, h)
+    if cells & ctx.temp_ghost_1x1:
+        return False
+    if cells & ctx.base_occupied:
+        return False
+    if cells & ctx.taken:
+        return False
+
+    filt = _candidates_for_vacant_rect(
+        w,
+        h,
+        excl_q=ctx.excl_q,
+        excl_c=ctx.excl_c,
+        csv_index=ctx.csv_index,
+        csv_items=ctx.csv_items,
+        raw_pricing=ctx.raw_pricing,
+        quality_counts=ctx.quality_counts,
+    )
+    if not filt:
+        return False
+
+    qualities = {int(c.quality) for c in filt}
+    quality: Optional[int] = None
+    if len(qualities) == 1:
+        quality = next(iter(qualities))
+
+    confirm_id: Optional[int] = None
+    if len(filt) == 1:
+        confirm_id = int(filt[0].item_id)
+
+    uid = f"{AUTO_VACANT_RECT_PHANTOM_PREFIX}{dr:02d}{dc:02d}_{w}x{h}"
+    ctx.out.append(
+        VacantRectPhantomSpec(
+            uid=uid,
+            w=int(w),
+            h=int(h),
+            dc=int(dc),
+            dr=int(dr),
+            quality=quality,
+            manual_confirm_item_id=confirm_id,
+        )
+    )
+    ctx.taken |= cells
+    ctx.vacant -= cells
+    if quality is not None:
+        ctx.quality_counts[int(quality)] = (
+            ctx.quality_counts.get(int(quality), 0) + 1
+        )
+    return True
+
+
+def _pass_full_rect_fill(ctx: _VacantRectInferCtx) -> None:
+    """连通空置区 → 近似实心矩形幽灵（原第二轮 / 第四轮逻辑）。"""
+    work = ctx.vacant - ctx.taken
+    if not work:
+        return
+    regions = _find_continuous_regions(work, ctx.infer_occupied)
+    regions.sort(key=lambda reg: -len(reg))
+
+    for region in regions:
+        region = set(region) & work
+        if not region:
+            continue
+        bbox = _region_to_bbox_or_none(
+            region,
+            fraud_cells=ctx.fraud_cells,
+            max_hole_cells=ctx.max_hole_cells,
+            min_bbox_area=ctx.min_bbox_area,
+        )
+        if bbox is None:
+            continue
+        _try_emit_rect_phantom(ctx, bbox)
+
+
+def _pass_three_sided_rect_fill(ctx: _VacantRectInferCtx) -> None:
+    """不规则剩余区：三面被围住的空格簇外接成矩形后再推断幽灵。"""
+    work = ctx.vacant - ctx.taken
+    if not work:
+        return
+    seeds = {
+        cell
+        for cell in work
+        if _vacant_blocked_sides(cell[0], cell[1], work) >= 3
+    }
+    if not seeds:
+        return
+
+    components = _find_continuous_regions(seeds, ctx.infer_occupied)
+    components.sort(key=lambda reg: -len(reg))
+
+    for comp in components:
+        comp = set(comp) & seeds
+        if not comp:
+            continue
+        rows = [r for r, _ in comp]
+        cols = [c for _, c in comp]
+        min_r, max_r = min(rows), max(rows)
+        min_c, max_c = min(cols), max(cols)
+        region = {
+            (r, c)
+            for r in range(min_r, max_r + 1)
+            for c in range(min_c, max_c + 1)
+            if (r, c) in work
+        }
+        if not region:
+            continue
+        bbox = _region_to_bbox_or_none(
+            region,
+            fraud_cells=ctx.fraud_cells,
+            max_hole_cells=ctx.max_hole_cells,
+            min_bbox_area=ctx.min_bbox_area,
+        )
+        if bbox is None:
+            continue
+        _try_emit_rect_phantom(ctx, bbox)
+
+
 def compute_vacant_rect_phantom_specs(
     *,
     game_state: GameState,
@@ -276,8 +472,13 @@ def compute_vacant_rect_phantom_specs(
     enabled: bool = True,
 ) -> List[VacantRectPhantomSpec]:
     """
-    艾莎第 4 回合及之后、且 Q1–Q4 轮廓已齐时：在剩余空置区中识别近似矩形空洞，
-    生成 ``phantom_vac_*`` 规格（手动画框语义）。
+    艾莎第 4 回合及之后、且 Q1–Q4 轮廓已齐时：多轮在剩余空置区推断 ``phantom_vac_*``。
+
+    1. 三面/四面围住的 1×1 → 临时幽灵占格（不输出）；
+    2. 连通区近似实心矩形（原逻辑）；
+    3. 不规则剩余区：三面围住簇 → 外接矩形；
+    4. 再次做第 2 轮矩形填充；
+    5. 临时 1×1 占格还原为空置（不出现在返回列表中）。
 
     - 须有 CSV 候选（扫描负向 + ``event_stats`` 件数配额）；
     - 候选品质唯一 → 写入 ``quality``；
@@ -299,8 +500,9 @@ def compute_vacant_rect_phantom_specs(
         game_state, phantom_items, phantom_quality_pref
     )
 
+    base_occupied = set(occupied_cells)
     vacant = _collect_prefix_vacant_cells(
-        occupied=set(occupied_cells),
+        occupied=base_occupied,
         max_box_id=int(max_box_id),
         vacant_manual_suppress=set(vacant_manual_suppress),
         fraud_cells=fraud_cells,
@@ -308,75 +510,34 @@ def compute_vacant_rect_phantom_specs(
     if not vacant:
         return []
 
-    regions = _find_continuous_regions(vacant, set(occupied_cells))
-    # 大面积优先，避免小碎块占坑
-    regions.sort(key=lambda reg: -len(reg))
+    temp_ghost_1x1 = _pass1_temp_ghost_1x1(vacant)
+    vacant -= temp_ghost_1x1
+    infer_occupied = base_occupied | temp_ghost_1x1
 
-    taken: Set[Tuple[int, int]] = set()
-    out: List[VacantRectPhantomSpec] = []
+    ctx = _VacantRectInferCtx(
+        vacant=vacant,
+        base_occupied=base_occupied,
+        infer_occupied=infer_occupied,
+        temp_ghost_1x1=temp_ghost_1x1,
+        taken=set(),
+        out=[],
+        excl_q=excl_q,
+        excl_c=excl_c,
+        csv_index=csv_index,
+        csv_items=csv_items,
+        raw_pricing=raw_pricing,
+        quality_counts=quality_counts,
+        fraud_cells=fraud_cells,
+        max_box_id=int(max_box_id),
+        max_hole_cells=int(max_hole_cells),
+        min_bbox_area=int(min_bbox_area),
+    )
 
-    for region in regions:
-        region = set(region) - taken
-        if not region:
-            continue
-        bbox = _region_to_bbox_or_none(
-            region,
-            fraud_cells=fraud_cells,
-            max_hole_cells=int(max_hole_cells),
-            min_bbox_area=int(min_bbox_area),
-        )
-        if bbox is None:
-            continue
-        w, h, dc, dr = bbox
-        if _skip_bottom_boundary_1xn_vacant_phantom(
-            w, h, dr, max_box_id=int(max_box_id)
-        ):
-            continue
-        cells = _rect_cells(dr, dc, w, h)
-        if cells & set(occupied_cells):
-            continue
-        if cells & taken:
-            continue
+    _pass_full_rect_fill(ctx)
+    _pass_three_sided_rect_fill(ctx)
+    _pass_full_rect_fill(ctx)
 
-        filt = _candidates_for_vacant_rect(
-            w,
-            h,
-            excl_q=excl_q,
-            excl_c=excl_c,
-            csv_index=csv_index,
-            csv_items=csv_items,
-            raw_pricing=raw_pricing,
-            quality_counts=quality_counts,
-        )
-        if not filt:
-            continue
-
-        qualities = {int(c.quality) for c in filt}
-        quality: Optional[int] = None
-        if len(qualities) == 1:
-            quality = next(iter(qualities))
-
-        confirm_id: Optional[int] = None
-        if len(filt) == 1:
-            confirm_id = int(filt[0].item_id)
-
-        uid = f"{AUTO_VACANT_RECT_PHANTOM_PREFIX}{dr:02d}{dc:02d}_{w}x{h}"
-        out.append(
-            VacantRectPhantomSpec(
-                uid=uid,
-                w=int(w),
-                h=int(h),
-                dc=int(dc),
-                dr=int(dr),
-                quality=quality,
-                manual_confirm_item_id=confirm_id,
-            )
-        )
-        taken |= cells
-        if quality is not None:
-            quality_counts[int(quality)] = quality_counts.get(int(quality), 0) + 1
-
-    return out
+    return ctx.out
 
 
 __all__ = [
@@ -386,6 +547,7 @@ __all__ = [
     "DEFAULT_VACANT_RECT_MAX_HOLE_CELLS",
     "DEFAULT_VACANT_RECT_MIN_BBOX_AREA",
     "VacantRectPhantomSpec",
+    "auto_vacant_rect_phantom_cell_count_from_snapshot",
     "compute_vacant_rect_phantom_specs",
     "is_auto_vacant_rect_phantom_uid",
 ]

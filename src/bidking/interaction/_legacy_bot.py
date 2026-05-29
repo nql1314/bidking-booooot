@@ -2357,6 +2357,24 @@ def _aisha_round4_tool_min_vacant(automation: dict[str, Any]) -> int:
     return int(automation.get("tool_skip_vacant_threshold", 30))
 
 
+def _aisha_round4_tool_gate_vacant_count(
+    board_snapshot: dict[str, Any],
+) -> tuple[int | None, int, int]:
+    """第 4 回合道具门控用空置量：几何空置 + 自动 ``phantom_vac_*`` 占格。
+
+    返回 ``(effective, geometric, auto_phantom_cells)``；几何空置未知时 ``effective`` 为 ``None``。
+    """
+    from ..analysis.grid_overlay import auto_vacant_rect_phantom_cell_count_from_snapshot
+
+    pricing = board_snapshot.get("pricing") or {}
+    vacant = pricing.get("vacant")
+    if vacant is None:
+        return None, 0, 0
+    geom = int(vacant)
+    auto_cells = auto_vacant_rect_phantom_cell_count_from_snapshot(board_snapshot)
+    return geom + auto_cells, geom, auto_cells
+
+
 def _aisha_round4_q5_grid_stats_known(
     board_snapshot: dict[str, Any],
 ) -> tuple[bool, str]:
@@ -2409,7 +2427,8 @@ def should_skip_tool_for_aisha_vacant_gate(
     （是否用道具仍由 ``tool_rounds`` 等决定）。
 
     功能开关开启时：第5回合一律 ``skip``；第4回合艾莎且已勾选时若已公开
-    ``q5_grid_count`` / ``q5_grid_avg`` 则 ``skip``；否则仅 ``vacant >= min_vacant`` 时不 ``skip``。
+    ``q5_grid_count`` / ``q5_grid_avg`` 则 ``skip``；否则仅
+    ``pricing.vacant + 自动 phantom_vac_* 占格 >= min_vacant`` 时不 ``skip``。
     """
     if not _aisha_round4_vacant_gate_enabled(config, board_snapshot):
         return False, ""
@@ -2429,14 +2448,18 @@ def should_skip_tool_for_aisha_vacant_gate(
     q5_known, q5_key = _aisha_round4_q5_grid_stats_known(board_snapshot)
     if q5_known:
         return True, f"round {rn}: aisha round4 {q5_key} known, skip tool"
-    pricing = board_snapshot.get("pricing") or {}
-    vacant = pricing.get("vacant")
-    if vacant is None:
+    effective, geom, auto_phantom = _aisha_round4_tool_gate_vacant_count(
+        board_snapshot
+    )
+    if effective is None:
         return True, f"round {rn}: aisha round4 vacant unknown, skip tool"
-    if int(vacant) < min_vacant:
+    if int(effective) < min_vacant:
+        vac_detail = f"vacant={geom}"
+        if auto_phantom > 0:
+            vac_detail = f"{vac_detail}+auto_phantom={auto_phantom}={effective}"
         return (
             True,
-            f"round {rn}: aisha round4 vacant={vacant} < {min_vacant}, skip tool",
+            f"round {rn}: aisha round4 {vac_detail} < {min_vacant}, skip tool",
         )
     return False, ""
 

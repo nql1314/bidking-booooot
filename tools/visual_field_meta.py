@@ -12,7 +12,7 @@ FIELD_META: dict[str, dict[str, str]] = {
     # ── automation ──────────────────────────────────────────────────────────
     "automation.aisha_round4_tool_min_vacant": {
         "label": "第4回合空置门槛",
-        "description": "爱莎第4回合道具门控：棋盘上空置格数量须 ≥ 此值，且 Q5 统计已知时，才允许使用道具。",
+        "description": "爱莎第4回合道具门控：几何空置格 + 自动 phantom_vac_* 占格须 ≥ 此值，且 Q5 统计已知时，才允许使用道具。",
     },
     "automation.bid_cap_price": {
         "label": "封顶价",
@@ -300,7 +300,7 @@ FIELD_META: dict[str, dict[str, str]] = {
     },
     "pricing.vacant_red_floor_ceiling_pick_mode": {
         "label": "空置红格选取模式",
-        "description": "normal / aggressive / conservative：红格在地板与天花板之间的参考价倾向。",
+        "description": "normal / aggressive / force_gold_red：红格在地板与天花板之间的参考价倾向；force_gold_red 强制采用金红价。",
     },
     # ── safety ──────────────────────────────────────────────────────────────
     "safety.bring_window_to_front": {

@@ -1,4 +1,4 @@
-"""空置金红 floor/ceiling 择优：normal 与 aggressive 模式。"""
+"""空置金红 floor/ceiling 择优：normal、aggressive 与 force_gold_red 模式。"""
 
 from __future__ import annotations
 
@@ -19,6 +19,13 @@ class TestVacantRedPickMode(unittest.TestCase):
         for raw in ("aggressive", "激进", "积极"):
             cfg = {"pricing": {"vacant_red_floor_ceiling_pick_mode": raw}}
             self.assertEqual(resolve_vacant_red_floor_ceiling_pick_mode(cfg), "aggressive")
+
+    def test_resolve_mode_force_gold_red_aliases(self) -> None:
+        for raw in ("force_gold_red", "强制金红", "强制"):
+            cfg = {"pricing": {"vacant_red_floor_ceiling_pick_mode": raw}}
+            self.assertEqual(
+                resolve_vacant_red_floor_ceiling_pick_mode(cfg), "force_gold_red"
+            )
 
     def test_aggressive_vac_le_4_uses_floor(self) -> None:
         chosen, rule, _ = _aggressive_floor_ceiling_choice(
@@ -165,6 +172,36 @@ class TestVacantRedPickMode(unittest.TestCase):
         self.assertEqual(detail.get("pick_mode"), "aggressive")
         self.assertEqual(detail.get("decision_rule"), "aggressive_dark_map_avg")
         self.assertEqual(chosen, 60_000)
+
+    def test_apply_force_gold_red_always_uses_ceiling(self) -> None:
+        cfg = {
+            "pricing": {
+                "enable_vacant_red_floor_ceiling_pick": True,
+                "vacant_red_floor_ceiling_pick_mode": "force_gold_red",
+            },
+            "automation": {"selected_map": "3"},
+            "board_snapshot": {"self_user_uid": "self"},
+        }
+        snap = {
+            "game_state": {
+                "players": {
+                    "self": {"prices": {"2": 45_000}},
+                    "opp1": {"prices": {"2": 30_000}},
+                }
+            }
+        }
+        pricing = {
+            "points_floor": 50_000,
+            "points_ceiling": 90_000,
+            "vacant": 3,
+        }
+        chosen, detail = apply_vacant_red_floor_ceiling_pick(
+            cfg, snap, pricing, round_no=4, fin=50_000
+        )
+        self.assertTrue(detail.get("applied"))
+        self.assertEqual(detail.get("pick_mode"), "force_gold_red")
+        self.assertEqual(detail.get("decision_rule"), "force_gold_red_ceiling")
+        self.assertEqual(chosen, 90_000)
 
     def test_apply_normal_still_uses_red_inference(self) -> None:
         cfg = {
