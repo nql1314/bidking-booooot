@@ -1,13 +1,21 @@
-"""Bot 启动门禁：从腾讯文档公开页读取 ``enable`` / ``msg`` / ``banner``。"""
+"""Bot 启动门禁：从 OSS ``bot.config`` 读取 ``enable`` / ``msg`` / ``banner``。"""
 
 from __future__ import annotations
 
 import json
 import sys
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
+
+from bidking.tools.tencent_sheet_v3 import (
+    log_http_exchange,
+    resolve_tencent_sheet_v3_log_path,
+    summarize_for_request_log,
+)
 
 _DEFAULT_OFFLINE_HINT = "Bot已下线，暂时不可使用"
 # 常见非标准空白（含 NBSP、全角空格、零宽等）→ 普通空格，便于 ``json.loads``
@@ -56,34 +64,63 @@ class BotGateStatus:
         return self.message or _DEFAULT_OFFLINE_HINT
 
 
-def _obfuscated_doc_pad_id() -> str:
-    return (
-        bytes((68, 81, 50)).decode()
-        + bytes((86, 110, 99, 107)).decode()
-        + "VT"
-        + "ZGV"
-        + "Ua3"
-        + "BG"
-    )
-
-
-def _obfuscated_doc_page_url(pad_id: str) -> str:
+def _obfuscated_bot_config_url() -> str:
+    """默认 OSS 地址（分段拼接，避免单处明文）。"""
     scheme = chr(104) + chr(116) + chr(116) + chr(112) + chr(115)
-    host = (
-        chr(100) + chr(111) + chr(99) + chr(115)
-        + chr(46) + chr(113) + chr(113)
-        + chr(46) + chr(99) + chr(111) + chr(109)
+    bucket = bytes((98, 105, 100, 107, 105, 110, 103, 45, 98, 117, 100, 100, 121)).decode()
+    region = (
+        ".oss-cn-shanghai"
+        + ".aliyuncs"
+        + ".com"
     )
-    return f"{scheme}://{host}/doc/{pad_id}"
+    return f"{scheme}://{bucket}{region}/bot.config"
 
 
-def resolve_gate_file_id(config: dict[str, Any] | None) -> str:
+def resolve_bot_gate_config_url(config: dict[str, Any] | None) -> str:
+    """
+    解析 ``bot.config`` 拉取地址。
+
+    配置项 ``bot_gate.config_url`` / ``bot_gate.url``；未配置则用内置默认 OSS
+    （``bidking-buddy.oss-cn-shanghai.aliyuncs.com/bot.config``）。
+    """
     branch = (config or {}).get("bot_gate")
     if isinstance(branch, dict):
-        fid = str(branch.get("file_id") or "").strip()
-        if fid:
-            return fid
-    return _obfuscated_doc_pad_id()
+        raw = str(
+            branch.get("config_url") or branch.get("url") or ""
+        ).strip()
+        if raw:
+            return raw
+    return _obfuscated_bot_config_url()
+
+
+def resolve_bot_gate_request_log_path(
+    config: dict[str, Any] | None = None,
+) -> Path | None:
+    """
+    Bot 配置请求日志路径。
+
+    优先 ``bot_gate.request_log*``，否则与 ``sheet_merge.openapi`` 共用
+    ``logs/tencent_sheet_v3.log``。
+    """
+    branch = (config or {}).get("bot_gate")
+    if isinstance(branch, dict):
+        if branch.get("request_log") is False:
+            return None
+        raw = str(branch.get("request_log_path") or "").strip()
+        if raw:
+            p = Path(raw).expanduser()
+            if p.is_absolute():
+                return p.resolve()
+            from bidking.config.paths import project_root
+
+            return (project_root() / p).resolve()
+    openapi: dict[str, Any] | None = None
+    sheet_merge = (config or {}).get("sheet_merge")
+    if isinstance(sheet_merge, dict):
+        cand = sheet_merge.get("openapi")
+        if isinstance(cand, dict):
+            openapi = cand
+    return resolve_tencent_sheet_v3_log_path(openapi)
 
 
 def normalize_gate_text(text: str) -> str:
@@ -142,11 +179,29 @@ def _extract_json_objects(text: str) -> list[dict[str, Any]]:
 
 
 def parse_bot_gate_payload(text: str) -> dict[str, Any] | None:
-    """解析含 ``enable`` 字段的 JSON 对象（容忍换行与非常规空白）。"""
-    for obj in _extract_json_objects(text):
+    """解析含 ``enable`` 字段的 JSON。"""
+    raw = normalize_gate_text(text).strip()
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict) and "enable" in parsed:
+                return parsed
+        except json.JSONDecodeError:
+            pass
+    for obj in _extract_json_objects(raw):
         if "enable" in obj:
             return obj
     return None
+
+
+def _summarize_gate_response(text: str) -> dict[str, Any]:
+    payload = parse_bot_gate_payload(text)
+    summary: dict[str, Any] = {"body_chars": len(text)}
+    if payload is not None:
+        summary["gate"] = summarize_for_request_log(payload)
+    else:
+        summary["gate"] = None
+    return summary
 
 
 def _parse_enable(value: Any) -> bool:
@@ -192,13 +247,56 @@ def fetch_bot_gate_remote_text(
     *,
     timeout: float = 25.0,
 ) -> str:
-    """拉取腾讯文档公开页 HTML。"""
-    pad_id = resolve_gate_file_id(config)
-    url = _obfuscated_doc_page_url(pad_id)
-    headers = {"User-Agent": _UA, "Referer": url}
+    """拉取 OSS ``bot.config`` 正文。"""
+    url = resolve_bot_gate_config_url(config)
+    headers = {"User-Agent": _UA, "Accept": "application/json, text/plain, */*"}
+    log_path = resolve_bot_gate_request_log_path(config)
     req = urllib.request.Request(url, headers=headers, method="GET")
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.read().decode("utf-8", errors="replace")
+    t0 = time.perf_counter()
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        elapsed_ms = (time.perf_counter() - t0) * 1000.0
+        log_http_exchange(
+            log_path,
+            tag="bot-gate-config",
+            method="GET",
+            url=url,
+            headers=headers,
+            status=f"HTTP {exc.code}",
+            response={"body_chars": len(detail), "preview": detail[:240]},
+            elapsed_ms=elapsed_ms,
+            error=detail[:500] if detail else str(exc),
+        )
+        raise
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        elapsed_ms = (time.perf_counter() - t0) * 1000.0
+        log_http_exchange(
+            log_path,
+            tag="bot-gate-config",
+            method="GET",
+            url=url,
+            headers=headers,
+            status="error",
+            response=None,
+            elapsed_ms=elapsed_ms,
+            error=str(exc),
+        )
+        raise
+    elapsed_ms = (time.perf_counter() - t0) * 1000.0
+    log_http_exchange(
+        log_path,
+        tag="bot-gate-config",
+        method="GET",
+        url=url,
+        headers=headers,
+        status="ok",
+        response=_summarize_gate_response(raw),
+        elapsed_ms=elapsed_ms,
+    )
+    return raw
 
 
 def load_bot_gate_status(

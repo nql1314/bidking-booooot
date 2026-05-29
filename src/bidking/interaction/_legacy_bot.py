@@ -13,6 +13,8 @@ import json
 import math
 import random
 import re
+import subprocess
+import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -120,6 +122,38 @@ def ensure_not_stopped() -> None:
     _poll_f9_stop_hotkey()
     if stop_requested():
         raise StopRequested()
+
+
+def maybe_shutdown_system_after_run_completed(config: dict[str, Any]) -> None:
+    """达到计划局数正常结束后，按配置调度 Windows 关机（可用 ``shutdown /a`` 取消）。"""
+    auto = config.get("automation") or {}
+    if not bool(auto.get("shutdown_after_run_enabled", False)):
+        return
+    try:
+        delay = max(0, int(auto.get("shutdown_after_run_delay_seconds", 60)))
+    except (TypeError, ValueError):
+        delay = 60
+    if sys.platform != "win32":
+        log(f"shutdown_after_run: 非 Windows，已跳过关机（delay={delay}s）")
+        return
+    log(
+        f"已达目标局数，{delay} 秒后关机；"
+        "可在命令行执行 shutdown /a 取消",
+    )
+    try:
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        subprocess.run(
+            ["shutdown", "/s", "/t", str(delay)],
+            check=False,
+            creationflags=flags,
+        )
+    except Exception as exc:
+        log(f"shutdown_after_run: 调度关机失败: {type(exc).__name__}: {exc}")
+
+
+def _on_target_runs_reached(config: dict[str, Any]) -> None:
+    log("target runs reached; exit")
+    maybe_shutdown_system_after_run_completed(config)
 
 
 def sleep_interruptible(seconds: float, step: float = 0.05) -> None:
@@ -2564,14 +2598,6 @@ def run_loop(
     cycle_rest_minutes = lv["cycle_rest_minutes"]
     prepare_target_window(config, center=True)
 
-    try:
-        from .public_blacklist_sync import sync_public_blacklist_from_tencent_docs
-
-        ok, note = sync_public_blacklist_from_tencent_docs(config)
-        log(note, gui_verbose_only=not ok)
-    except Exception as exc:
-        log(f"公共黑名单同步异常（保留本地 CSV）: {exc}", gui_verbose_only=True)
-
     log("BidKing bot 已启动（交互层；出价由 pricing.compute_price 读快照计算）；按 F9 停止")
     log("mode: full-window OCR -> lobby/end/round handling", gui_verbose_only=True)
     log(
@@ -2768,7 +2794,7 @@ def run_loop(
                 _notify_run_progress()
                 _maybe_cycle_rest()
                 if completed_runs >= max_runs:
-                    log("target runs reached; exit")
+                    _on_target_runs_reached(config)
                     return
                 sleep_interruptible(poll_seconds)
                 continue
@@ -2950,7 +2976,7 @@ def run_loop(
             _notify_run_progress()
             _maybe_cycle_rest()
             if completed_runs >= max_runs:
-                log("target runs reached; exit")
+                _on_target_runs_reached(config)
                 return
             sleep_interruptible(poll_seconds)
         except Exception as exc:

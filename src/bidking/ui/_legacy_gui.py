@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import threading
 import traceback
 from datetime import datetime, timedelta
@@ -46,6 +47,13 @@ BOT_RUNNER_COMBO_VALUES = tuple(BOT_RUNNER_LABEL_TO_KEY.keys())
 def _parse_positive_int(text: object, *, default: int = 1) -> int:
     s = str(text).strip()
     if s.isdigit() and int(s) > 0:
+        return int(s)
+    return default
+
+
+def _parse_nonnegative_int(text: object, *, default: int = 0) -> int:
+    s = str(text).strip()
+    if s.isdigit():
         return int(s)
     return default
 
@@ -181,9 +189,22 @@ class BidKingApp:
         self.scheduled_start_enabled_var = tk.BooleanVar(value=False)
         self.scheduled_start_hour_var = tk.StringVar(value="8")
         self.scheduled_start_minute_var = tk.StringVar(value="0")
+        self.shutdown_after_run_enabled_var = tk.BooleanVar(value=False)
+        self.shutdown_after_run_delay_var = tk.StringVar(value="60")
 
         self.build_ui()
         self.load_into_form()
+        try:
+            from ..interaction.public_blacklist_sync import (
+                schedule_public_blacklist_sync_on_startup,
+            )
+
+            schedule_public_blacklist_sync_on_startup(self.config)
+        except Exception as exc:
+            print(
+                f"[bidking] 公共黑名单启动同步未安排: {exc}",
+                file=sys.stderr,
+            )
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
     # ── 配置加载/合并 ──────────────────────────────────────────────────────
@@ -294,6 +315,24 @@ class BidKingApp:
             foreground="#555555",
         ).pack(side="left", padx=(8, 0))
 
+        shutdown_row = ttk.Frame(settings_box)
+        shutdown_row.grid(row=4, column=0, columnspan=3, sticky="w", pady=4)
+        ttk.Checkbutton(
+            shutdown_row,
+            text="跑完自动关机",
+            variable=self.shutdown_after_run_enabled_var,
+        ).pack(side="left")
+        ttk.Label(shutdown_row, text="  延迟").pack(side="left", padx=(8, 0))
+        ttk.Entry(
+            shutdown_row, textvariable=self.shutdown_after_run_delay_var, width=4,
+        ).pack(side="left", padx=(2, 0))
+        ttk.Label(shutdown_row, text="秒").pack(side="left")
+        ttk.Label(
+            shutdown_row,
+            text="（仅达目标局数正常结束；F9/停止不关机；CMD 执行 shutdown /a 可取消）",
+            foreground="#555555",
+        ).pack(side="left", padx=(8, 0))
+
         button_box = ttk.LabelFrame(main, text="2. 控制 F9强制停止", padding=10)
         button_box.pack(fill="x", pady=(10, 0))
         self.start_btn = ttk.Button(button_box, text="开启", command=self.start_bot)
@@ -391,6 +430,12 @@ class BidKingApp:
         self.scheduled_start_minute_var.set(
             str(_parse_clock_minute(auto.get("scheduled_start_minute", 0))),
         )
+        self.shutdown_after_run_enabled_var.set(
+            bool(auto.get("shutdown_after_run_enabled", False)),
+        )
+        self.shutdown_after_run_delay_var.set(
+            str(_parse_nonnegative_int(auto.get("shutdown_after_run_delay_seconds", 60), default=60)),
+        )
 
     def _validate_disk_board_snapshot(self) -> None:
         """检查磁盘上的 ``board_snapshot`` 路径等；己方 UID 可留空以使用跨对局推断。"""
@@ -451,6 +496,12 @@ class BidKingApp:
         self.config["automation"]["scheduled_start_enabled"] = scheduled_enabled
         self.config["automation"]["scheduled_start_hour"] = scheduled_hour
         self.config["automation"]["scheduled_start_minute"] = scheduled_minute
+        shutdown_enabled = bool(self.shutdown_after_run_enabled_var.get())
+        shutdown_delay = _parse_nonnegative_int(
+            self.shutdown_after_run_delay_var.get(), default=60,
+        )
+        self.config["automation"]["shutdown_after_run_enabled"] = shutdown_enabled
+        self.config["automation"]["shutdown_after_run_delay_seconds"] = shutdown_delay
         self.config.setdefault("advisor", {})["role"] = advisor_role
 
         self.overlay.setdefault("automation", {})
@@ -468,6 +519,8 @@ class BidKingApp:
         self.overlay["automation"]["scheduled_start_enabled"] = scheduled_enabled
         self.overlay["automation"]["scheduled_start_hour"] = scheduled_hour
         self.overlay["automation"]["scheduled_start_minute"] = scheduled_minute
+        self.overlay["automation"]["shutdown_after_run_enabled"] = shutdown_enabled
+        self.overlay["automation"]["shutdown_after_run_delay_seconds"] = shutdown_delay
         self.overlay.setdefault("advisor", {})["role"] = advisor_role
 
         self.save_json(CONFIG_OVERLAY_PATH, self.overlay)

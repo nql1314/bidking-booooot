@@ -28,7 +28,17 @@ def main(argv: list[str] | None = None) -> None:
     install_snapshot_file_writer(runtime)
 
     cfg_path = config_overlay_path()
-    prime_bot_gate_cache(load_merged_bot_config(cfg_path))
+    merged = load_merged_bot_config(cfg_path)
+    prime_bot_gate_cache(merged)
+
+    try:
+        from ..interaction.public_blacklist_sync import (
+            schedule_public_blacklist_sync_on_startup,
+        )
+
+        schedule_public_blacklist_sync_on_startup(merged)
+    except Exception as exc:
+        print(f"[bidking] 公共黑名单启动同步未安排: {exc}", file=sys.stderr)
 
     try:
         run_aisha_loop(cfg_path)

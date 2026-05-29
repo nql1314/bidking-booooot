@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import base64
 import re
+import sys
+import threading
 import urllib.error
 import urllib.request
 import zlib
 from typing import Any
 from urllib.parse import parse_qs, urlparse
+
+_startup_sync_lock = threading.Lock()
+_startup_sync_started = False
 
 # 默认：快递黑名单公共池 · 汇总表
 # https://docs.qq.com/sheet/DQ0hQYVVyc1dQbFJH?tab=BB08J2
@@ -139,6 +144,52 @@ def parse_public_blacklist_rows_from_sheet_blob(blob: bytes) -> list[dict[str, s
             seen.add(uid)
         out.append({"uid": uid, "name": str(row.get("name") or "").strip()})
     return out
+
+
+def _emit_public_blacklist_sync_note(ok: bool, note: str, *, log_prefix: str) -> None:
+    if not note:
+        return
+    print(f"{log_prefix} {note}", file=sys.stderr if not ok else sys.stdout)
+
+
+def schedule_public_blacklist_sync_on_startup(
+    config: dict[str, Any] | None = None,
+    *,
+    timeout: float = 25.0,
+    log_prefix: str = "[bidking]",
+) -> None:
+    """
+    应用启动时在后台拉取公共黑名单（不阻塞 UI，同一进程只发起一次）。
+
+    画板 / Bot 总控 / ``viewer_main`` 启动页应在创建主窗口时调用；
+    无需等待用户打开画板或点击「启动 bot」。
+    """
+    global _startup_sync_started
+    with _startup_sync_lock:
+        if _startup_sync_started:
+            return
+        _startup_sync_started = True
+
+    def _worker() -> None:
+        try:
+            cfg = config
+            if cfg is None:
+                from bidking.config.runtime import load_runtime
+
+                cfg = load_runtime().raw
+            ok, note = sync_public_blacklist_from_tencent_docs(cfg, timeout=timeout)
+            _emit_public_blacklist_sync_note(ok, note, log_prefix=log_prefix)
+        except Exception as exc:
+            print(
+                f"{log_prefix} 公共黑名单同步失败（保留本地 CSV）: {exc}",
+                file=sys.stderr,
+            )
+
+    threading.Thread(
+        target=_worker,
+        name="public-blacklist-sync",
+        daemon=True,
+    ).start()
 
 
 def sync_public_blacklist_from_tencent_docs(

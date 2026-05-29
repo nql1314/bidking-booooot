@@ -16,7 +16,7 @@ def _clear_gate_cache() -> None:
 
 
 def test_parse_compact_json() -> None:
-    text = 'BotConfig{"enable":false,"msg":"Bot已下线，暂时不可使用"}'
+    text = '{"enable":false,"msg":"Bot已下线，暂时不可使用"}'
     obj = gate.parse_bot_gate_payload(text)
     assert obj == {"enable": False, "msg": "Bot已下线，暂时不可使用"}
 
@@ -98,7 +98,50 @@ def test_ensure_raises_when_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
         gate.ensure_bot_startup_allowed()
 
 
-def test_obfuscated_pad_id_matches_doc_url() -> None:
-    assert gate._obfuscated_doc_pad_id() == "DQ2VnckVTZGVUa3BG"
-    url = gate._obfuscated_doc_page_url(gate._obfuscated_doc_pad_id())
-    assert url.endswith("/doc/DQ2VnckVTZGVUa3BG")
+def test_default_config_url() -> None:
+    url = gate.resolve_bot_gate_config_url(None)
+    assert url == gate._obfuscated_bot_config_url()
+    assert "bidking-buddy.oss-cn-shanghai.aliyuncs.com" in url
+    assert url.endswith("/bot.config")
+
+
+def test_config_url_override() -> None:
+    custom = "https://example.com/bot.config"
+    assert gate.resolve_bot_gate_config_url(
+        {"bot_gate": {"config_url": custom}}
+    ) == custom
+
+
+def test_resolve_bot_gate_request_log_disabled() -> None:
+    assert (
+        gate.resolve_bot_gate_request_log_path({"bot_gate": {"request_log": False}})
+        is None
+    )
+
+
+def test_fetch_bot_gate_logs_exchange(monkeypatch: pytest.MonkeyPatch) -> None:
+    logged: list[dict] = []
+
+    def _capture(log_path, **kwargs):
+        logged.append({"path": log_path, **kwargs})
+
+    monkeypatch.setattr(gate, "resolve_bot_gate_request_log_path", lambda *_a, **_k: None)
+    monkeypatch.setattr(gate, "log_http_exchange", _capture)
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_a):
+            return False
+
+        def read(self):
+            return '{"enable":true,"msg":"","banner":"hi"}'.encode()
+
+    monkeypatch.setattr(gate.urllib.request, "urlopen", lambda *_a, **_k: _Resp())
+    text = gate.fetch_bot_gate_remote_text()
+    assert "enable" in text
+    assert len(logged) == 1
+    assert logged[0]["tag"] == "bot-gate-config"
+    assert logged[0]["status"] == "ok"
+    assert logged[0]["response"]["gate"]["enable"] is True

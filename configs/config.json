@@ -10,7 +10,16 @@
     "infer_vacant_rect_phantoms": true,
     "price_avg_infer_max_item_count": 30,
     "grid_avg_infer_max_item_count": 30,
-    "grid_avg_infer_max_grid_count": 60
+    "grid_avg_infer_max_grid_count": 60,
+    "phantom_unknown_tier": {
+      "quality_prob_threshold": 0.5,
+      "post_gold_quality_threshold_q5": 0.8,
+      "post_gold_quality_threshold_q6": 0.8
+    },
+    "opponent_bid_blend_weights": {
+      "bid": 0.0,
+      "opponent": 0.0
+    }
   },
   "grid_view": {
     "unknown_bg": "#1a7394",
@@ -30,7 +39,7 @@
     "default_map": "1",
     "default_runs": 1,
     "selected_map": "210",
-    "selected_runs": 100,
+    "selected_runs": 81,
     "warehouse_auto_sort": {
       "enabled": true
     },
@@ -43,12 +52,14 @@
     "game_start_timeout_seconds": 0.0,
     "scheduled_start_enabled": false,
     "scheduled_start_hour": 8,
-    "scheduled_start_minute": 0
+    "scheduled_start_minute": 0,
+    "shutdown_after_run_enabled": false,
+    "shutdown_after_run_delay_seconds": 60
   },
   "timing": {
     "poll_seconds": 1,
     "round_detect_wait_seconds": 7.0,
-    "round1_extra_wait_seconds": 3.0,
+    "round1_extra_wait_seconds": 2.0,
     "tool_after_snapshot_poll_seconds": 8.0,
     "tool_after_wait_seconds": 5.0,
     "click_pause_seconds": 0.12,

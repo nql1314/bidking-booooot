@@ -1073,6 +1073,8 @@ def build_raw_pricing_dict(
     if p1_q12 is not None and p2_q12 is not None:
         direct["q12_price_total"] = int(p1_q12) + int(p2_q12)
 
+    from .strategy.common import resolve_phantom_unknown_tier_config
+
     return {
         "csv_quality_groups_avg_per_cell": csv_groups_per_cell,
         "csv_quality_groups_avg_per_item": csv_groups_per_item,
@@ -1081,4 +1083,7 @@ def build_raw_pricing_dict(
         "map_quality_unit_override_keys": map_quality_unit_override_keys,
         "event_stats": direct,
         "census_absent_qualities": census_absent_qualities,
+        "phantom_unknown_tier": resolve_phantom_unknown_tier_config(
+            pricing_dict=_pd or None
+        ),
     }

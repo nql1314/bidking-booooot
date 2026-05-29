@@ -51,6 +51,27 @@ def test_sync_writes_csv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     assert loaded[0]["uid"] == "884144787915084"
 
 
+def test_schedule_startup_sync_runs_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[int] = []
+
+    def _fake_sync(*_a, **_k):
+        calls.append(1)
+        return True, "ok"
+
+    monkeypatch.setattr(sync, "sync_public_blacklist_from_tencent_docs", _fake_sync)
+    sync._startup_sync_started = False
+    sync.schedule_public_blacklist_sync_on_startup({})
+    sync.schedule_public_blacklist_sync_on_startup({})
+    import time
+
+    deadline = time.time() + 2.0
+    while time.time() < deadline and not calls:
+        time.sleep(0.05)
+    assert len(calls) == 1
+
+
 def test_sync_disabled_skips_fetch(monkeypatch: pytest.MonkeyPatch) -> None:
     called = {"n": 0}
 
