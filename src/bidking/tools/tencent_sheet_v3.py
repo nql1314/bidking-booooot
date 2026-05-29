@@ -145,8 +145,49 @@ def _append_request_log_line(path: Path, line: str) -> None:
         with _REQUEST_LOG_LOCK:
             with open(path, "a", encoding="utf-8", newline="\n") as f:
                 f.write(line + "\n")
-    except OSError:
-        pass
+    except OSError as exc:
+        import sys
+
+        print(
+            f"写入 V3 请求日志失败 ({path}): {exc}",
+            file=sys.stderr,
+        )
+
+
+def log_http_exchange(
+    log_path: Path | None,
+    *,
+    tag: str,
+    method: str,
+    url: str,
+    headers: dict[str, str],
+    status: str,
+    elapsed_ms: float,
+    body: dict[str, Any] | None = None,
+    response: Any = None,
+    error: str | None = None,
+) -> None:
+    """写入腾讯相关 HTTP 请求日志（表格 V3 / Bot 门禁文档等共用）。"""
+    if log_path is None:
+        return
+    parts = [
+        f"[{log_timestamp()}] [{tag}] {method.upper()} {url}",
+        f"  status={status} elapsed_ms={elapsed_ms:.1f}",
+        f"  headers={json.dumps(_redact_headers(headers), ensure_ascii=False)}",
+    ]
+    if body is not None:
+        parts.append(
+            "  request="
+            + json.dumps(summarize_for_request_log(body), ensure_ascii=False)
+        )
+    if response is not None:
+        parts.append(
+            "  response="
+            + json.dumps(summarize_for_request_log(response), ensure_ascii=False)
+        )
+    if error:
+        parts.append(f"  error={error}")
+    _append_request_log_line(log_path, "\n".join(parts))
 
 
 def parse_a1_range(range_a1: str) -> tuple[int, int, int, int]:
@@ -392,6 +433,7 @@ class TencentSheetV3Client:
         timeout: float = 30.0,
         request_log_path: Path | str | None = None,
         request_log: bool | None = None,
+        openapi_config: dict[str, Any] | None = None,
     ) -> None:
         self.file_id = file_id.strip()
         self.client_id = client_id.strip()
@@ -408,7 +450,9 @@ class TencentSheetV3Client:
                 else (project_root() / p).resolve()
             )
         else:
-            self._request_log_path = resolve_tencent_sheet_v3_log_path(None)
+            self._request_log_path = resolve_tencent_sheet_v3_log_path(
+                openapi_config if isinstance(openapi_config, dict) else None
+            )
         if not all((self.file_id, self.client_id, self.open_id, self.access_token)):
             raise ValueError(
                 "Open API V3 缺少 file_id / client_id / open_id / access_token"
@@ -440,27 +484,18 @@ class TencentSheetV3Client:
         elapsed_ms: float,
         error: str | None = None,
     ) -> None:
-        path = self._request_log_path
-        if path is None:
-            return
-        parts = [
-            f"[{log_timestamp()}] [tencent-sheet-v3] {method.upper()} {url}",
-            f"  status={status} elapsed_ms={elapsed_ms:.1f}",
-            f"  headers={json.dumps(_redact_headers(headers), ensure_ascii=False)}",
-        ]
-        if body is not None:
-            parts.append(
-                "  request="
-                + json.dumps(summarize_for_request_log(body), ensure_ascii=False)
-            )
-        if response is not None:
-            parts.append(
-                "  response="
-                + json.dumps(summarize_for_request_log(response), ensure_ascii=False)
-            )
-        if error:
-            parts.append(f"  error={error}")
-        _append_request_log_line(path, "\n".join(parts))
+        log_http_exchange(
+            self._request_log_path,
+            tag="tencent-sheet-v3",
+            method=method,
+            url=url,
+            headers=headers,
+            body=body,
+            status=status,
+            response=response,
+            elapsed_ms=elapsed_ms,
+            error=error,
+        )
 
     def _request(
         self,

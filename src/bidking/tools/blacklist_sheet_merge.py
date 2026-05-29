@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 from datetime import date, datetime
 from dataclasses import dataclass, replace
 from typing import Any, Iterable
@@ -28,6 +29,7 @@ from bidking.tools.tencent_sheet_v3 import (
     TencentSheetV3Client,
     build_sheet_cell,
     parse_a1_range,
+    resolve_tencent_sheet_v3_log_path,
 )
 
 _DEFAULT_TEMP_TAB = "xz3aq0"
@@ -208,6 +210,29 @@ def game_marker_from_parts(parts: list[str]) -> str:
     return ""
 
 
+def _normalize_sheet_number_token(value: str) -> str:
+    """去掉空白/千分位，全角数字转半角（表格常把回合存成文本或 ``1.0``）。"""
+    raw = str(value or "").strip().replace(",", "").replace("，", "")
+    return raw.translate(str.maketrans("０１２３４５６７８９", "0123456789"))
+
+
+def _parse_optional_int(value: str) -> int | None:
+    raw = _normalize_sheet_number_token(value)
+    if not raw:
+        return None
+    try:
+        return int(float(raw))
+    except ValueError:
+        return None
+
+
+def _parse_round_token(value: str) -> int | None:
+    n = _parse_optional_int(value)
+    if n is None or not (1 <= n <= _MAX_ROUND_COLUMN_VALUE):
+        return None
+    return n
+
+
 def extract_round_from_row_parts(parts: list[str]) -> int | None:
     """
     从临时表行字段解析回合列（D 列，通常 1–10）。
@@ -215,13 +240,13 @@ def extract_round_from_row_parts(parts: list[str]) -> int | None:
     A 列为 ``地图ID:局号``（如 ``2107:…``），不能用来判断第几回合。
     """
     for part in parts[1:]:
-        raw = str(part or "").strip().replace(",", "")
-        if not raw.isdigit():
+        raw = _normalize_sheet_number_token(part)
+        if not raw:
             continue
         if _UID_RE.fullmatch(raw):
             continue
-        n = int(raw)
-        if 1 <= n <= _MAX_ROUND_COLUMN_VALUE:
+        n = _parse_round_token(raw)
+        if n is not None:
             return n
     return None
 
@@ -456,12 +481,14 @@ def extract_bid_from_row_parts(parts: list[str]) -> int | None:
     """
     numbers: list[int] = []
     for part in parts[1:]:
-        raw = str(part or "").strip().replace(",", "")
-        if not raw.isdigit():
+        raw = _normalize_sheet_number_token(part)
+        if not raw:
             continue
         if _UID_RE.fullmatch(raw):
             continue
-        n = int(raw)
+        n = _parse_optional_int(raw)
+        if n is None:
+            continue
         if 0 < n <= _MAX_REASONABLE_BID:
             numbers.append(n)
     if not numbers:
@@ -556,13 +583,6 @@ def _iter_temp_sheet_uid_blocks(blob: bytes) -> list[tuple[int, str, str, list[s
     return blocks
 
 
-def _parse_optional_int(value: str) -> int | None:
-    raw = str(value or "").strip().replace(",", "")
-    if not raw or not raw.isdigit():
-        return None
-    return int(raw)
-
-
 def _temp_row_from_parts(
     row_index: int,
     uid: str,
@@ -605,11 +625,11 @@ def parse_temp_rows_from_grid(
             continue
         if not _GAME_COLON_RE.match(game_uid):
             game_uid = game_marker_from_parts(parts)
-        round_no = _parse_optional_int(round_raw)
+        round_no = _parse_round_token(round_raw)
         bid = _parse_optional_int(bid_raw)
         if bid is None and bid_raw:
             bid = extract_bid_from_row_parts(parts)
-        if round_no is None and round_raw:
+        if round_no is None and round_raw.strip():
             round_no = extract_round_from_row_parts(parts)
         rows.append(
             TempBlacklistRow(
@@ -1095,6 +1115,32 @@ def resolve_openapi_access_token(
     return str(env.get(var_name) or "").strip()
 
 
+def _emit_v3_request_log_hint(
+    cfg: dict[str, Any],
+    client: TencentSheetV3Client | None,
+) -> None:
+    """``request_log`` 开启时提示日志路径；无 token 未发 V3 请求时说明原因。"""
+    api = cfg.get("openapi")
+    if not isinstance(api, dict) or api.get("request_log") is False:
+        return
+    log_path = resolve_tencent_sheet_v3_log_path(api)
+    if log_path is None:
+        return
+    if client is None:
+        env_name = str(
+            api.get("access_token_env") or _DEFAULT_ACCESS_TOKEN_ENV
+        ).strip()
+        print(
+            f"提示: 已开启 sheet_merge.openapi.request_log，但未配置环境变量 "
+            f"{env_name}，本次未调用 Open API V3，不会写入请求日志。"
+            f"（若使用 dop-api 预览，同样无 V3 日志）",
+            file=sys.stderr,
+        )
+        return
+    if client._request_log_path is not None:
+        print(f"V3 请求日志: {client._request_log_path}", file=sys.stderr)
+
+
 def _open_client_from_config(
     cfg: dict[str, Any],
     *,
@@ -1125,6 +1171,7 @@ def _open_client_from_config(
         timeout=timeout,
         request_log_path=request_log_path,
         request_log=request_log,
+        openapi_config=api,
     )
 
 
@@ -1162,6 +1209,7 @@ def sync_temp_blacklist_to_summary_sheet(
     if delete_mode not in ("clear", "delete"):
         return False, f"无效 delete_mode: {delete_mode!r}", None
     client = _open_client_from_config(cfg, timeout=timeout)
+    _emit_v3_request_log_hint(cfg, client)
     if not dry_run and client is None:
         env_name = _DEFAULT_ACCESS_TOKEN_ENV
         api = cfg.get("openapi")
@@ -1237,11 +1285,20 @@ def sync_temp_blacklist_to_summary_sheet(
             if data_source == "openapi-v3"
             else "dop-api（缺 round/bid 时无法准确分类，请配置 token）"
         )
+        ignore_hdr = ""
+        if ignored_no_game or ignored_other:
+            bits: list[str] = []
+            if ignored_no_game:
+                bits.append(f"无局号忽略 {len(ignored_no_game)}")
+            if ignored_other:
+                bits.append(f"其它忽略 {len(ignored_other)}")
+            ignore_hdr = "；" + "、".join(bits)
         lines = [
             f"[预览/{source_note}] 第一回合：新增 {len(plan.inserts)}，"
             f"更新 {len(plan.updates)}，跳过 {len(plan.skipped)}；"
             f"汇总过期删 {len(plan.decay_deletes)}、扣减 {len(plan.decay_updates)}；"
-            f"将清理临时表 {len(purge_rows)} 行（非第一回合或出价>{max_sync_bid}）",
+            f"将清理临时表 {len(purge_rows)} 行（非第一回合或出价>{max_sync_bid}）"
+            f"{ignore_hdr}",
         ]
         for row in plan.decay_deletes[:8]:
             lines.append(
@@ -1258,10 +1315,21 @@ def sync_temp_blacklist_to_summary_sheet(
             )
         if len(plan.decay_updates) > 8:
             lines.append(f"  … 另有 {len(plan.decay_updates) - 8} 行待扣减")
-        if ignored_no_game:
-            lines.append(f"；无局号忽略 {len(ignored_no_game)} 行")
-        if ignored_other:
-            lines.append(f"；其它忽略 {len(ignored_other)} 行（多为缺回合列）")
+        for row in ignored_no_game[:12]:
+            lines.append(f"  [无局号] 行{row.row_index}: {row.uid} {row.name}")
+        if len(ignored_no_game) > 12:
+            lines.append(f"  … 另有 {len(ignored_no_game) - 12} 行无局号忽略")
+        for row in ignored_other[:12]:
+            round_note = (
+                f"回合={row.round_no}" if row.round_no is not None else "回合=?"
+            )
+            bid_note = f" 出价={row.bid}" if row.bid is not None else ""
+            lines.append(
+                f"  [忽略] 行{row.row_index}: {row.game_uid} {row.uid} {row.name} "
+                f"{round_note}{bid_note}"
+            )
+        if len(ignored_other) > 12:
+            lines.append(f"  … 另有 {len(ignored_other) - 12} 行其它忽略")
         for row in purge_rows[:8]:
             bid_note = f" 出价={row.bid}" if row.bid is not None else ""
             lines.append(
@@ -1295,20 +1363,6 @@ def sync_temp_blacklist_to_summary_sheet(
                 f"环境变量 {env_name}），未写入文档。"
                 "说明见 docs/tencent_sheet_openapi_v3.md"
             )
-        if (
-            not synced_temp
-            and not purge_rows
-            and not plan.decay_deletes
-            and not plan.decay_updates
-        ):
-            if ignored_no_game or ignored_other:
-                parts = ["无待同步/清理行"]
-                if ignored_no_game:
-                    parts.append(f"无局号 {len(ignored_no_game)} 行")
-                if ignored_other:
-                    parts.append(f"其它 {len(ignored_other)} 行")
-                return True, "；".join(parts), plan
-            return True, "无待同步行且无需清理的临时数据", plan
         return True, "\n".join(lines), plan
 
     count_col = str(cfg.get("summary_count_col") or "").strip().upper() or None

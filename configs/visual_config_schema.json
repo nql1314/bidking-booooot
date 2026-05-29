@@ -244,6 +244,33 @@
       "hide": false
     },
     {
+      "path": "pricing.phantom_unknown_tier.quality_prob_threshold",
+      "type": "float",
+      "label": "幽灵金格推断阈值",
+      "description": "艾莎第四回合：金品质权重超过该阈值（0–1）的幽灵格优先分配金格。默认 0.6。",
+      "scope": "config",
+      "group": "出价",
+      "hide": false
+    },
+    {
+      "path": "pricing.phantom_unknown_tier.post_gold_quality_threshold_q5",
+      "type": "float",
+      "label": "幽灵金满后定金阈值",
+      "description": "金格预算用尽后：金品质权重超过该阈值（0–1）则余格记金，否则进入红判定或 Q5/Q6 分拆。默认 0.7。",
+      "scope": "config",
+      "group": "出价",
+      "hide": false
+    },
+    {
+      "path": "pricing.phantom_unknown_tier.post_gold_quality_threshold_q6",
+      "type": "float",
+      "label": "幽灵金满后定红阈值",
+      "description": "金格预算用尽后：红品质权重超过该阈值（0–1）则余格记红，否则保留 Q5/Q6 候选分拆。默认 0.7。",
+      "scope": "config",
+      "group": "出价",
+      "hide": false
+    },
+    {
       "path": "pricing.enable_late_round_low_bid_surrender",
       "type": "bool",
       "label": "后期低价认输",

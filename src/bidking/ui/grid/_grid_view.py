@@ -78,6 +78,7 @@ from ...analysis._board_pricing import (
     build_snapshot_pricing_dict,
     estimate_snapshot_item_price_for_uid,
 )
+from ...analysis.phantom_pricing_ui_sync import sync_phantom_items_from_overlay_after_pricing
 from ...analysis import grid_overlay as _grid_overlay
 from ...analysis.raw_pricing import (
     build_raw_pricing_dict,
@@ -810,20 +811,12 @@ class GridWindow:
                     file=sys.stderr,
                 )
         self._snapshot_export_overlay = bool(snapshot_export_overlay)
-        try:
-            from ...config.runtime import load_runtime
-            from ...interaction.public_blacklist_sync import (
-                sync_public_blacklist_from_tencent_docs,
-            )
+        from ...config.runtime import load_runtime
+        from ...interaction.public_blacklist_sync import (
+            schedule_public_blacklist_sync_on_startup,
+        )
 
-            _ok, _note = sync_public_blacklist_from_tencent_docs(load_runtime().raw)
-            if _note:
-                print(f"[bidking] {_note}", file=sys.stderr)
-        except Exception as exc:
-            print(
-                f"[bidking] 公共黑名单同步失败（保留本地 CSV）: {exc}",
-                file=sys.stderr,
-            )
+        schedule_public_blacklist_sync_on_startup(load_runtime().raw)
         self._perf_log_path: Path = _grid_perf_log_path(self._snapshot_path or "")
         self._perf_log_mode: str = _grid_perf_log_mode()
         self._skill_logs: List[dict] = []
@@ -835,8 +828,13 @@ class GridWindow:
         self._last_compute_payload: Optional[Dict[str, Any]] = None
         self._header_compute_sig: Optional[Tuple[Any, ...]] = None
         self._express_players_sig: Optional[Tuple[Any, ...]] = None
-        # 地图类别权重入口：category tag -> multiplier，默认由 item_db 使用 1.0。
-        self._map_category_weights = map_category_weights
+        # 地图类别权重：与定价 ``_board_pricing`` 一致，未传入时用 ``map_category_ratios``；
+        # 勿留空（item_db 会退回各类别 1.0），否则弹窗概率/权重价与估算总价脱节。
+        if map_category_weights:
+            self._map_category_weights = map_category_weights
+        else:
+            ratios = map_category_ratios(state.map_id)
+            self._map_category_weights = ratios if ratios else None
         self._home_shell: Optional[tk.Tk] = home_shell
 
         _rt_cfg = load_runtime()
@@ -916,6 +914,7 @@ class GridWindow:
         self._phantom_items: Dict[str, ItemKnowledge] = {}
         # 幽灵品质偏好：无键=金默认（Q5）；PHANTOM_Q_INFER=原推断；否则为显式 Q1–Q6
         self._phantom_quality_pref: Dict[str, Union[int, str]] = {}
+        self._phantom_pricing_busy = False
         # 日志物品品质未知（非幽灵）：手选 Q1–Q6 筛选候选；无键=不限品质
         self._unknown_cell_quality_pref: Dict[str, int] = {}
         self._phantom_counter: int = 0
@@ -2446,11 +2445,46 @@ class GridWindow:
                 self._perf_make_snapshot_ms += time.perf_counter() - _t0
                 self._perf_make_snapshot_n += 1
 
-    def _build_pricing_snapshot_dict(self) -> dict:
-        return build_snapshot_pricing_dict(
-            self._make_board_snapshot(),
-            snapshot_path_hint=self._snapshot_path,
+    def _apply_phantom_pricing_resolution_to_ui(
+        self, board_snapshot: Dict[str, Any]
+    ) -> bool:
+        """定价幽灵分摊写回 overlay 后，同步画板 ``ItemKnowledge`` / 偏好（不触发 ``_refresh``）。"""
+        overlay = board_snapshot.get("grid_overlay")
+        changed = sync_phantom_items_from_overlay_after_pricing(
+            overlay,
+            self._phantom_items,
+            self._phantom_quality_pref,
         )
+        if changed:
+            self._board_snapshot_for_item_price_draw = None
+        return bool(changed)
+
+    def _refresh_pricing_and_phantom_ui(
+        self, *, raw_pricing: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        跑一次 ``build_snapshot_pricing_dict`` 并把幽灵分摊结果同步到画板内存态。
+
+        禁止在本函数内调用 ``_refresh``（``_draw`` 末尾会调顶栏更新，否则会死循环）。
+        """
+        if getattr(self, "_phantom_pricing_busy", False):
+            cached = self._last_pricing_for_tooltips
+            return cached if isinstance(cached, dict) else {}
+        self._phantom_pricing_busy = True
+        try:
+            base = self._make_board_snapshot(raw_pricing)
+            pricing = build_snapshot_pricing_dict(
+                base,
+                snapshot_path_hint=self._snapshot_path,
+            )
+            self._apply_phantom_pricing_resolution_to_ui(base)
+            self._last_pricing_for_tooltips = pricing
+            return pricing
+        finally:
+            self._phantom_pricing_busy = False
+
+    def _build_pricing_snapshot_dict(self) -> dict:
+        return self._refresh_pricing_and_phantom_ui()
 
     def _grid_overlay_to_json(
         self,
@@ -3097,12 +3131,9 @@ class GridWindow:
         """更新顶栏两行：①仓位估价（``pricing.points_ceiling``）+ 推荐出价；②三档 est_* 与仓位估价区间。"""
         if not hasattr(self, "_est_label_red"):
             return
-        base = self._make_board_snapshot()
-        p = build_snapshot_pricing_dict(
-            base,
-            snapshot_path_hint=self._snapshot_path,
-        )
-        self._last_pricing_for_tooltips = p
+        p = self._last_pricing_for_tooltips
+        if not isinstance(p, dict):
+            p = self._refresh_pricing_and_phantom_ui()
         try:
             vac_n = int(p.get("vacant") or 0)
         except (TypeError, ValueError):
@@ -3112,7 +3143,10 @@ class GridWindow:
             rnd = int(self.state.current_round or 1)
             self._map_round_label.config(text=f"地图 {mid}   第 {rnd} 回合")
         if hasattr(self, "_map_quality_stats_label"):
-            _tc, _ic, q5c, q5g, q6c, q6g, unk_cells = self._stats_from_merged_items(base)
+            stats_snap = self._make_board_snapshot(self._last_raw_pricing)
+            _tc, _ic, q5c, q5g, q6c, q6g, unk_cells = self._stats_from_merged_items(
+                stats_snap
+            )
             board_cells = int(_tc) + int(vac_n)
             self._last_board_cells = board_cells
             self._map_quality_stats_label.config(
@@ -3147,6 +3181,7 @@ class GridWindow:
         else:
             self._est_label_aisha.config(text="仓位估价  —")
 
+        base = self._make_board_snapshot(self._last_raw_pricing)
         board_for_compute = {**base, "pricing": p}
         gs_uid = str((base.get("game_state") or {}).get("uid") or "").strip()
         if gs_uid:
@@ -3905,10 +3940,13 @@ class GridWindow:
         # 手动画幽灵预览框时：占位与推断输入未变，不必每帧重算 raw_pricing + infer_shapes
         phantom_preview = self._phantom_draw_state is not None
         try:
+            if perf:
+                _ts0 = time.perf_counter()
             if not phantom_preview:
-                if perf:
-                    _ts0 = time.perf_counter()
                 self._sync_infer_shapes_from_analysis()
+                self._refresh_pricing_and_phantom_ui(
+                    raw_pricing=self._last_raw_pricing
+                )
             if perf:
                 sync_ms = (time.perf_counter() - _ts0) * 1000.0
             canvas = self.canvas

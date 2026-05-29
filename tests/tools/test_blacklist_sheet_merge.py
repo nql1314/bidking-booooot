@@ -26,6 +26,25 @@ def test_parse_temp_rows_from_sample_blob() -> None:
     assert rows[0].bid == 1041
 
 
+def test_parse_round_accepts_numeric_text_variants() -> None:
+    row = [
+        "2101:1274127904276246",
+        "97169340124393",
+        "王多余",
+        "1.0",
+        "8886",
+    ]
+    assert merge.extract_round_from_row_parts(row) == 1
+    rows = merge.parse_temp_rows_from_grid([row], first_row_index=4)
+    assert len(rows) == 1
+    assert rows[0].round_no == 1
+    assert rows[0].bid == 8886
+    assert merge.parse_temp_rows_from_grid(
+        [["2101:1", "111111111111111", "a", "１", "1000"]],
+        first_row_index=4,
+    )[0].round_no == 1
+
+
 def test_temp_row_sync_round_by_d_column() -> None:
     assert merge.temp_row_is_sync_round(
         ["2107:1274127909675670", "913762882518538", "叶子也吃鱼", "1", "8886"]
@@ -160,6 +179,24 @@ def test_open_client_from_config(monkeypatch) -> None:
     )
     assert isinstance(client, TencentSheetV3Client)
     assert client.access_token == "tok"
+
+
+def test_open_client_request_log_path_from_openapi(monkeypatch) -> None:
+    monkeypatch.setenv("BIDKING_TENCENT_DOCS_ACCESS_TOKEN", "tok")
+    client = merge._open_client_from_config(
+        {
+            "book_id": "300000000$ABC",
+            "openapi": {
+                "client_id": "cid",
+                "open_id": "oid",
+                "request_log": True,
+                "request_log_path": "logs/custom_v3.log",
+            },
+        }
+    )
+    assert client is not None
+    assert client._request_log_path is not None
+    assert client._request_log_path.name == "custom_v3.log"
 
 
 def test_build_summary_row_cells() -> None:

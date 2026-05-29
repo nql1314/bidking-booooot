@@ -145,6 +145,18 @@ def _prime_gate_for_viewer() -> None:
 
 def _show_start_page(default_log: str, csv_path: str) -> None:
     _prime_gate_for_viewer()
+    try:
+        from ..config.runtime import load_runtime
+        from ..interaction.public_blacklist_sync import (
+            schedule_public_blacklist_sync_on_startup,
+        )
+
+        schedule_public_blacklist_sync_on_startup(load_runtime().raw)
+    except Exception as exc:
+        print(
+            f"[bidking] 公共黑名单启动同步未安排: {exc}",
+            file=sys.stderr,
+        )
 
     root = tk.Tk()
     root.title(f"BidKing 鉴影可视化 v{__version__} - 启动")

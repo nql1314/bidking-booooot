@@ -136,6 +136,10 @@ def test_parse_summary_rows_from_grid_reads_count() -> None:
     assert by_uid["1071817679858757"].count == 12
 
 
+def test_cell_value_to_text_numeric_string() -> None:
+    assert cell_value_to_text({"cellValue": {"text": "1.0"}}) == "1.0"
+
+
 def test_parse_temp_rows_from_grid() -> None:
     grid = [
         ["2101:1178745817265764", "1071817679858757", "结城明日奈11", "1", "1041"],

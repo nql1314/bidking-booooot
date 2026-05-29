@@ -133,6 +133,26 @@ def _rect_cells(dr: int, dc: int, w: int, h: int) -> Set[Tuple[int, int]]:
     return {(dr + ddr, dc + ddc) for ddr in range(h) for ddc in range(w)}
 
 
+def _skip_bottom_boundary_1xn_vacant_phantom(
+    w: int,
+    h: int,
+    dr: int,
+    *,
+    max_box_id: int,
+) -> bool:
+    """
+    空置前缀区底边 ``1×n`` 横条（``h==1``）外形易误判，不参与自动 ``phantom_vac_*`` 推断。
+
+    「贴底」指矩形下边落在当前空置前缀上界 ``max_box_id`` 所在行（含该行）。
+    """
+    if int(h) != 1 or int(w) < 1:
+        return False
+    prefix_limit = min(int(max_box_id), GRID_COLS * GRID_ROWS - 1)
+    prefix_bottom_row = prefix_limit // GRID_COLS
+    bottom_row = int(dr) + int(h) - 1
+    return bottom_row >= prefix_bottom_row
+
+
 def _region_to_bbox_or_none(
     region: Set[Tuple[int, int]],
     *,
@@ -308,6 +328,10 @@ def compute_vacant_rect_phantom_specs(
         if bbox is None:
             continue
         w, h, dc, dr = bbox
+        if _skip_bottom_boundary_1xn_vacant_phantom(
+            w, h, dr, max_box_id=int(max_box_id)
+        ):
+            continue
         cells = _rect_cells(dr, dc, w, h)
         if cells & set(occupied_cells):
             continue

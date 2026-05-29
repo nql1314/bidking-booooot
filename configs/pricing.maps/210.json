@@ -15,7 +15,11 @@
       "4": 0.0,
       "default": 0.0
     },
-    "vacant_red_floor_ceiling_pick_mode": "aggressive"
+    "vacant_red_floor_ceiling_pick_mode": "normal",
+    "opponent_bid_blend_weights": {
+      "bid": 0.0,
+      "opponent": 0.0
+    }
   },
   "automation": {
     "express_station_round1_emoji": {
