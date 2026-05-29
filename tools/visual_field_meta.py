@@ -254,13 +254,9 @@ FIELD_META: dict[str, dict[str, str]] = {
         "label": "网格均价最大物品种类",
         "description": "网格均价推断时参与统计的不同物品种类上限。",
     },
-    "pricing.infer_unknown_contour_shapes": {
-        "label": "推断未知轮廓形状",
-        "description": "是否根据邻格与轮廓对未知形状格尝试形状/价值推断。",
-    },
     "pricing.infer_vacant_rect_phantoms": {
-        "label": "空置矩形自动幽灵",
-        "description": "第4回合及之后：空置区近似实心矩形 → 自动 phantom_vac 手动画框；画板右键可取消且本局不再补回。",
+        "label": "第4回合空格自动填充",
+        "description": "第4回合及之后：空置区近似实心矩形 → 自动 phantom_vac；随后已知品质未知轮廓迭代合并扩充。",
     },
     "pricing.late_round_low_bid_surrender_after_round": {
         "label": "认输生效回合",

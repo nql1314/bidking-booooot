@@ -22,6 +22,8 @@ DEFAULT_MAP_CATEGORY_WEIGHTS: Dict[int, float] = {
 # 多候选权重期望价：单价超过该阈值的候选不参与期望计算（避免天价拉爆期望），
 # 候选集合本身不变；已指定 ItemCid 或仅剩单候选时走精确价，不经过此逻辑。
 WEIGHTED_EST_MAX_ITEM_BASE_VALUE: float = 5_000_000.0
+# 1×1（shape=11）多候选权重期望价：排除 10 万以上高价品对均价的拉动（与 UI「10万+」标记一致）。
+WEIGHTED_EST_MAX_1X1_ITEM_BASE_VALUE: float = 100_000.0
 _DROP_WEIGHT_BY_ITEM: Dict[int, List[Tuple[int, int, int]]] = {}
 _DROP_GRAPH: Dict[int, List[Tuple[int, float]]] = {}
 _DROP_RESOLVED_CACHE: Dict[Tuple[int, Tuple[int, ...]], Dict[int, float]] = {}
@@ -338,16 +340,25 @@ def _candidate_weight(
     )
 
 
+def weighted_est_max_item_base_value(shape: Optional[int]) -> float:
+    """多候选权重期望价用的单价上限；1×1 使用更低阈值以削弱天价品影响。"""
+    if shape == 11:
+        return WEIGHTED_EST_MAX_1X1_ITEM_BASE_VALUE
+    return WEIGHTED_EST_MAX_ITEM_BASE_VALUE
+
+
 def _weighted_est_price(
     candidates: List[CsvItem],
     map_category_weights: Optional[Dict[int, float]] = None,
     map_id: Optional[int] = None,
+    *,
+    max_item_base_value: Optional[float] = None,
 ) -> Optional[float]:
     """按掉落权重计算候选集合的期望价格。
 
-    仅用于期望单价：``base_value`` 大于 :data:`WEIGHTED_EST_MAX_ITEM_BASE_VALUE` 的候选
-    不计入加权和（权重在剩余候选上自然重归一）；若全部高于阈值则退回全体候选，
-    以免无可用子集。地图 drop 解析仍基于完整 ``candidates`` 的 item_id 集合。
+    仅用于期望单价：``base_value`` 大于 ``max_item_base_value``（默认
+    :data:`WEIGHTED_EST_MAX_ITEM_BASE_VALUE`）的候选不计入加权和（权重在剩余候选上自然重归一）；
+    若全部高于阈值则退回全体候选，以免无可用子集。地图 drop 解析仍基于完整 ``candidates`` 的 item_id 集合。
     """
     map_id = normalize_map_id(map_id)
     map_drop_id = MAP_TO_TIER_NEST.get(map_id, (None, None))[1] if map_id is not None else None
@@ -355,7 +366,11 @@ def _weighted_est_price(
         map_drop_id,
         {item.item_id for item in candidates},
     )
-    cap = WEIGHTED_EST_MAX_ITEM_BASE_VALUE
+    cap = (
+        float(max_item_base_value)
+        if max_item_base_value is not None
+        else WEIGHTED_EST_MAX_ITEM_BASE_VALUE
+    )
     priced = [c for c in candidates if float(c.base_value) <= cap]
     est_pool = priced if priced else candidates
     weighted_sum = 0.0
@@ -366,7 +381,12 @@ def _weighted_est_price(
         weight_sum += weight
     if weight_sum <= 0 and map_drop_weights:
         # 地图根图没有覆盖当前候选集合时，退回全局/旧权重，避免全 0。
-        return _weighted_est_price(candidates, map_category_weights, None)
+        return _weighted_est_price(
+            candidates,
+            map_category_weights,
+            None,
+            max_item_base_value=cap,
+        )
     if weight_sum <= 0:
         return None
     return weighted_sum / weight_sum
@@ -578,8 +598,9 @@ def query_item(
         8. 若类别正向过滤后为空，保留 shape+quality 结果（容错）
 
     估算规则（多候选时）：按 drop_table_weights.csv 中的掉落权重计算期望价；
-    单价高于 :data:`WEIGHTED_EST_MAX_ITEM_BASE_VALUE`（默认 500 万）的候选不参与该期望，
-    不改变候选列表；ItemCid 已指定或仅剩单候选时为精确价，不适用此截断。
+    单价高于形状相关上限的候选不参与该期望（1×1 为 :data:`WEIGHTED_EST_MAX_1X1_ITEM_BASE_VALUE`
+    即 10 万，其余为 :data:`WEIGHTED_EST_MAX_ITEM_BASE_VALUE` 即 500 万），不改变候选列表；
+    ItemCid 已指定或仅剩单候选时为精确价，不适用此截断。
     """
     if item_cid and item_cid in csv_index:
         return csv_index[item_cid], 1, True, None, ""
@@ -605,7 +626,12 @@ def query_item(
     if count == 1:
         return best, 1, True, None, ""
 
-    est = _weighted_est_price(candidates, map_category_weights, map_id)
+    est = _weighted_est_price(
+        candidates,
+        map_category_weights,
+        map_id,
+        max_item_base_value=weighted_est_max_item_base_value(shape),
+    )
     label = "权重价" if est is not None else ""
 
     return best, count, False, est, label

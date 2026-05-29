@@ -46,7 +46,9 @@ def build_grid_overlay_export_dict(
     occupied_cells: set,
     max_box_id: int,
     infer_unknown_contour_shapes: bool = True,
+    current_round: int = 1,
     infer_suppress_uids: Optional[Set[str]] = None,
+    phantom_quality_user_locked: Optional[Set[str]] = None,
 ) -> Dict[str, Any]:
     """组装写入 ``grid_overlay`` 的字段；不含 ``vacant``（须用全量占位格在 :meth:`GridWindow._grid_overlay_to_json` 中计算）。"""
     ph = {uid: item_knowledge_to_json(k) for uid, k in phantom_items.items()}
@@ -59,28 +61,35 @@ def build_grid_overlay_export_dict(
         for uid, q in unknown_cell_quality_pref.items()
         if isinstance(q, int) and 1 <= q <= 6
     }
+    locked_uids = sorted(str(u) for u in (phantom_quality_user_locked or set()))
     vacant_bids = sorted(r * GRID_COLS + c for r, c in vacant_manual_suppress)
     occ_bids = sorted(r * GRID_COLS + c for r, c in occupied_cells)
 
-    infer = _grid_overlay.compute_grid_overlay_infer_shapes(
+    infer_result = _grid_overlay.compute_grid_overlay_infer_shapes(
         game_state=game_state,
         manual_shapes=manual_shapes,
         occupied_cells=set(occupied_cells),
         vacant_manual_suppress=set(vacant_manual_suppress),
         max_box_id=int(max_box_id),
         raw_pricing=raw_pricing,
+        phantom_items=phantom_items,
+        phantom_quality_pref=phantom_quality_pref,
         infer_unknown_contour_shapes=infer_unknown_contour_shapes,
+        current_round=int(current_round),
     )
+    infer = infer_result.shapes
     sup = infer_suppress_uids or set()
     if sup:
         infer = {uid: t for uid, t in infer.items() if str(uid) not in sup}
     infer_out = {uid: [int(x) for x in tup] for uid, tup in infer.items()}
+    absorbed_out = sorted(str(u) for u in infer_result.absorbed_phantom_uids)
     overlay_for_merged = {
         "phantom_items": ph,
         "manual_shapes": manual,
         "infer_shapes": infer_out,
         "phantom_quality_pref": pref,
         "unknown_cell_quality_pref": uq_pref,
+        _grid_overlay.INFER_ABSORBED_PHANTOM_UIDS_KEY: absorbed_out,
     }
     snap_merged = {
         "game_state": game_state_to_json(game_state),
@@ -91,9 +100,11 @@ def build_grid_overlay_export_dict(
         "phantom_items": ph,
         "manual_shapes": manual,
         "phantom_quality_pref": pref,
+        "phantom_quality_user_locked": locked_uids,
         "unknown_cell_quality_pref": uq_pref,
         "vacant_manual_suppress_bids": vacant_bids,
         _grid_overlay.OCCUPIED_CELL_BIDS: occ_bids,
         "infer_shapes": infer_out,
+        _grid_overlay.INFER_ABSORBED_PHANTOM_UIDS_KEY: absorbed_out,
         "merged_items_dict": merged_items,
     }

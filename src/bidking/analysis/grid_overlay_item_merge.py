@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional, Set, Tuple
 
 from ..parsing import item_db
 from . import unknown_value as _unknown_value
+from .grid_overlay_dims import infer_absorbed_phantom_uid_set
 
 _item_prices_cache: Optional[Tuple[Dict[int, Any], list]] = None
 
@@ -246,6 +247,11 @@ def sync_phantom_row_quality_from_overlay(items: Dict[str, Any], overlay: Any) -
     apply_phantom_default_quality_for_phantom_rows(items, overlay)
 
 
+def _drop_infer_absorbed_phantom_rows(out: Dict[str, Any], overlay: Any) -> None:
+    for uid in infer_absorbed_phantom_uid_set(overlay):
+        out.pop(uid, None)
+
+
 def merged_items_dict(board_snapshot: Dict[str, Any]) -> Dict[str, Any]:
     """
     ``game_state.items`` 与 ``grid_overlay`` 合并后的定价用物品表（浅拷贝各行 dict，可原地改投影字段）。
@@ -268,10 +274,13 @@ def merged_items_dict(board_snapshot: Dict[str, Any]) -> Dict[str, Any]:
                 items[str(k)] = row
     overlay = board_snapshot.get("grid_overlay")
     if isinstance(overlay, dict):
+        absorbed_phantoms = infer_absorbed_phantom_uid_set(overlay)
         ph = overlay.get("phantom_items")
         if isinstance(ph, dict):
             for uid, it in ph.items():
                 suid = str(uid)
+                if suid in absorbed_phantoms:
+                    continue
                 if suid not in items and isinstance(it, dict):
                     prow = dict(it)
                     if prow.get("shape") is not None:
@@ -283,6 +292,8 @@ def merged_items_dict(board_snapshot: Dict[str, Any]) -> Dict[str, Any]:
         apply_unknown_cell_quality_pref_to_items(items, overlay)
     csv_index, _csv_items = _load_item_prices_db()
     apply_manual_confirm_projection(items, csv_index)
+    if isinstance(overlay, dict):
+        _drop_infer_absorbed_phantom_rows(items, overlay)
     return items
 
 
@@ -354,9 +365,13 @@ def _patch_cached_merged_phantom_rows_from_overlay(
     ph = overlay.get("phantom_items")
     if not isinstance(ph, dict):
         return True
+    absorbed = infer_absorbed_phantom_uid_set(overlay)
     keys = _snapshot_item_row_keys_from_game()
     for pid, it in ph.items():
         ps = str(pid)
+        if ps in absorbed:
+            out.pop(ps, None)
+            continue
         if not isinstance(it, dict):
             continue
         row = out.get(ps)
@@ -380,8 +395,9 @@ def _merged_items_dict_cache_phantom_set_stale(overlay: Any, out: Dict[str, Any]
     ph = overlay.get("phantom_items")
     if not isinstance(ph, dict):
         return False
-    ph_ids = {str(k) for k in ph}
-    out_ph = {str(k) for k in out if str(k).startswith("phantom_")}
+    absorbed = infer_absorbed_phantom_uid_set(overlay)
+    ph_ids = {str(k) for k in ph} - absorbed
+    out_ph = {str(k) for k in out if str(k).startswith("phantom_")} - absorbed
     if ph_ids != out_ph:
         return True
     for pid in ph_ids:
@@ -447,5 +463,6 @@ def merged_items_dict_from_snapshot(board_snapshot: Dict[str, Any]) -> Dict[str,
             apply_unknown_cell_quality_pref_to_items(out, overlay)
             csv_index, _ = _load_item_prices_db()
             apply_manual_confirm_projection(out, csv_index)
+            _drop_infer_absorbed_phantom_rows(out, overlay)
             return out
     return merged_items_dict(board_snapshot)

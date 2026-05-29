@@ -226,19 +226,10 @@
       "hide": false
     },
     {
-      "path": "pricing.infer_unknown_contour_shapes",
-      "type": "bool",
-      "label": "推断未知轮廓形状",
-      "description": "是否根据邻格与轮廓对未知形状格尝试形状/价值推断。",
-      "scope": "config",
-      "group": "出价",
-      "hide": false
-    },
-    {
       "path": "pricing.infer_vacant_rect_phantoms",
       "type": "bool",
-      "label": "空置矩形自动幽灵",
-      "description": "第4回合及之后：在空置区识别近似实心矩形并自动放置 phantom_vac 手动画框（可右键取消，本局不再补回）。需 Q1–Q4 已扫且低阶轮廓齐。",
+      "label": "第4回合空格自动填充",
+      "description": "第4回合及之后：空置区近似实心矩形自动 phantom_vac；随后对已知品质未知轮廓做迭代合并扩充。二者共用此开关。",
       "scope": "config",
       "group": "出价",
       "hide": false

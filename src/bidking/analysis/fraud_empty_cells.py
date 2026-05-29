@@ -64,6 +64,7 @@ def fraud_placed_items_from_build_occupied_like(
     phantom_items: Mapping[str, Any],
     manual_shapes: Mapping[str, Tuple[int, int, int, int]],
     exclude_uid: str = "",
+    exclude_phantom_uids: Optional[Set[str]] = None,
     item_shape_wh: Optional[Callable[[str, Any], Tuple[int, int]]] = None,
     item_origin: Optional[Callable[[str, Any], Tuple[int, int]]] = None,
 ) -> List[FraudPlacedItem]:
@@ -101,8 +102,11 @@ def fraud_placed_items_from_build_occupied_like(
                 cells=cells, w=w, h=h, min_bid=min_bid, anchor_bid=anchor_bid
             )
         )
+    skip_phantoms = exclude_phantom_uids or set()
     for phid in phantom_items:
         if phid == exclude_uid or phid not in manual_shapes:
+            continue
+        if str(phid) in skip_phantoms:
             continue
         w, h, dc, dr = manual_shapes[phid]
         pk = phantom_items[phid]

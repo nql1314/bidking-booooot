@@ -10,6 +10,30 @@ from ..parsing.state import ItemKnowledge
 PHANTOM_Q_INFER = "_phantom_q_infer"
 
 
+def phantom_quality_pref_explicit_quality(raw: Any) -> Union[int, None]:
+    """显式 Q1–Q6；``_phantom_q_infer`` 与无效值返回 ``None``。"""
+    if isinstance(raw, int) and 1 <= raw <= 6:
+        return int(raw)
+    if isinstance(raw, str):
+        if raw.strip() == PHANTOM_Q_INFER:
+            return None
+        try:
+            q = int(raw.strip())
+        except (TypeError, ValueError):
+            return None
+        if 1 <= q <= 6:
+            return q
+    return None
+
+
+def clear_phantom_auto_resolution_on_item(pk: ItemKnowledge) -> None:
+    """用户手改幽灵品质/偏好时，清掉定价分摊写回的锁定字段。"""
+    pk.quality = None
+    pk.manual_confirm_item_id = None
+    pk.item_cid = None
+    pk.price = None
+
+
 def _int_or_none(raw: Any) -> Union[int, None]:
     if raw is None:
         return None
@@ -75,13 +99,18 @@ def sync_phantom_items_from_overlay_after_pricing(
             uid_changed = True
 
         tier_split = row.get("phantom_tier_credit_by_quality")
+        pref_v = pref_overlay.get(uid_s)
+        explicit_pref = phantom_quality_pref_explicit_quality(pref_v)
+        infer_pref = pref_v == PHANTOM_Q_INFER or (
+            isinstance(pref_v, str) and pref_v.strip() == PHANTOM_Q_INFER
+        )
         q_new: Union[int, None] = _int_or_none(row.get("quality"))
-        if q_new is not None and 1 <= q_new <= 6:
-            if pk.quality != q_new:
-                pk.quality = q_new
+        if explicit_pref is not None:
+            if pk.quality != explicit_pref:
+                pk.quality = explicit_pref
                 uid_changed = True
-            if phantom_quality_pref.get(uid_s) != q_new:
-                phantom_quality_pref[uid_s] = q_new
+            if phantom_quality_pref.get(uid_s) != explicit_pref:
+                phantom_quality_pref[uid_s] = explicit_pref
                 uid_changed = True
         elif isinstance(tier_split, dict) and tier_split:
             if pk.quality is not None:
@@ -90,8 +119,21 @@ def sync_phantom_items_from_overlay_after_pricing(
             if phantom_quality_pref.get(uid_s) != PHANTOM_Q_INFER:
                 phantom_quality_pref[uid_s] = PHANTOM_Q_INFER
                 uid_changed = True
+        elif infer_pref:
+            if pk.quality is not None:
+                pk.quality = None
+                uid_changed = True
+            if phantom_quality_pref.get(uid_s) != PHANTOM_Q_INFER:
+                phantom_quality_pref[uid_s] = PHANTOM_Q_INFER
+                uid_changed = True
+        elif q_new is not None and 1 <= q_new <= 6:
+            if pk.quality != q_new:
+                pk.quality = q_new
+                uid_changed = True
+            if phantom_quality_pref.get(uid_s) != q_new:
+                phantom_quality_pref[uid_s] = q_new
+                uid_changed = True
         else:
-            pref_v = pref_overlay.get(uid_s)
             if pref_v is not None and phantom_quality_pref.get(uid_s) != pref_v:
                 phantom_quality_pref[uid_s] = (
                     int(pref_v)

@@ -28,10 +28,12 @@ from .grid_overlay_dims import (
     GRID_COLS,
     GRID_MAX_BOX_ID,
     GRID_ROWS,
+    INFER_ABSORBED_PHANTOM_UIDS_KEY,
     OCCUPIED_CELL_BIDS,
+    infer_absorbed_phantom_uid_set,
 )
 from .grid_overlay_infer_shapes import (
-    _infer_default_placement_candidates,
+    InferShapesResult,
     _infer_pseudo_blocked,
     compute_grid_overlay_infer_shapes,
 )
@@ -84,6 +86,9 @@ __all__ = [
     "build_occupied_cells",
     "compute_overlay_vacant_dict",
     "compute_grid_overlay_infer_shapes",
+    "InferShapesResult",
+    "INFER_ABSORBED_PHANTOM_UIDS_KEY",
+    "infer_absorbed_phantom_uid_set",
     "auto_vacant_rect_phantom_cell_count_from_snapshot",
     "compute_vacant_rect_phantom_specs",
     "AUTO_VACANT_RECT_PHANTOM_PREFIX",

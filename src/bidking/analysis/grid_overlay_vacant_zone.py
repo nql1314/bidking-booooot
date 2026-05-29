@@ -205,6 +205,7 @@ def build_occupied_cells(
     phantom_items: Mapping[str, Any],
     manual_shapes: Mapping[str, Tuple[int, int, int, int]],
     exclude_uid: str = "",
+    exclude_phantom_uids: Optional[Set[str]] = None,
     item_shape_wh: Optional[Callable[[str, Any], Tuple[int, int]]] = None,
     item_origin: Optional[Callable[[str, Any], Tuple[int, int]]] = None,
 ) -> Set[Tuple[int, int]]:
@@ -238,8 +239,11 @@ def build_occupied_cells(
         for ddr in range(h):
             for ddc in range(w):
                 occupied.add((dr + ddr, dc + ddc))
+    skip_phantoms = exclude_phantom_uids or set()
     for phid in phantom_items:
         if phid == exclude_uid or phid not in manual_shapes:
+            continue
+        if str(phid) in skip_phantoms:
             continue
         w, h, dc, dr = manual_shapes[phid]
         for ddr in range(h):

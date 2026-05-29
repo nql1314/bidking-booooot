@@ -10,6 +10,7 @@ from .. import grid_overlay as _grid_overlay
 from .. import scan_inference as _scan_inference
 from .. import unknown_value as _unknown_value
 from ..grid_overlay_item_merge import apply_manual_confirm_projection
+from ..phantom_pricing_ui_sync import PHANTOM_Q_INFER, phantom_quality_pref_explicit_quality
 from .._shape_wh import shape_wh_from_snapshot
 from ...logsys.perf_log import perf_log_elapsed
 from ...parsing import item_db
@@ -318,19 +319,32 @@ def _phantom_uids_from_snapshot(board_snapshot: Dict[str, Any]) -> Set[str]:
     return {str(k) for k in ph}
 
 
-def _phantom_quality_pref_explicit_quality(raw: Any) -> Optional[int]:
-    if isinstance(raw, int) and 1 <= raw <= 6:
-        return int(raw)
-    if isinstance(raw, str):
-        if raw.strip() == "_phantom_q_infer":
-            return None
-        try:
-            q = int(raw.strip())
-        except (TypeError, ValueError):
-            return None
-        if 1 <= q <= 6:
-            return q
-    return None
+def _phantom_quality_user_locked_uids(board_snapshot: Dict[str, Any]) -> Set[str]:
+    overlay = board_snapshot.get("grid_overlay")
+    if not isinstance(overlay, dict):
+        return set()
+    raw = overlay.get("phantom_quality_user_locked")
+    if not isinstance(raw, (list, tuple, set)):
+        return set()
+    return {str(u) for u in raw}
+
+
+def _phantom_row_alloc_synced(
+    board_snapshot: Dict[str, Any],
+    uid_s: str,
+    ph_row: Dict[str, Any],
+    explicit_pref: Optional[int],
+) -> bool:
+    """分摊写回后 ``phantom_items.quality`` 与 ``phantom_quality_pref`` 一致，且用户未手改锁定。"""
+    if uid_s in _phantom_quality_user_locked_uids(board_snapshot):
+        return False
+    row_q_raw = ph_row.get("quality")
+    if row_q_raw is None or explicit_pref is None:
+        return False
+    try:
+        return int(row_q_raw) == int(explicit_pref)
+    except (TypeError, ValueError):
+        return False
 
 
 def _phantom_row_manually_confirmed(
@@ -339,13 +353,28 @@ def _phantom_row_manually_confirmed(
     it: Dict[str, Any],
 ) -> bool:
     """手动画板已确认品质或物品：不参与自动分摊。"""
-    q_raw = it.get("quality")
-    if q_raw is not None:
-        try:
-            if 1 <= int(q_raw) <= 6:
-                return True
-        except (TypeError, ValueError):
-            pass
+    uid_s = str(uid)
+    if uid_s in _phantom_quality_user_locked_uids(board_snapshot):
+        return True
+
+    overlay = board_snapshot.get("grid_overlay")
+    if not isinstance(overlay, dict):
+        overlay = {}
+    ph = overlay.get("phantom_items")
+    ph_row: Dict[str, Any] = {}
+    if isinstance(ph, dict) and isinstance(ph.get(uid_s), dict):
+        ph_row = ph[uid_s]
+
+    pref = overlay.get("phantom_quality_pref")
+    pval: Any = None
+    if isinstance(pref, dict):
+        pval = pref.get(uid_s)
+        if pval is None:
+            pval = pref.get(uid)
+    explicit_pref = phantom_quality_pref_explicit_quality(pval)
+
+    if _phantom_row_alloc_synced(board_snapshot, uid_s, ph_row, explicit_pref):
+        return False
 
     mc = it.get("manual_confirm_item_id")
     if mc is not None:
@@ -354,42 +383,40 @@ def _phantom_row_manually_confirmed(
                 return True
         except (TypeError, ValueError):
             pass
+    mc_ph = ph_row.get("manual_confirm_item_id")
+    if mc_ph is not None:
+        try:
+            if int(mc_ph) > 0:
+                return True
+        except (TypeError, ValueError):
+            pass
+
+    if isinstance(pval, str) and pval.strip() == PHANTOM_Q_INFER:
+        return False
+
+    if explicit_pref is not None:
+        return True
+
+    q_raw = it.get("quality")
+    if q_raw is not None:
+        try:
+            if 1 <= int(q_raw) <= 6:
+                return True
+        except (TypeError, ValueError):
+            pass
 
     cid = it.get("item_cid")
     if cid is not None and it.get("price") is not None:
         return True
 
-    overlay = board_snapshot.get("grid_overlay")
-    if not isinstance(overlay, dict):
-        return False
-    uid_s = str(uid)
+    q_ph = ph_row.get("quality")
+    if q_ph is not None:
+        try:
+            if 1 <= int(q_ph) <= 6:
+                return True
+        except (TypeError, ValueError):
+            pass
 
-    ph = overlay.get("phantom_items")
-    if isinstance(ph, dict):
-        row = ph.get(uid_s)
-        if isinstance(row, dict):
-            q_ph = row.get("quality")
-            if q_ph is not None:
-                try:
-                    if 1 <= int(q_ph) <= 6:
-                        return True
-                except (TypeError, ValueError):
-                    pass
-            mc_ph = row.get("manual_confirm_item_id")
-            if mc_ph is not None:
-                try:
-                    if int(mc_ph) > 0:
-                        return True
-                except (TypeError, ValueError):
-                    pass
-
-    pref = overlay.get("phantom_quality_pref")
-    if isinstance(pref, dict):
-        pval = pref.get(uid_s)
-        if pval is None:
-            pval = pref.get(uid)
-        if _phantom_quality_pref_explicit_quality(pval) is not None:
-            return True
     return False
 
 
@@ -499,6 +526,8 @@ def _sync_phantom_alloc_to_board_snapshot(
     if isinstance(ph, dict) and isinstance(ph.get(uid_s), dict):
         row = dict(ph[uid_s])
         row.update(patch)
+        if patch.get("quality") is not None or patch.get("manual_confirm_item_id") is not None:
+            row.pop("phantom_tier_credit_by_quality", None)
         ph[uid_s] = row
     merged = overlay.get("merged_items_dict")
     if isinstance(merged, dict) and isinstance(merged.get(uid_s), dict):
@@ -574,6 +603,48 @@ def _phantom_record_append_step(
         step["quality"] = int(q)
     step.update(extra)
     rec.setdefault("steps", []).append(step)
+
+
+def _phantom_find_exact_gold_subset(
+    candidates: List[Dict[str, Any]],
+    target: float,
+) -> List[Dict[str, Any]]:
+    """回退搜索 footprint 之和正好等于 ``target`` 的候选子集。
+
+    ``candidates`` 须已按金权重从高到低排序；首个合法解即返回（高权重优先）。
+    """
+    target_i = int(round(float(target)))
+    if target_i <= 0 or not candidates:
+        return []
+
+    sizes: List[Tuple[int, Dict[str, Any]]] = []
+    for rec in candidates:
+        sz = int(round(float(rec["fp"])))
+        if sz > 0:
+            sizes.append((sz, rec))
+
+    chosen: List[Dict[str, Any]] = []
+    found = False
+
+    def _dfs(idx: int, remaining: int, cur: List[Dict[str, Any]]) -> None:
+        nonlocal found
+        if found:
+            return
+        if remaining == 0:
+            chosen.extend(cur)
+            found = True
+            return
+        if remaining < 0 or idx >= len(sizes):
+            return
+        sz, rec = sizes[idx]
+        if sz <= remaining:
+            _dfs(idx + 1, remaining - sz, cur + [rec])
+            if found:
+                return
+        _dfs(idx + 1, remaining, cur)
+
+    _dfs(0, target_i, [])
+    return chosen
 
 
 def _phantom_record_assign_gold(
@@ -696,7 +767,6 @@ def _phantom_global_gold_allocate(
     board_snapshot: Dict[str, Any],
     rem5: float,
     q5_count_known: bool,
-    qual_thr: float,
     post_gold_thr_q5: float,
     post_gold_thr_q6: float,
     item_thr: float,
@@ -704,10 +774,9 @@ def _phantom_global_gold_allocate(
     """
     艾莎第四回合幽灵全局分摊：
 
-    1. 金品质权重 > ``qual_thr`` 的候选依次分配金格（直至 ``rem5`` 满）；
+    1. 按金权重从高到低，用回退算法选取 footprint 之和正好等于 ``rem5`` 的矩形；
     2. 仍有金预算时从几何 ``vacant`` 扣减；
-    3. 仍有金预算时按金权重从大到小继续分配（可部分 footprint）；
-    4. 金满后按 ``q5_grid_count`` / ``q5_grid_min`` 规则解析余格。
+    3. 金满后按 ``q5_grid_count`` / ``q5_grid_min`` 规则解析余格。
     """
     global_steps: List[Dict[str, Any]] = []
     if not records:
@@ -730,19 +799,27 @@ def _phantom_global_gold_allocate(
         )
         return out
 
-    # ── 第一轮：高置信金品质 ──
-    for rec in _eligible_for_gold():
-        if rem5_ref[0] <= 1e-9:
-            break
-        if float(rec.get("p5") or 0.0) <= qual_thr:
-            continue
-        _phantom_record_assign_gold(
-            rec,
-            _phantom_record_remaining_cells(rec),
-            1,
-            "quality_prob_gold",
-            rem5_ref,
-        )
+    # ── 第一轮：按金权重回退精确匹配剩余金格 ──
+    gold_pool = _eligible_for_gold()
+    if gold_pool and rem5_ref[0] > 1e-9:
+        if rem5_ref[0] == float("inf"):
+            for rec in gold_pool:
+                _phantom_record_assign_gold(
+                    rec,
+                    _phantom_record_remaining_cells(rec),
+                    1,
+                    "quality_prob_gold",
+                    rem5_ref,
+                )
+        else:
+            for rec in _phantom_find_exact_gold_subset(gold_pool, rem5_ref[0]):
+                _phantom_record_assign_gold(
+                    rec,
+                    _phantom_record_remaining_cells(rec),
+                    1,
+                    "quality_prob_gold",
+                    rem5_ref,
+                )
 
     # ── 第二轮：空格吸收金预算 ──
     if rem5_ref[0] > 1e-9:
@@ -759,18 +836,6 @@ def _phantom_global_gold_allocate(
                     "reason": "vacant_absorb",
                 }
             )
-
-    # ── 第三轮：按金权重继续分配 ──
-    for rec in _eligible_for_gold():
-        if rem5_ref[0] <= 1e-9:
-            break
-        _phantom_record_assign_gold(
-            rec,
-            _phantom_record_remaining_cells(rec),
-            3,
-            "gold_weight_desc",
-            rem5_ref,
-        )
 
     _phantom_resolve_post_gold(
         records,
@@ -793,7 +858,7 @@ def phantom_unknown_tier_credit_q456(
     品质未知幽灵（``quality is None``）在 ``C_gr={5,6}\\excluded`` 上全局分摊占位，
     同步写回 ``grid_overlay`` 幽灵行（品质 / 手动确认物品 / 分拆 tier 字段）。
 
-    艾莎第四回合金格优先：高置信金候选 → 空格吸收 → 按金权重继续分配；
+    艾莎第四回合金格优先：按金权重回退精确匹配 → 空格吸收；
     金满后若已知 ``q5_grid_count`` 则余格记红，否则按阈值定档或保留 Q5/Q6 候选分拆。
     手动画板已确认品质或物品的幽灵格不参与分摊。
 
@@ -882,7 +947,6 @@ def phantom_unknown_tier_credit_q456(
         board_snapshot=board_snapshot,
         rem5=rem5_init,
         q5_count_known=q5_count_known,
-        qual_thr=qual_thr,
         post_gold_thr_q5=post_gold_thr_q5,
         post_gold_thr_q6=post_gold_thr_q6,
         item_thr=item_thr,

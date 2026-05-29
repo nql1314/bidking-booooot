@@ -125,11 +125,19 @@ from ..analysis.grid_overlay_infer_vacant_rects import vacant_rect_phantom_infer
 
 
 def _infer_vacant_rect_phantoms_config_flag(raw: Mapping[str, Any]) -> bool:
-    """``pricing.infer_vacant_rect_phantoms`` 开关；键缺失时为 ``True``。"""
+    """
+    第 4 回合起「空格自动填充 + 已知品质未知轮廓扩充」共用开关。
+
+    读取 ``pricing.infer_vacant_rect_phantoms``；键缺失时回退已废弃的
+    ``pricing.infer_unknown_contour_shapes``；二者均缺失时为 ``True``。
+    """
     p = raw.get("pricing")
     if not isinstance(p, dict):
         return True
-    v = p.get("infer_vacant_rect_phantoms", True)
+    if "infer_vacant_rect_phantoms" in p:
+        v = p.get("infer_vacant_rect_phantoms", True)
+    else:
+        v = p.get("infer_unknown_contour_shapes", True)
     if isinstance(v, bool):
         return v
     if isinstance(v, (int, float)):
@@ -145,7 +153,7 @@ def infer_vacant_rect_phantoms_enabled(
     current_round: Optional[int] = None,
 ) -> bool:
     """
-    艾莎第 4 回合起：空置区近似矩形 → 自动 ``phantom_vac_*`` 手动画框推断。
+    艾莎第 4 回合起：空置区近似矩形 → 自动 ``phantom_vac_*``，并在此后做已知品质未知轮廓扩充。
 
     读取 ``pricing.infer_vacant_rect_phantoms``；键缺失时为 ``True``。
     传入 ``current_round`` 时，仅当回合 ≥ 第 4 回合才为 ``True``（与推断层一致）。
@@ -166,31 +174,13 @@ def infer_vacant_rect_phantoms_enabled(
 
 def infer_unknown_contour_shapes_enabled(
     cfg: Optional[Union[RuntimeConfig, Mapping[str, Any]]] = None,
+    *,
+    current_round: Optional[int] = None,
 ) -> bool:
     """
-    是否对品质已知、轮廓未知的物品做 CSV 价带/概率轮廓推断（画板 ``infer_shapes``）。
-
-    读取合并后配置 ``pricing.infer_unknown_contour_shapes``；键缺失时为 ``True``（与既有行为一致）。
-    接受 ``RuntimeConfig`` 或已合并的 ``dict``（如 ``load_runtime().raw``）。
+    向后兼容别名：与 :func:`infer_vacant_rect_phantoms_enabled` 相同（共用 ``infer_vacant_rect_phantoms`` 开关）。
     """
-    raw: Mapping[str, Any]
-    if cfg is None:
-        raw = load_runtime().raw
-    elif isinstance(cfg, RuntimeConfig):
-        raw = cfg.raw
-    else:
-        raw = cfg
-    p = raw.get("pricing")
-    if not isinstance(p, dict):
-        return True
-    v = p.get("infer_unknown_contour_shapes", True)
-    if isinstance(v, bool):
-        return v
-    if isinstance(v, (int, float)):
-        return bool(int(v))
-    if isinstance(v, str):
-        return v.strip().lower() in ("1", "true", "yes", "on")
-    return True
+    return infer_vacant_rect_phantoms_enabled(cfg, current_round=current_round)
 
 
 def _fraud_int_trim(v: Any) -> int:
