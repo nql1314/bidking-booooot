@@ -1,4 +1,4 @@
-"""艾莎第 4 回合及之后：由空置区「近似实心矩形」推断幽灵物品（手动画框 + 候选约束）。"""
+"""品质 1–4 扫描与低阶轮廓齐备后：由空置区「近似实心矩形」推断幽灵物品（手动画框 + 候选约束）。"""
 
 from __future__ import annotations
 
@@ -264,7 +264,7 @@ def _vacant_blocked_sides(r: int, c: int, vacant: Set[Tuple[int, int]]) -> int:
 
 
 def _pass1_collect_temp_ghost_1x1(vacant: Set[Tuple[int, int]]) -> Set[Tuple[int, int]]:
-    """三面或四面被围住的 1×1 空格 → 临时占位（不输出幽灵）。"""
+    """三面或四面被围住的 1×1 空格 → 临时占位（第 4 步再输出幽灵）。"""
     out: Set[Tuple[int, int]] = set()
     for cell in vacant:
         if _vacant_blocked_sides(cell[0], cell[1], vacant) >= 3:
@@ -513,6 +513,153 @@ def _three_sided_fill_scope_recursive(
             return
 
 
+def _phantom_spec_cells(spec: VacantRectPhantomSpec) -> Set[Tuple[int, int]]:
+    return _rect_cells(spec.dr, spec.dc, spec.w, spec.h)
+
+
+def _phantom_specs_orthogonally_adjacent(
+    cells_a: Set[Tuple[int, int]],
+    cells_b: Set[Tuple[int, int]],
+) -> bool:
+    for r, c in cells_a:
+        for dr, dc in _ORTHO_DELTAS:
+            if (r + dr, c + dc) in cells_b:
+                return True
+    return False
+
+
+def _vacant_phantom_apply_quality_count_delta(
+    ctx: _VacantRectInferCtx,
+    spec: VacantRectPhantomSpec,
+    delta: int,
+) -> None:
+    if spec.quality is None:
+        return
+    q = int(spec.quality)
+    ctx.quality_counts[q] = max(0, ctx.quality_counts.get(q, 0) + int(delta))
+
+
+def _project_quality_counts_without_specs(
+    ctx: _VacantRectInferCtx,
+    remove: List[VacantRectPhantomSpec],
+) -> Dict[int, int]:
+    qc = dict(ctx.quality_counts)
+    for spec in remove:
+        if spec.quality is None:
+            continue
+        q = int(spec.quality)
+        qc[q] = max(0, qc.get(q, 0) - 1)
+    return qc
+
+
+def _vacant_rect_phantom_spec_from_bbox(
+    bbox: Tuple[int, int, int, int],
+    *,
+    ctx: _VacantRectInferCtx,
+    quality_counts: Dict[int, int],
+) -> Optional[VacantRectPhantomSpec]:
+    w, h, dc, dr = bbox
+    if _skip_bottom_boundary_1xn_vacant_phantom(
+        w, h, dr, max_box_id=ctx.max_box_id
+    ):
+        return None
+    filt = _candidates_for_vacant_rect(
+        w,
+        h,
+        excl_q=ctx.excl_q,
+        excl_c=ctx.excl_c,
+        csv_index=ctx.csv_index,
+        csv_items=ctx.csv_items,
+        raw_pricing=ctx.raw_pricing,
+        quality_counts=quality_counts,
+    )
+    if not filt:
+        return None
+    qualities = {int(c.quality) for c in filt}
+    quality: Optional[int] = None
+    if len(qualities) == 1:
+        quality = next(iter(qualities))
+    confirm_id: Optional[int] = None
+    if len(filt) == 1:
+        confirm_id = int(filt[0].item_id)
+    return VacantRectPhantomSpec(
+        uid=f"{AUTO_VACANT_RECT_PHANTOM_PREFIX}{dr:02d}{dc:02d}_{w}x{h}",
+        w=int(w),
+        h=int(h),
+        dc=int(dc),
+        dr=int(dr),
+        quality=quality,
+        manual_confirm_item_id=confirm_id,
+    )
+
+
+def _try_merge_adjacent_phantom_pair(
+    a: VacantRectPhantomSpec,
+    b: VacantRectPhantomSpec,
+    all_specs: List[VacantRectPhantomSpec],
+    ctx: _VacantRectInferCtx,
+) -> Optional[VacantRectPhantomSpec]:
+    cells_a = _phantom_spec_cells(a)
+    cells_b = _phantom_spec_cells(b)
+    if not _phantom_specs_orthogonally_adjacent(cells_a, cells_b):
+        return None
+    union = cells_a | cells_b
+    bbox = _infer_solid_rectangle_bbox(union)
+    if bbox is None:
+        return None
+    for other in all_specs:
+        if other is a or other is b:
+            continue
+        if _phantom_spec_cells(other) & union:
+            return None
+    qc = _project_quality_counts_without_specs(ctx, [a, b])
+    return _vacant_rect_phantom_spec_from_bbox(bbox, ctx=ctx, quality_counts=qc)
+
+
+def _pass5_merge_adjacent_phantom_rects(ctx: _VacantRectInferCtx) -> None:
+    """相邻幽灵格并集为实心矩形时合并；合并后的矩形继续参与，直至无法再并。"""
+    specs = ctx.out
+    if len(specs) < 2:
+        return
+    while True:
+        best_key: Optional[Tuple[int, int]] = None
+        best_merged: Optional[VacantRectPhantomSpec] = None
+        best_ij: Optional[Tuple[int, int]] = None
+        for i in range(len(specs)):
+            for j in range(i + 1, len(specs)):
+                merged = _try_merge_adjacent_phantom_pair(
+                    specs[i], specs[j], specs, ctx
+                )
+                if merged is None:
+                    continue
+                involves_1x1 = (
+                    (specs[i].w == 1 and specs[i].h == 1)
+                    or (specs[j].w == 1 and specs[j].h == 1)
+                )
+                key = (1 if involves_1x1 else 0, merged.w * merged.h)
+                if best_key is None or key > best_key:
+                    best_key = key
+                    best_merged = merged
+                    best_ij = (i, j)
+        if best_ij is None or best_merged is None:
+            break
+        i, j = best_ij
+        _vacant_phantom_apply_quality_count_delta(ctx, specs[i], -1)
+        _vacant_phantom_apply_quality_count_delta(ctx, specs[j], -1)
+        _vacant_phantom_apply_quality_count_delta(ctx, best_merged, 1)
+        specs.pop(j)
+        specs.pop(i)
+        specs.append(best_merged)
+
+
+def _pass4_emit_deferred_temp_1x1_phantoms(ctx: _VacantRectInferCtx) -> None:
+    """第 1 步临时占格、仍未被 2/3 步吸收的 1×1 → 输出对应幽灵。"""
+    for r, c in sorted(ctx.temp_ghost_1x1):
+        if (r, c) in ctx.taken:
+            continue
+        _try_emit_rect_phantom(ctx, (1, 1, c, r), block_temp_ghost=False)
+
+
 def _pass_three_sided_rect_fill(ctx: _VacantRectInferCtx) -> None:
     """不规则剩余区：三面围住簇递归贴边取最大矩形推断幽灵。"""
     work = ctx.vacant - ctx.taken
@@ -561,19 +708,20 @@ def compute_vacant_rect_phantom_specs(
     enabled: bool = True,
 ) -> List[VacantRectPhantomSpec]:
     """
-    艾莎第 4 回合及之后、且 Q1–Q4 轮廓已齐时：多轮在剩余空置区推断 ``phantom_vac_*``。
+    品质 1–4 全量扫描已发生、且场上 Q1–Q4 轮廓与锚格均已可靠锁定时：
+    多轮在剩余空置区推断 ``phantom_vac_*``。
 
-    1. 三面/四面围住的 1×1 → 临时幽灵占格（不输出）；
+    1. 三面/四面围住的 1×1 → 临时幽灵占格（不立即输出）；
     2. 连通区近似实心矩形（原逻辑）；
-    3. 不规则剩余区：三面围住簇 → 递归贴三面取最大矩形，剩余重复。
+    3. 不规则剩余区：三面围住簇 → 递归贴三面取最大矩形，剩余重复；
+    4. 第 1 步临时占格、仍未被 2/3 步吸收的 1×1 → 输出对应幽灵；
+    5. 所有 1×1 幽灵与相邻幽灵并集为实心矩形时合并，合并结果继续重复直至稳定。
 
     - 须有 CSV 候选（扫描负向 + ``event_stats`` 件数配额）；
     - 候选品质唯一 → 写入 ``quality``；
     - 候选物品唯一 → 写入 ``manual_confirm_item_id``。
     """
     if not enabled:
-        return []
-    if not vacant_rect_phantom_infer_round_active(current_round):
         return []
     if not _infer_q1234_scan_and_q14_contours_ready(game_state, manual_shapes):
         return []
@@ -622,6 +770,8 @@ def compute_vacant_rect_phantom_specs(
 
     _pass_full_rect_fill(ctx)
     _pass_three_sided_rect_fill(ctx)
+    _pass4_emit_deferred_temp_1x1_phantoms(ctx)
+    _pass5_merge_adjacent_phantom_rects(ctx)
 
     return ctx.out
 

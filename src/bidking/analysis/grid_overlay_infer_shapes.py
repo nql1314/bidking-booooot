@@ -20,13 +20,6 @@ class InferShapesResult(NamedTuple):
     absorbed_phantom_uids: frozenset[str]
 
 
-def _event_stats_q14_grid_counts_all_known(raw: Any) -> bool:
-    """与 :func:`bidking.analysis.raw_pricing.event_stats_q12_q3_q4_grids_all_known` 一致（避免重复实现）。"""
-    from .raw_pricing import event_stats_q12_q3_q4_grids_all_known
-
-    return event_stats_q12_q3_q4_grids_all_known(raw)
-
-
 def _infer_q1234_scan_and_q14_contours_ready(
     state: GameState,
     manual_shapes: Mapping[str, Tuple[int, int, int, int]],
@@ -622,7 +615,7 @@ def compute_grid_overlay_infer_shapes(
 
     ``infer_unknown_contour_shapes=False`` 时（与空置自动填充开关一致）返回空 ``InferShapesResult``。
 
-    当 ``raw_pricing.event_stats`` 低档总格齐备、扫描史已覆盖 Q1–Q4 且低阶轮廓已锁定时：
+    当品质 1–4 的全量扫描均已发生，且场上 Q1–Q4 物品轮廓与锚格均已可靠锁定时：
     各件自 **1×1** 锚格起，按品质批次（金 → 红 → 紫 → …）反复与四邻空置格、同品质邻接推断矩形或
     品质未定幽灵格合并；仅当合并后外形在 CSV 候选中且几何可行时才采纳，直至全局无法再扩大。
     """
@@ -634,7 +627,7 @@ def compute_grid_overlay_infer_shapes(
     if not csv_items:
         return {}
 
-    use_merge_expand = _event_stats_q14_grid_counts_all_known(raw_pricing) and _infer_q1234_scan_and_q14_contours_ready(
+    use_merge_expand = _infer_q1234_scan_and_q14_contours_ready(
         game_state, manual_shapes
     )
     if not use_merge_expand:

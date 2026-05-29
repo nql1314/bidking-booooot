@@ -23,6 +23,10 @@ from .postprocess import (
     apply_late_round_low_bid_surrender,
 )
 from .price_config_load import load_price_config
+from .snapshot_pricing import (
+    board_snapshot_can_refresh_pricing,
+    refresh_board_snapshot_pricing,
+)
 from .strategies import compute_role_base, resolve_strategy_role
 
 
@@ -36,7 +40,8 @@ def compute_price(
     strategy_role: str | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """
-    读快照 ``pricing`` → ``compute_role_base``（艾莎在 ``compute_base_bid_points`` 内含空置红择优）→
+    完整画板快照先 ``refresh_board_snapshot_pricing`` 重算 ``pricing``（与 grid_view 顶栏同源），
+    再 ``compute_role_base``（艾莎在 ``compute_base_bid_points`` 内含空置红择优）→
     回合倍数 → 对手调整 →
     ``points_ceiling`` 锚（第 4 回合起；若倍数 ``ratio`` > 1 则封顶按 ``points_ceiling * ratio``）→
     人性化尾数 → 前两回合兜底 → 超回合低价放弃（886）→ bid_cap。
@@ -110,9 +115,14 @@ def compute_price(
     if not isinstance(bs, dict):
         return _fallback_only("pricing: 无画板快照或快照未启用")
 
-    pricing = bs.get("pricing")
+    pricing = refresh_board_snapshot_pricing(bs, config=effective_config)
     if not isinstance(pricing, dict) or pricing.get("total") is None:
-        return _fallback_only("pricing: 快照缺少 pricing 或 total")
+        cached = bs.get("pricing")
+        if isinstance(cached, dict) and cached.get("total") is not None:
+            pricing = cached
+        else:
+            return _fallback_only("pricing: 快照缺少 pricing 或 total")
+    payload["pricing_refreshed"] = board_snapshot_can_refresh_pricing(bs)
 
     pts, meta = compute_role_base(
         role,

@@ -194,6 +194,45 @@ class TestPricingComputeSmoke(unittest.TestCase):
         )
         self.assertEqual(det.get("effective_round"), 4)
 
+    def test_refresh_pricing_ignores_stale_cached_points(self) -> None:
+        """完整画板快照应重算 pricing，不用文件中过期的 points/total。"""
+        import copy
+        import json
+        from pathlib import Path
+
+        snap_path = Path(__file__).resolve().parents[2] / "data" / "board_snapshot.json"
+        if not snap_path.is_file():
+            self.skipTest("data/board_snapshot.json 不可用")
+        snap = json.loads(snap_path.read_text(encoding="utf-8"))
+        stale_pts = int((snap.get("pricing") or {}).get("points") or 0)
+        self.assertGreater(stale_pts, 0)
+
+        cfg: dict = {
+            "board_snapshot": {"enabled": False, "path": str(snap_path)},
+            "pricing": {
+                "fallback_bid_price": 11111,
+                "enable_opponent_bid_adjustment": False,
+            },
+            "automation": {"selected_mode": "aisha_premium", "bid_ratio_by_round": {"4": 1.0}},
+        }
+        work = copy.deepcopy(snap)
+        p, det = compute_price(
+            cfg,
+            config_path=Path(__file__).resolve(),
+            round_no=4,
+            board_snapshot=work,
+            price_config={"enable_opponent_bid_adjustment": False},
+            strategy_role="aisha",
+        )
+        self.assertTrue(det.get("pricing_refreshed"))
+        refreshed_pts = int((work.get("pricing") or {}).get("points") or 0)
+        self.assertNotEqual(refreshed_pts, stale_pts)
+        self.assertEqual(
+            int((det.get("board_snapshot_bid") or {}).get("points") or 0),
+            refreshed_pts,
+        )
+        self.assertEqual(int(det.get("source_value") or 0), refreshed_pts)
+
 
 if __name__ == "__main__":
     unittest.main()
