@@ -347,12 +347,38 @@ def weighted_est_max_item_base_value(shape: Optional[int]) -> float:
     return WEIGHTED_EST_MAX_ITEM_BASE_VALUE
 
 
+def weighted_percentile(
+    pairs: List[Tuple[float, float]],
+    quantile: float,
+) -> Optional[float]:
+    """按权重 ``pairs=(value, weight)`` 求分位；``quantile`` 为 0.25 / 0.5 等。"""
+    if not pairs:
+        return None
+    try:
+        q = float(quantile)
+    except (TypeError, ValueError):
+        return None
+    if q <= 0.0 or q > 1.0:
+        return None
+    total = sum(w for _, w in pairs)
+    if total <= 0:
+        return None
+    target = q * total
+    cum = 0.0
+    for val, w in sorted(pairs, key=lambda x: x[0]):
+        cum += w
+        if cum >= target - 1e-15:
+            return val
+    return pairs[-1][0]
+
+
 def _weighted_est_price(
     candidates: List[CsvItem],
     map_category_weights: Optional[Dict[int, float]] = None,
     map_id: Optional[int] = None,
     *,
     max_item_base_value: Optional[float] = None,
+    quantile: Optional[float] = None,
 ) -> Optional[float]:
     """按掉落权重计算候选集合的期望价格。
 
@@ -373,12 +399,11 @@ def _weighted_est_price(
     )
     priced = [c for c in candidates if float(c.base_value) <= cap]
     est_pool = priced if priced else candidates
-    weighted_sum = 0.0
-    weight_sum = 0.0
+    pairs: List[Tuple[float, float]] = []
     for item in est_pool:
         weight = _candidate_weight(item, map_category_weights, map_id, map_drop_weights)
-        weighted_sum += item.base_value * weight
-        weight_sum += weight
+        pairs.append((float(item.base_value), float(weight)))
+    weight_sum = sum(w for _, w in pairs)
     if weight_sum <= 0 and map_drop_weights:
         # 地图根图没有覆盖当前候选集合时，退回全局/旧权重，避免全 0。
         return _weighted_est_price(
@@ -386,10 +411,14 @@ def _weighted_est_price(
             map_category_weights,
             None,
             max_item_base_value=cap,
+            quantile=quantile,
         )
     if weight_sum <= 0:
         return None
-    return weighted_sum / weight_sum
+    if quantile is None:
+        weighted_sum = sum(v * w for v, w in pairs)
+        return weighted_sum / weight_sum
+    return weighted_percentile(pairs, quantile)
 
 
 def candidate_probabilities(

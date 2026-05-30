@@ -50,6 +50,7 @@ import time
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from ..parsing import item_db
+from ..config.runtime import resolve_auto_vacant_phantom_price_quantile
 from ..parsing.item_db import (
     _weighted_est_price,
     map_category_ratios,
@@ -151,6 +152,26 @@ def _pricing_work_board_snapshot(board_snapshot: Dict[str, Any], items: Dict[str
     return out
 
 
+def _resolve_auto_vacant_phantom_price_quantile_for_snapshot(
+    board_snapshot: Dict[str, Any],
+) -> Optional[float]:
+    raw = board_snapshot.get("raw_pricing")
+    if isinstance(raw, dict) and raw.get("auto_vacant_phantom_price") is not None:
+        return resolve_auto_vacant_phantom_price_quantile(
+            snapshot_override=raw.get("auto_vacant_phantom_price")
+        )
+    pricing_dict: Optional[Dict[str, Any]] = None
+    try:
+        from ..config.runtime import load_runtime
+
+        pricing_raw = load_runtime().raw.get("pricing")
+        if isinstance(pricing_raw, dict):
+            pricing_dict = pricing_raw
+    except Exception:
+        pass
+    return resolve_auto_vacant_phantom_price_quantile(pricing_dict=pricing_dict)
+
+
 def _item_value(
     it: Dict[str, Any],
     *,
@@ -158,6 +179,7 @@ def _item_value(
     csv_items: List[Any],
     map_id_normalized: Optional[int],
     map_category_weights: Dict[int, float],
+    price_quantile: Optional[float] = None,
 ) -> float:
     t0 = time.perf_counter()
     bid_raw = it.get("box_id")
@@ -214,7 +236,8 @@ def _item_value(
         perf_log_elapsed("_item_value (unique)", t0)
         return result
     w_est = est
-    if w_est is None and csv_items:
+    need_reprice = price_quantile is not None or w_est is None
+    if need_reprice and csv_items:
         cand = list(csv_items)
         if sh is not None:
             cand = [i for i in cand if i.shape == sh]
@@ -232,12 +255,14 @@ def _item_value(
                 cand = wa
         if excl_c:
             cand = [i for i in cand if not any(c in excl_c for c in i.category_tags)]
-        w_est = _weighted_est_price(
-            cand,
-            map_category_weights or None,
-            map_id_normalized,
-            max_item_base_value=weighted_est_max_item_base_value(sh),
-        )
+        if cand:
+            w_est = _weighted_est_price(
+                cand,
+                map_category_weights or None,
+                map_id_normalized,
+                max_item_base_value=weighted_est_max_item_base_value(sh),
+                quantile=price_quantile,
+            )
     result = float(w_est) if w_est is not None else float(best.base_value)
     perf_log_elapsed("_item_value (weighted)", t0)
     return result
@@ -247,6 +272,7 @@ def estimate_snapshot_item_price(
     it: Dict[str, Any],
     *,
     board_snapshot: Dict[str, Any],
+    uid: Optional[str] = None,
 ) -> Optional[float]:
     """单件展示用估价（与画板汇总逻辑同源）。"""
     mid = map_id_from_board_snapshot(board_snapshot)
@@ -255,12 +281,16 @@ def estimate_snapshot_item_price(
     if not csv_items:
         return None
     weights = map_category_ratios(mid) or {}
+    q_override: Optional[float] = None
+    if uid is not None and is_auto_vacant_rect_phantom_uid(str(uid)):
+        q_override = _resolve_auto_vacant_phantom_price_quantile_for_snapshot(board_snapshot)
     v = _item_value(
         it,
         csv_index=csv_index,
         csv_items=csv_items,
         map_id_normalized=mid_n,
         map_category_weights=weights,
+        price_quantile=q_override,
     )
     return v if v > 0 else None
 
@@ -275,7 +305,7 @@ def estimate_snapshot_item_price_for_uid(
     if not isinstance(it, dict):
         return None
     work = _pricing_work_board_snapshot(board_snapshot, items)
-    return estimate_snapshot_item_price(it, board_snapshot=work)
+    return estimate_snapshot_item_price(it, board_snapshot=work, uid=str(uid))
 
 
 def compute_items_total(board_snapshot: Dict[str, Any]) -> float:
@@ -288,16 +318,19 @@ def compute_items_total(board_snapshot: Dict[str, Any]) -> float:
     if not csv_items:
         return 0.0
     weights = map_category_ratios(mid) or {}
+    auto_vac_q = _resolve_auto_vacant_phantom_price_quantile_for_snapshot(board_snapshot)
     total = 0.0
-    for _uid, it in items.items():
+    for uid, it in items.items():
         if not isinstance(it, dict):
             continue
+        q = auto_vac_q if is_auto_vacant_rect_phantom_uid(str(uid)) else None
         total += _item_value(
             it,
             csv_index=csv_index,
             csv_items=csv_items,
             map_id_normalized=mid_n,
             map_category_weights=weights,
+            price_quantile=q,
         )
     perf_log_elapsed(f"compute_items_total (items={len(items)})", t0)
     return total

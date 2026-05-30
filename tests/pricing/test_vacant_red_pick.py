@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import unittest
 
+from bidking.pricing.strategies.aisha_base import compute_base_bid_points
 from bidking.pricing.vacant_red import (
     _aggressive_floor_ceiling_choice,
+    apply_early_auto_fill_ceiling_anchor,
     apply_vacant_red_floor_ceiling_pick,
     resolve_vacant_red_floor_ceiling_pick_mode,
 )
@@ -229,6 +231,86 @@ class TestVacantRedPickMode(unittest.TestCase):
         self.assertEqual(detail.get("pick_mode"), "normal")
         self.assertFalse(detail.get("has_red_inferred"))
         self.assertEqual(chosen, 50_000)
+
+
+class TestEarlyAutoFillCeilingAnchor(unittest.TestCase):
+    def test_round3_uses_ceiling_when_auto_fill_on_vacant_red_off(self) -> None:
+        cfg = {
+            "pricing": {
+                "infer_vacant_rect_phantoms": True,
+                "enable_vacant_red_floor_ceiling_pick": False,
+            }
+        }
+        pricing = {
+            "total": 1000.0,
+            "points": 50_000,
+            "points_floor": 40_000,
+            "points_ceiling": 90_000,
+            "vacant": 8,
+        }
+        chosen, detail = apply_early_auto_fill_ceiling_anchor(
+            cfg, pricing, round_no=3, fin=50_000
+        )
+        self.assertTrue(detail.get("applied"))
+        self.assertEqual(chosen, 90_000)
+        self.assertEqual(detail.get("decision_rule"), "early_auto_fill_points_ceiling")
+
+    def test_skipped_when_vacant_red_pick_enabled(self) -> None:
+        cfg = {
+            "pricing": {
+                "infer_vacant_rect_phantoms": True,
+                "enable_vacant_red_floor_ceiling_pick": True,
+            }
+        }
+        pricing = {
+            "points_floor": 40_000,
+            "points_ceiling": 90_000,
+        }
+        chosen, detail = apply_early_auto_fill_ceiling_anchor(
+            cfg, pricing, round_no=2, fin=50_000
+        )
+        self.assertFalse(detail.get("applied"))
+        self.assertEqual(chosen, 50_000)
+
+    def test_skipped_when_auto_fill_disabled(self) -> None:
+        cfg = {
+            "pricing": {
+                "infer_vacant_rect_phantoms": False,
+                "enable_vacant_red_floor_ceiling_pick": False,
+            }
+        }
+        pricing = {
+            "points_floor": 40_000,
+            "points_ceiling": 90_000,
+        }
+        chosen, detail = apply_early_auto_fill_ceiling_anchor(
+            cfg, pricing, round_no=1, fin=50_000
+        )
+        self.assertFalse(detail.get("applied"))
+        self.assertEqual(chosen, 50_000)
+
+    def test_aisha_base_integrates_early_ceiling(self) -> None:
+        cfg = {
+            "pricing": {
+                "infer_vacant_rect_phantoms": True,
+                "enable_vacant_red_floor_ceiling_pick": False,
+            }
+        }
+        pricing = {
+            "total": 1000.0,
+            "points": 50_000,
+            "points_floor": 40_000,
+            "points_ceiling": 90_000,
+            "vacant": 8,
+        }
+        anchor, meta = compute_base_bid_points(
+            pricing,
+            config=cfg,
+            board_snapshot={"game_state": {"players": {}}},
+            round_no=2,
+        )
+        self.assertEqual(anchor, 90_000)
+        self.assertTrue((meta.get("early_auto_fill_ceiling_anchor") or {}).get("applied"))
 
 
 if __name__ == "__main__":

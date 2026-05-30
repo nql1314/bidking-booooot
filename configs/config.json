@@ -10,6 +10,7 @@
     "price_avg_infer_max_item_count": 30,
     "grid_avg_infer_max_item_count": 30,
     "grid_avg_infer_max_grid_count": 60,
+    "auto_vacant_phantom_price": "avg",
     "phantom_unknown_tier": {
       "post_gold_quality_threshold_q5": 0.8,
       "post_gold_quality_threshold_q6": 0.8

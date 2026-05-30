@@ -183,6 +183,61 @@ def infer_unknown_contour_shapes_enabled(
     return infer_vacant_rect_phantoms_enabled(cfg, current_round=current_round)
 
 
+def parse_auto_vacant_phantom_price_quantile(raw: Any) -> Optional[float]:
+    """
+    解析 ``pricing.auto_vacant_phantom_price``。
+
+    返回 ``None`` 表示权重平均价（默认）；``0.25`` / ``0.5`` 等表示按同权重做 P25 / P50。
+  接受 ``"avg"`` / ``"mean"``、``"p25"`` / ``"p50"``，或 ``0``–``1`` 浮点。
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, (int, float)):
+        v = float(raw)
+        if v <= 0.0:
+            return None
+        if v <= 1.0:
+            return v
+        if 1.0 < v <= 100.0 and abs(v - round(v)) < 1e-9:
+            return float(int(round(v))) / 100.0
+        return None
+    if not isinstance(raw, str):
+        return None
+    s = raw.strip().lower()
+    if not s or s in ("avg", "mean", "average", "加权均价", "平均"):
+        return None
+    if s.startswith("p") and len(s) > 1:
+        try:
+            pct = float(s[1:])
+        except ValueError:
+            return None
+        if 0.0 < pct <= 100.0:
+            return pct / 100.0
+    try:
+        v = float(s)
+    except ValueError:
+        return None
+    if 0.0 < v <= 1.0:
+        return v
+    return None
+
+
+def resolve_auto_vacant_phantom_price_quantile(
+    *,
+    pricing_dict: Optional[Mapping[str, Any]] = None,
+    snapshot_override: Any = None,
+) -> Optional[float]:
+    """解析自动 ``phantom_vac_*`` 计入 ``total`` 时的权重分位价；``None`` = 平均价。"""
+    if snapshot_override is not None:
+        return parse_auto_vacant_phantom_price_quantile(snapshot_override)
+    if isinstance(pricing_dict, dict):
+        if pricing_dict.get("auto_vacant_phantom_price") is not None:
+            return parse_auto_vacant_phantom_price_quantile(
+                pricing_dict.get("auto_vacant_phantom_price")
+            )
+    return None
+
+
 def _fraud_int_trim(v: Any) -> int:
     try:
         return max(0, int(v))

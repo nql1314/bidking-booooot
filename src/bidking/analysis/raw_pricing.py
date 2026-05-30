@@ -3,8 +3,8 @@
 技能日志 → ``event_stats`` **标量直读与轮廓补全**见 :mod:`bidking.analysis.skill_event_stats_from_logs`
 （:func:`parse_skill_entries_to_event_stats_direct`、:data:`EVENT_STATS_ATTRIBUTE_SOURCES`）。
 
-本模块负责 **已知字段上的推理**：随机均价下界、分档 count/grid/price 互推、金红总格守恒、
-q12 汇总、分档零一致性等。
+本模块负责 **已知字段上的推理**：随机均价下界、分档 count/grid 互推、紫/金/红**总价**+CSV 组合、
+金红总格守恒、q12 汇总、分档零一致性等（物品价侧不从均价反推件数/总价）。
 """
 
 from __future__ import annotations
@@ -225,32 +225,6 @@ def _min_positive_int_avg_product_near_integer_relaxed(
     return None
 
 
-def _unique_n_price_avg_in_relaxed_band(avg: float, band_max: int) -> Optional[int]:
-    """在 ``1..min(band_max, _AVG_NEAR_INTEGER_MAX_MULTIPLIER)`` 内，按与 ``_min_positive_int_avg_product_near_integer_relaxed`` 相同的 ``delta`` 序列扫描：
-    第一次出现**恰好一个** ``n`` 使 ``avg*n`` 到最近整数距离 ≤ ``delta`` 时返回该 ``n``；否则 ``None``。
-
-    整数均价（``_near_int(avg)``）下任意 ``n`` 的乘积常为整数，件数不唯一，返回 ``None``。
-    """
-    if avg <= 0 or avg != avg:
-        return None
-    if _near_int(avg):
-        return None
-    cap = max(1, min(int(band_max), int(_AVG_NEAR_INTEGER_MAX_MULTIPLIER)))
-    delta = float(_RATIO_INFER_TOL)
-    while delta <= _MAX_NEAR_INTEGER_DELTA + 1e-15:
-        hits: List[int] = []
-        for n in range(1, cap + 1):
-            prod = avg * float(n)
-            if prod != prod:
-                continue
-            if _dist_to_nearest_integer_positive(prod) <= delta:
-                hits.append(n)
-        if len(hits) == 1:
-            return int(hits[0])
-        delta *= 10.0
-    return None
-
-
 def _unique_grid_total_from_grid_avg_relaxed_band(ag: float, band_max_grid: int) -> Optional[int]:
     """在 ``1..band_max_grid``（上限再夹到 500）内，按与均价唯一解相同的 ``delta`` 序列扫描：
     第一次出现**恰好一个** ``G`` 使 ``G / grid_avg``（隐含件数）到最近整数距离 ≤ ``delta`` 时返回 ``G``；否则 ``None``。
@@ -275,37 +249,6 @@ def _unique_grid_total_from_grid_avg_relaxed_band(ag: float, band_max_grid: int)
             return int(hits[0])
         delta *= 10.0
     return None
-
-
-def _try_infer_unique_count_from_price_avg(
-    d: Dict[str, Any],
-    *,
-    count_k: str,
-    total_price_k: Optional[str],
-    avg_price_k: str,
-    band_max: int,
-) -> None:
-    """若件数未知且均价已知：在 ``1..band_max`` 内找「唯一倍数」则写入件数；总价缺失时补 ``round(avg*n)``。
-
-    若日志已有总价且与 ``round(avg*n)`` 偏差 > 0.5，则不写入（避免与已知总量矛盾）。
-    """
-    if _as_int_count(d.get(count_k)) is not None:
-        return
-    ap = d.get(avg_price_k)
-    if not _is_positive_finite_float(ap):
-        return
-    a = float(ap)
-    n_u = _unique_n_price_avg_in_relaxed_band(a, band_max)
-    if n_u is None:
-        return
-    t_round = int(round(a * float(n_u)))
-    if total_price_k:
-        t0 = _as_int_count(d.get(total_price_k))
-        if t0 is not None and t0 > 0 and abs(float(t0) - float(t_round)) > 0.51:
-            return
-    d[count_k] = int(n_u)
-    if total_price_k and d.get(total_price_k) is None:
-        d[total_price_k] = int(t_round)
 
 
 def _try_infer_unique_grid_from_grid_avg(
@@ -423,15 +366,13 @@ def _infer_tier_count_grid_price(
 ) -> None:
     """在 ``count``、``grid_count``、``grid_avg``、``price_avg``、``price_total`` 间做保守补全（只填 ``None`` 缺项）。
 
-    关系：``grid_count ≈ count * grid_avg``，``price_total ≈ count * price_avg``（与 HitBox 聚合一致）。
-    除法仅在商接近正整数时写入，乘法在 ``round`` 后与乘积足够接近时写入整数总价/总格。
+    占格侧：``grid_count ≈ count * grid_avg``。价侧**不从均价反推件数/总价**，仅在已有件数+总价时补 ``price_avg``。
     """
     for _ in range(8):
         changed = False
         n = _as_int_count(d.get(count_k))
         G = _as_int_count(d.get(grid_k))
         ag = d.get(avg_grid_k)
-        ap = d.get(avg_price_k) if avg_price_k else None
         T = _as_int_count(d.get(total_price_k)) if total_price_k else None
 
         if d.get(avg_grid_k) is None and n and G and n > 0:
@@ -454,24 +395,10 @@ def _infer_tier_count_grid_price(
                 continue
 
         if total_price_k and avg_price_k:
-            if d.get(total_price_k) is None and n and n > 0 and _is_positive_finite_float(ap):
-                prod = float(n) * float(ap)
-                if _near_int(prod):
-                    d[total_price_k] = int(round(prod))
-                    changed = True
-                    continue
-
             if d.get(avg_price_k) is None and n and n > 0 and T is not None and T > 0:
                 d[avg_price_k] = round_computed_div_avg(float(T) / float(n))
                 changed = True
                 continue
-
-            if d.get(count_k) is None and T is not None and T > 0 and _is_positive_finite_float(ap):
-                q = float(T) / float(ap)
-                if _near_int(q) and int(round(q)) > 0:
-                    d[count_k] = int(round(q))
-                    changed = True
-                    continue
 
         if not changed:
             break
@@ -483,18 +410,13 @@ def _finalize_tier_min_bounds(
     count_k: str,
     grid_k: str,
     avg_grid_k: str,
-    avg_price_k: str,
     count_min_k: str,
     grid_min_k: str,
-    price_avg_infer_max_item_count: int = _DEFAULT_PRICE_AVG_INFER_MAX_ITEM_COUNT,
     grid_avg_infer_max_item_count: int = _DEFAULT_GRID_AVG_INFER_MAX_ITEM_COUNT,
 ) -> None:
     """合并 ``count_min`` / ``grid_min``。
 
-    ``count_min``：在观测件数/总格基础上，与均价、均格启发式下界取大（均价为整数时侧下界为 ``1``；
-    否则取最小正整数使 ``avg*n`` 接近整数；均价侧若严阈值下最小 ``n`` 超过 ``price_avg_infer_max_item_count``
-    则继续放宽距离阈值再找，见 ``_min_merge_bound_from_price_avg``；
-    均格侧形式相同但使用独立上界 ``grid_avg_infer_max_item_count``；无均格观测时仍可用宽松 ``delta`` 启发式）。
+    ``count_min``：在观测件数/总格基础上，与**均格**启发式下界取大（不使用物品均价）。
 
     ``grid_min``：若观测总格 ``G``（``grid_k``）已为整数，则 **等于 ``G``**（与启发式下界脱钩）。
     否则：有均格 ``ag`` 时为 ``ag * count_min``（乘积四舍五入）；无均格时为 ``count_min``；
@@ -503,7 +425,6 @@ def _finalize_tier_min_bounds(
     n = _as_int_count(d.get(count_k))
     G = _as_int_count(d.get(grid_k))
     ag = d.get(avg_grid_k)
-    ap = d.get(avg_price_k)
 
     base_grid: Optional[int] = None
     if n is not None and n > 0:
@@ -523,18 +444,11 @@ def _finalize_tier_min_bounds(
         base_count,
         _merge_with_min_from_avg(
             n,
-            ap,
-            from_price=True,
-            price_avg_infer_max_item_count=price_avg_infer_max_item_count,
+            ag,
+            from_price=False,
+            from_grid_avg=True,
+            grid_avg_infer_max_item_count=grid_avg_infer_max_item_count,
         ),
-    )
-    cm = _merge_with_min_from_avg(
-        cm,
-        ag,
-        from_price=False,
-        from_grid_avg=True,
-        price_avg_infer_max_item_count=price_avg_infer_max_item_count,
-        grid_avg_infer_max_item_count=grid_avg_infer_max_item_count,
     )
 
     gm: Optional[int]
@@ -691,24 +605,22 @@ def _load_item_prices_for_combo() -> List[CsvItem]:
     return _item_prices_cache[1]
 
 
-def _tier_candidate_nt_list(d: Dict[str, Any], pfx: str) -> List[Tuple[int, int]]:
-    """由均价（及可选总价、件数）枚举与数值关系一致的 ``(n, 总价 T)``；不参与总格、均格约束。"""
-    ap = d.get(f"{pfx}price_avg")
-    if not _is_positive_finite_float(ap):
-        return []
-    apf = float(ap)
-    n_obs = _as_int_count(d.get(f"{pfx}count"))
+def _tier_candidate_nt_list_from_total(
+    d: Dict[str, Any], pfx: str, *, quality: int
+) -> List[Tuple[int, int]]:
+    """由总价 ``price_total``（及可选已知件数）枚举预计算表可解释的 ``(n, T)``。"""
     T_obs = _as_int_count(d.get(f"{pfx}price_total"))
-
+    if T_obs is None or T_obs <= 0:
+        return []
+    T = int(T_obs)
+    n_obs = _as_int_count(d.get(f"{pfx}count"))
     seen: Set[Tuple[int, int]] = set()
     out: List[Tuple[int, int]] = []
 
-    def push(n: int, T: int) -> None:
-        if n <= 0 or T <= 0:
+    def try_add(n: int) -> None:
+        if n <= 0 or n > _TIER_COMBO_MAX_ITEM_COUNT:
             return
-        if abs(float(T) / float(n) - apf) > _RATIO_INFER_TOL:
-            return
-        if T_obs is not None and int(T_obs) != int(T):
+        if _tier_combo_grid_sums(quality, n, T_need=T) is None:
             return
         key = (n, T)
         if key not in seen:
@@ -716,29 +628,11 @@ def _tier_candidate_nt_list(d: Dict[str, Any], pfx: str) -> List[Tuple[int, int]
             out.append(key)
 
     if n_obs is not None and n_obs > 0:
-        n = int(n_obs)
-        if T_obs is not None:
-            T = int(T_obs)
-        elif _near_int(float(n) * apf):
-            T = int(round(float(n) * apf))
-        else:
-            return []
-        push(n, T)
+        try_add(int(n_obs))
         return out
 
     for n in range(1, _TIER_COMBO_MAX_ITEM_COUNT + 1):
-        if not _near_int(float(n) * apf):
-            continue
-        T = int(round(float(n) * apf))
-        if T_obs is not None and int(T_obs) != T:
-            continue
-        push(n, T)
-
-    if T_obs is not None and (n_obs is None or n_obs <= 0):
-        n0 = max(1, int(round(float(T_obs) / apf)))
-        if n0 <= _TIER_COMBO_MAX_ITEM_COUNT and _near_int(float(T_obs) / float(n0) - apf):
-            push(n0, int(T_obs))
-
+        try_add(n)
     return out
 
 
@@ -754,18 +648,17 @@ def _apply_tier_item_combo_from_csv(
     quality: int,
     csv_items: Sequence[CsvItem],
     *,
-    price_avg_infer_max_item_count: int = _DEFAULT_PRICE_AVG_INFER_MAX_ITEM_COUNT,
     grid_avg_infer_max_item_count: int = _DEFAULT_GRID_AVG_INFER_MAX_ITEM_COUNT,
 ) -> None:
-    """在有效 ``price_avg`` 且该档 ``*_grid_count`` 仍未知时，用 CSV 无重复子集解释件数与总价。
+    """在有效 ``price_total`` 且该档 ``*_grid_count`` 仍未知时，用 CSV 预计算表解释件数与占格。
 
-    不在此用总格作约束；技能已给出总格时跳过（由其它路径维护）。无有效均价时不运行。
+    不在此用总格作约束；技能已给出总格时跳过（由其它路径维护）。无有效总价时不运行。
 
     件数枚举不超过 ``_TIER_COMBO_MAX_ITEM_COUNT``；**件数仍未知**且 ``count_min`` 大于该上界时不做组合枚举（避免离谱下界）。
 
-    若日志/均价唯一推理已给出 ``count``，即使 ``count_min`` 较大仍可用预计算表尝试补全 ``grid_count``。
+    若日志已给出 ``count``，即使 ``count_min`` 较大仍可用预计算表尝试补全 ``grid_count``。
 
-    唯一 ``(总价, 总格)`` 时写入 ``count`` / ``price_total`` / ``grid_count`` 并刷新均价、均格；
+    唯一 ``(总价, 总格)`` 时写入 ``count`` / ``grid_count`` 并刷新均价、均格（均价由总价÷件数回写，非均价反推）；
     否则仅强化 ``count_min`` / ``grid_min``。
     """
     pool = [it for it in csv_items if it.quality == quality]
@@ -780,7 +673,7 @@ def _apply_tier_item_combo_from_csv(
     count_min_k = f"{pfx}count_min"
     grid_min_k = f"{pfx}grid_min"
 
-    if not _is_positive_finite_float(d.get(avg_price_k)):
+    if _as_int_count(d.get(total_k)) is None:
         return
     if _as_int_count(d.get(grid_k)) is not None:
         return
@@ -788,7 +681,7 @@ def _apply_tier_item_combo_from_csv(
     cm0 = _as_int_count(d.get(count_min_k))
     if n_locked is None and cm0 is not None and cm0 > _TIER_COMBO_MAX_ITEM_COUNT:
         return
-    triples = _tier_candidate_nt_list(d, pfx)
+    triples = _tier_candidate_nt_list_from_total(d, pfx, quality=quality)
     if not triples:
         return
 
@@ -828,10 +721,8 @@ def _apply_tier_item_combo_from_csv(
             count_k=count_k,
             grid_k=grid_k,
             avg_grid_k=avg_grid_k,
-            avg_price_k=avg_price_k,
             count_min_k=count_min_k,
             grid_min_k=grid_min_k,
-            price_avg_infer_max_item_count=price_avg_infer_max_item_count,
             grid_avg_infer_max_item_count=grid_avg_infer_max_item_count,
         )
         return
@@ -863,8 +754,7 @@ def build_raw_pricing_dict(
     返回含 ``event_stats``、``census_absent_qualities``（分档零一致性整理后 ``qK_count==0`` 的品质列表，
     供 :mod:`.scan_inference` 与 UI 负向合并）等。
 
-    ``price_avg_infer_max_item_count``：紫/金/红 ``AllHitItemAvgPrice`` 件数启发式上界（``1..200``）；
-    省略时读取合并配置 ``pricing.price_avg_infer_max_item_count``。
+    ``price_avg_infer_max_item_count``：保留入参以兼容旧调用方，**不再参与**紫/金/红推理（价侧仅总价+CSV 组合）。
 
     ``grid_avg_infer_max_item_count`` / ``grid_avg_infer_max_grid_count``：均格侧合并到 ``count_min`` 的乘数上界、
     以及由均格反推总格唯一解时的候选 ``G`` 上界（``1..500``）；省略时读 ``pricing.*`` 缺省分别为
@@ -880,11 +770,6 @@ def build_raw_pricing_dict(
             _pd = _p
     except Exception:
         pass
-
-    if price_avg_infer_max_item_count is not None:
-        mic = resolve_price_avg_infer_max_item_count(explicit=price_avg_infer_max_item_count)
-    else:
-        mic = resolve_price_avg_infer_max_item_count(pricing_dict=_pd)
 
     if grid_avg_infer_max_item_count is not None:
         gmic = resolve_grid_avg_infer_max_item_count(explicit=grid_avg_infer_max_item_count)
@@ -971,13 +856,6 @@ def build_raw_pricing_dict(
             avg_price_k=f"{_pfx}price_avg",
             total_price_k=f"{_pfx}price_total",
         )
-        _try_infer_unique_count_from_price_avg(
-            direct,
-            count_k=f"{_pfx}count",
-            total_price_k=f"{_pfx}price_total",
-            avg_price_k=f"{_pfx}price_avg",
-            band_max=mic,
-        )
         _try_infer_unique_grid_from_grid_avg(
             direct,
             count_k=f"{_pfx}count",
@@ -998,10 +876,8 @@ def build_raw_pricing_dict(
             count_k=f"{_pfx}count",
             grid_k=f"{_pfx}grid_count",
             avg_grid_k=f"{_pfx}grid_avg",
-            avg_price_k=f"{_pfx}price_avg",
             count_min_k=f"{_pfx}count_min",
             grid_min_k=f"{_pfx}grid_min",
-            price_avg_infer_max_item_count=mic,
             grid_avg_infer_max_item_count=gmic,
         )
         _apply_tier_item_combo_from_csv(
@@ -1009,7 +885,6 @@ def build_raw_pricing_dict(
             _pfx,
             _q,
             csv_items_combo,
-            price_avg_infer_max_item_count=mic,
             grid_avg_infer_max_item_count=gmic,
         )
 
