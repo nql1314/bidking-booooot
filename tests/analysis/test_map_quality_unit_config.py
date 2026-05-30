@@ -13,7 +13,9 @@ from bidking.analysis._board_pricing import build_snapshot_pricing_dict
 from bidking.analysis.map_quality_unit_config import (
     apply_map_quality_unit_per_cell_overrides,
     config_overrides_from_pricing,
+    map_quality_unit_per_cell_ceiling_from_refs,
     merge_config_overrides_into_runtime,
+    validate_map_quality_unit_per_cell_override,
 )
 from bidking.analysis.raw_pricing import build_raw_pricing_dict
 
@@ -48,6 +50,35 @@ class MapQualityUnitConfigTests(unittest.TestCase):
             {"map_quality_unit_per_cell": {"q456": 15000.0}}
         )
         self.assertEqual(ov.get("q456"), 15000.0)
+
+    def test_config_overrides_q3456_parsed(self) -> None:
+        ov = config_overrides_from_pricing(
+            {"map_quality_unit_per_cell": {"q3456": 12000.0}}
+        )
+        self.assertEqual(ov.get("q3456"), 12000.0)
+
+    def test_ceiling_from_refs_avg_times_1_2(self) -> None:
+        cap = map_quality_unit_per_cell_ceiling_from_refs({"avg_per_cell": 1000.0})
+        self.assertAlmostEqual(cap, 1200.0)
+
+    def test_validate_rejects_above_ceiling(self) -> None:
+        refs = {"q5": {"avg_per_cell": 1000.0}}
+        validate_map_quality_unit_per_cell_override("q5", 1200.0, refs)
+        with self.assertRaises(ValueError):
+            validate_map_quality_unit_per_cell_override("q5", 1200.01, refs)
+
+    def test_validate_skips_when_no_csv_avg(self) -> None:
+        validate_map_quality_unit_per_cell_override("q5", 999999.0, {})
+
+    def test_apply_overrides_q3456_cell_and_scaled_item(self) -> None:
+        cell = {"q3+q4+q5+q6": 4000.0}
+        item = {"q3+q4+q5+q6": 8000.0}
+        cell2, item2, applied = apply_map_quality_unit_per_cell_overrides(
+            cell, item, {"q3456": 6000.0}
+        )
+        self.assertEqual(cell2["q3+q4+q5+q6"], 6000.0)
+        self.assertAlmostEqual(item2["q3+q4+q5+q6"], 12000.0)
+        self.assertIn("q3+q4+q5+q6", applied)
 
     def test_build_raw_pricing_config_overrides_csv(self) -> None:
         tmp = tempfile.NamedTemporaryFile(

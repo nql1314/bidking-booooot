@@ -238,7 +238,7 @@
       "path": "pricing.auto_vacant_phantom_price",
       "type": "string",
       "label": "自动幽灵物品计价分位",
-      "description": "第4回合自动填充的 phantom_vac_* 计入 total 时的权重价：avg=加权平均（默认），p25/p50/p75 等为同权重分位价。可在 raw_pricing 覆盖。",
+      "description": "第4回合自动填充的 phantom_vac_* 计入 total 时的权重价：avg=加权平均（默认），p25/p50 等为同权重分位价,不要超过p50。可在 raw_pricing 覆盖。",
       "scope": "both",
       "group": "出价",
       "hide": false
