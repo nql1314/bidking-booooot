@@ -37,19 +37,20 @@
     "tool_rounds": [
       1,
       2,
-      3
+      3,
+      4
     ],
     "default_map": "1",
     "default_runs": 1,
-    "selected_map": "240",
-    "selected_runs": 3,
+    "selected_map": "450",
+    "selected_runs": 10,
     "warehouse_auto_sort": {
       "enabled": true
     },
     "run_cycles": 1,
     "cycle_rest_minutes": 0.0,
     "enable_map_entry_money_check": false,
-    "enable_aisha_round4_tool_vacant_gate": false,
+    "enable_aisha_round4_tool_vacant_gate": true,
     "aisha_round4_tool_min_vacant": 30,
     "bid_cap_skip_when_total_above": 0,
     "game_start_timeout_seconds": 0.0,

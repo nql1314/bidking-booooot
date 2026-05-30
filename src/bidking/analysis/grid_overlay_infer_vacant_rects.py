@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Mapping, Optional, Set, Tuple
+from typing import Any, Dict, List, Mapping, NamedTuple, Optional, Set, Tuple
 
 from ..parsing import item_db
 from ..parsing.state import GameState, ItemKnowledge
+from ._shape_wh import shape_wh_from_snapshot
 from .grid_overlay_dims import GRID_COLS, GRID_ROWS, AISHA_VACANT_RECT_INFER_ROUND, rect_cells_wh
 from .grid_overlay_item_merge import _load_item_prices_db
+from .grid_overlay_vacant_zone import _live_shape_wh
+from .phantom_pricing_ui_sync import PHANTOM_Q_INFER, phantom_quality_pref_explicit_quality
 from .scan_inference import census_absent_qualities_from_board_snapshot
 from .strategy.common import _find_continuous_regions
 
@@ -97,6 +100,14 @@ class VacantRectPhantomSpec:
     dr: int
     quality: Optional[int] = None
     manual_confirm_item_id: Optional[int] = None
+
+
+class VacantRectInferResult(NamedTuple):
+    """空置矩形幽灵推断 + 品质已知、轮廓未知日志物品的合并扩充。"""
+
+    specs: List[VacantRectPhantomSpec]
+    inferred_log_shapes: Dict[str, Tuple[int, int, int, int]]
+    absorbed_phantom_uids: frozenset[str]
 
 
 def is_auto_vacant_rect_phantom_uid(uid: str) -> bool:
@@ -752,6 +763,622 @@ def _pass_three_sided_rect_fill(ctx: _VacantRectInferCtx) -> None:
         _three_sided_fill_scope_recursive(ctx, set(scope))
 
 
+_MERGE_EXPAND_QUALITY_ORDER: Tuple[int, ...] = (5, 6, 4, 3, 2, 1)
+
+
+def _unknown_contour_rect_feasible(
+    r1: int,
+    c1: int,
+    r2: int,
+    c2: int,
+    occupied: Set[Tuple[int, int]],
+    suppress: Set[Tuple[int, int]],
+    max_bid: int,
+) -> bool:
+    for r in range(r1, r2 + 1):
+        for c in range(c1, c2 + 1):
+            if r * GRID_COLS + c > max_bid:
+                return False
+            if (r, c) in occupied:
+                return False
+            if (r, c) in suppress:
+                return False
+    return True
+
+
+def _unknown_contour_pseudo_blocked(
+    baseline_occ: Set[Tuple[int, int]],
+    inferred_occ: Set[Tuple[int, int]],
+    self_base: Set[Tuple[int, int]],
+) -> Set[Tuple[int, int]]:
+    return inferred_occ | (baseline_occ - self_base)
+
+
+def _unknown_contour_free_cells_in_prefix(
+    pseudo_blocked: Set[Tuple[int, int]],
+    suppress: Set[Tuple[int, int]],
+    max_bid: int,
+) -> Set[Tuple[int, int]]:
+    free: Set[Tuple[int, int]] = set()
+    mx = int(max_bid)
+    for bid in range(mx + 1):
+        r, c = bid // GRID_COLS, bid % GRID_COLS
+        if (r, c) in pseudo_blocked or (r, c) in suppress:
+            continue
+        free.add((r, c))
+    return free
+
+
+def _unknown_contour_phantom_absorbable(
+    puid: str,
+    phantom_rects: Mapping[str, Tuple[int, int, int, int]],
+    *,
+    inferred_occ: Set[Tuple[int, int]],
+    rects: Mapping[str, Tuple[int, int, int, int]],
+    uid: str,
+) -> bool:
+    cells = rect_cells_wh(*phantom_rects[str(puid)])
+    if cells & inferred_occ:
+        return False
+    for ouid, rect in rects.items():
+        if ouid == uid:
+            continue
+        if cells & rect_cells_wh(*rect):
+            return False
+    return True
+
+
+def _unknown_contour_sets_orthogonally_adjacent(
+    a: Set[Tuple[int, int]],
+    b: Set[Tuple[int, int]],
+) -> bool:
+    for r, c in a:
+        for dr, dc in _ORTHO_DELTAS:
+            if (r + dr, c + dc) in b:
+                return True
+    return False
+
+
+def _unknown_contour_anchor_inside_rect(
+    ar: int,
+    ac: int,
+    rect: Tuple[int, int, int, int],
+    *,
+    box_id_confirmed: bool,
+) -> bool:
+    w, h, dc, dr = rect
+    if box_id_confirmed:
+        return int(dr) == int(ar) and int(dc) == int(ac)
+    return int(dr) <= int(ar) < int(dr) + int(h) and int(dc) <= int(ac) < int(dc) + int(w)
+
+
+def _unknown_contour_filt_has_shape_wh(filt: List[Any], w: int, h: int) -> bool:
+    wh = (int(w), int(h))
+    for c in filt:
+        cwh = shape_wh_from_snapshot(c.shape)
+        if cwh == wh:
+            return True
+    return False
+
+
+def _unknown_contour_phantom_quality_undetermined(
+    uid: str,
+    k: ItemKnowledge,
+    phantom_quality_pref: Mapping[str, Any],
+) -> bool:
+    pref = phantom_quality_pref.get(uid)
+    if pref == PHANTOM_Q_INFER:
+        return True
+    if isinstance(pref, str) and pref.strip() == PHANTOM_Q_INFER:
+        return True
+    if phantom_quality_pref_explicit_quality(pref) is not None:
+        return False
+    return k.quality is None
+
+
+def _unknown_contour_undetermined_phantom_peer_rects(
+    phantom_items: Mapping[str, ItemKnowledge],
+    manual_shapes: Mapping[str, Tuple[int, int, int, int]],
+    phantom_quality_pref: Mapping[str, Any],
+) -> Dict[str, Tuple[int, int, int, int]]:
+    out: Dict[str, Tuple[int, int, int, int]] = {}
+    for uid, k in phantom_items.items():
+        suid = str(uid)
+        if suid not in manual_shapes:
+            continue
+        if not _unknown_contour_phantom_quality_undetermined(suid, k, phantom_quality_pref):
+            continue
+        rect = manual_shapes[suid]
+        out[suid] = (int(rect[0]), int(rect[1]), int(rect[2]), int(rect[3]))
+    return out
+
+
+def _unknown_contour_phantom_peer_rects_for_merge(
+    phantom_items: Mapping[str, ItemKnowledge],
+    manual_shapes: Mapping[str, Tuple[int, int, int, int]],
+    phantom_quality_pref: Mapping[str, Any],
+    phantom_specs: List[VacantRectPhantomSpec],
+) -> Dict[str, Tuple[int, int, int, int]]:
+    """
+    可与日志件做邻接并集的幽灵矩形。
+
+    - 手画幽灵：仅品质未定（显式 Q1–Q6 不被动吸收）；
+    - 本轮 ``phantom_vac_*``：凡已写入 ``phantom_specs``、尚未落盘的自动幽灵均可参与几何合并
+      （含推断出唯一品质的 ``phantom_vac``，以便与下方已扩大的日志轮廓叠成更大实心矩形）。
+    """
+    out = _unknown_contour_undetermined_phantom_peer_rects(
+        phantom_items, manual_shapes, phantom_quality_pref
+    )
+    for spec in phantom_specs:
+        if spec.manual_confirm_item_id is not None:
+            continue
+        suid = str(spec.uid)
+        if not is_auto_vacant_rect_phantom_uid(suid):
+            continue
+        out[suid] = (int(spec.w), int(spec.h), int(spec.dc), int(spec.dr))
+    return out
+
+
+def _unknown_contour_merge_expand_options(
+    ar: int,
+    ac: int,
+    *,
+    box_id_confirmed: bool,
+    w: int,
+    h: int,
+    dc: int,
+    dr: int,
+    vacant: Set[Tuple[int, int]],
+    peer_rects: Mapping[str, Tuple[int, int, int, int]],
+    phantom_peer_rects: Mapping[str, Tuple[int, int, int, int]],
+) -> List[Tuple[Tuple[int, int, int, int], Set[str], Set[str]]]:
+    cur = rect_cells_wh(w, h, dc, dr)
+    opts: List[Tuple[Tuple[int, int, int, int], Set[str], Set[str]]] = []
+
+    def _try_strip(
+        edge: Set[Tuple[int, int]],
+        new_rect: Tuple[int, int, int, int],
+    ) -> None:
+        if not edge or not all(cell in vacant for cell in edge):
+            return
+        if not _unknown_contour_anchor_inside_rect(
+            ar, ac, new_rect, box_id_confirmed=box_id_confirmed
+        ):
+            return
+        opts.append((new_rect, set(), set()))
+
+    def _try_peer_union(
+        puid: str,
+        peer: Tuple[int, int, int, int],
+        *,
+        as_phantom: bool,
+    ) -> None:
+        pw, ph, pdc, pdr = peer
+        pcells = rect_cells_wh(pw, ph, pdc, pdr)
+        if not _unknown_contour_sets_orthogonally_adjacent(cur, pcells):
+            return
+        bbox = _vacant_infer_solid_rectangle_bbox(cur | pcells)
+        if bbox is None:
+            return
+        if not _unknown_contour_anchor_inside_rect(
+            ar, ac, bbox, box_id_confirmed=box_id_confirmed
+        ):
+            return
+        if as_phantom:
+            opts.append((bbox, set(), {str(puid)}))
+        else:
+            opts.append((bbox, {str(puid)}, set()))
+
+    if int(dc) + int(w) < GRID_COLS:
+        _try_strip(
+            {(r, int(dc) + int(w)) for r in range(int(dr), int(dr) + int(h))},
+            (int(w) + 1, int(h), int(dc), int(dr)),
+        )
+    if int(dc) > 0:
+        _try_strip(
+            {(r, int(dc) - 1) for r in range(int(dr), int(dr) + int(h))},
+            (int(w) + 1, int(h), int(dc) - 1, int(dr)),
+        )
+    if int(dr) + int(h) < GRID_ROWS:
+        _try_strip(
+            {(int(dr) + int(h), c) for c in range(int(dc), int(dc) + int(w))},
+            (int(w), int(h) + 1, int(dc), int(dr)),
+        )
+    if int(dr) > 0:
+        _try_strip(
+            {(int(dr) - 1, c) for c in range(int(dc), int(dc) + int(w))},
+            (int(w), int(h) + 1, int(dc), int(dr) - 1),
+        )
+
+    for puid, peer in peer_rects.items():
+        _try_peer_union(puid, peer, as_phantom=False)
+
+    for puid, peer in phantom_peer_rects.items():
+        _try_peer_union(puid, peer, as_phantom=True)
+
+    return opts
+
+
+def _unknown_contour_base_occupied_cells_for_uid(
+    uid: str,
+    k: ItemKnowledge,
+    manual_shapes: Mapping[str, Tuple[int, int, int, int]],
+) -> Set[Tuple[int, int]]:
+    bid = getattr(k, "box_id", None)
+    if bid is None:
+        return set()
+    try:
+        ib = int(bid)
+    except (TypeError, ValueError):
+        return set()
+    dc = ib % GRID_COLS
+    dr = ib // GRID_COLS
+    suid = str(uid)
+    out: Set[Tuple[int, int]] = set()
+    if suid in manual_shapes:
+        w, h, dc_m, dr_m = manual_shapes[suid]
+        for ddr in range(h):
+            for ddc in range(w):
+                out.add((dr_m + ddr, dc_m + ddc))
+        return out
+    if getattr(k, "box_id_confirmed", False):
+        w, h = _live_shape_wh(getattr(k, "shape", None))
+        for ddr in range(h):
+            for ddc in range(w):
+                out.add((dr + ddr, dc + ddc))
+        return out
+    out.add((dr, dc))
+    return out
+
+
+def _unknown_contour_merge_rect_feasible(
+    new_rect: Tuple[int, int, int, int],
+    *,
+    uid: str,
+    absorbed_uids: Set[str],
+    absorbed_phantom_uids: Set[str],
+    phantom_rects: Mapping[str, Tuple[int, int, int, int]],
+    rects: Mapping[str, Tuple[int, int, int, int]],
+    anchors: Mapping[str, Tuple[int, int]],
+    baseline_occ: Set[Tuple[int, int]],
+    inferred_occ: Set[Tuple[int, int]],
+    manual_shapes: Mapping[str, Tuple[int, int, int, int]],
+    items_by_uid: Mapping[str, ItemKnowledge],
+    suppress: Set[Tuple[int, int]],
+    max_bid: int,
+) -> bool:
+    w, h, dc, dr = new_rect
+    new_cells = rect_cells_wh(w, h, dc, dr)
+    blocked = set(baseline_occ) | set(inferred_occ)
+    for ouid, rect in rects.items():
+        if ouid == uid or ouid in absorbed_uids:
+            continue
+        blocked |= rect_cells_wh(*rect)
+    for puid in absorbed_uids:
+        ar_p, ac_p = anchors[str(puid)]
+        blocked.add((int(ar_p), int(ac_p)))
+    for puid in absorbed_phantom_uids:
+        pw, ph, pdc, pdr = phantom_rects[str(puid)]
+        ph_cells = rect_cells_wh(pw, ph, pdc, pdr)
+        blocked -= ph_cells - inferred_occ
+
+    k = items_by_uid[str(uid)]
+    self_base = _unknown_contour_base_occupied_cells_for_uid(uid, k, manual_shapes)
+    allowed = set(self_base)
+    for puid in absorbed_uids:
+        ar_p, ac_p = anchors[puid]
+        allowed.add((int(ar_p), int(ac_p)))
+    for puid in absorbed_phantom_uids:
+        pw, ph, pdc, pdr = phantom_rects[puid]
+        allowed.add((int(pdr), int(pdc)))
+    pseudo = _unknown_contour_pseudo_blocked(blocked, set(), allowed)
+    return _unknown_contour_rect_feasible(
+        int(dr),
+        int(dc),
+        int(dr) + int(h) - 1,
+        int(dc) + int(w) - 1,
+        pseudo,
+        suppress,
+        max_bid,
+    )
+
+
+def _unknown_contour_merge_baseline_occ(
+    base_occupied: Set[Tuple[int, int]],
+    phantom_specs: List[VacantRectPhantomSpec],
+    consumed_phantoms: Set[str],
+) -> Set[Tuple[int, int]]:
+    """合并占位基底：日志/手画占位 + 尚未被日志件吸收的 ``phantom_vac_*``。"""
+    out = set(base_occupied)
+    consumed = {str(u) for u in consumed_phantoms}
+    for spec in phantom_specs:
+        if str(spec.uid) in consumed:
+            continue
+        out |= rect_cells_wh(spec.w, spec.h, spec.dc, spec.dr)
+    return out
+
+
+def _unknown_contour_iterative_merge_expand_batch(
+    batch: List[Tuple[str, ItemKnowledge, List[Any], int, int, bool]],
+    *,
+    base_occupied: Set[Tuple[int, int]],
+    phantom_specs: List[VacantRectPhantomSpec],
+    inferred_occ: Set[Tuple[int, int]],
+    manual_shapes: Mapping[str, Tuple[int, int, int, int]],
+    phantom_peer_rects: Mapping[str, Tuple[int, int, int, int]],
+    consumed_phantoms: Set[str],
+    suppress: Set[Tuple[int, int]],
+    max_bid: int,
+) -> Dict[str, Tuple[int, int, int, int]]:
+    if not batch:
+        return {}
+    rects: Dict[str, Tuple[int, int, int, int]] = {}
+    anchors: Dict[str, Tuple[int, int]] = {}
+    confirmed: Dict[str, bool] = {}
+    filts: Dict[str, List[Any]] = {}
+    items_by_uid: Dict[str, ItemKnowledge] = {}
+    for uid, k, filt, ar, ac, confirmed_tl in batch:
+        suid = str(uid)
+        rects[suid] = (1, 1, int(ac), int(ar))
+        anchors[suid] = (int(ar), int(ac))
+        confirmed[suid] = bool(confirmed_tl)
+        filts[suid] = filt
+        items_by_uid[suid] = k
+
+    phantoms_absorbed_by: Dict[str, Set[str]] = {}
+    phantom_rects = dict(phantom_peer_rects)
+
+    while True:
+        baseline_occ = _unknown_contour_merge_baseline_occ(
+            base_occupied, phantom_specs, consumed_phantoms
+        )
+        occ_rects: Set[Tuple[int, int]] = set()
+        for rect in rects.values():
+            occ_rects |= rect_cells_wh(*rect)
+        vacant = _unknown_contour_free_cells_in_prefix(
+            baseline_occ | inferred_occ | occ_rects,
+            suppress,
+            max_bid,
+        )
+
+        best_key: Optional[Tuple[int, ...]] = None
+        best_apply: Optional[
+            Tuple[str, Tuple[int, int, int, int], Set[str], Set[str]]
+        ] = None
+
+        active_phantoms = {
+            u: r for u, r in phantom_rects.items() if u not in consumed_phantoms
+        }
+
+        for uid in sorted(rects.keys()):
+            w, h, dc, dr = rects[uid]
+            ar, ac = anchors[uid]
+            peers = {u: r for u, r in rects.items() if u != uid}
+            for new_rect, absorbed, absorbed_ph in _unknown_contour_merge_expand_options(
+                ar,
+                ac,
+                box_id_confirmed=confirmed[uid],
+                w=w,
+                h=h,
+                dc=dc,
+                dr=dr,
+                vacant=vacant,
+                peer_rects=peers,
+                phantom_peer_rects=active_phantoms,
+            ):
+                if any(
+                    not _unknown_contour_phantom_absorbable(
+                        puid,
+                        phantom_rects,
+                        inferred_occ=inferred_occ,
+                        rects=rects,
+                        uid=uid,
+                    )
+                    for puid in absorbed_ph
+                ):
+                    continue
+                nw, nh, _, _ = new_rect
+                if not _unknown_contour_filt_has_shape_wh(filts[uid], nw, nh):
+                    continue
+                if not _unknown_contour_merge_rect_feasible(
+                    new_rect,
+                    uid=uid,
+                    absorbed_uids=absorbed,
+                    absorbed_phantom_uids=absorbed_ph,
+                    phantom_rects=phantom_rects,
+                    rects=rects,
+                    anchors=anchors,
+                    baseline_occ=baseline_occ,
+                    inferred_occ=inferred_occ,
+                    manual_shapes=manual_shapes,
+                    items_by_uid=items_by_uid,
+                    suppress=suppress,
+                    max_bid=max_bid,
+                ):
+                    continue
+                gain = int(nw) * int(nh) - int(w) * int(h)
+                key = (int(gain), int(nw) * int(nh), uid)
+                if best_key is None or key > best_key:
+                    best_key = key
+                    best_apply = (uid, new_rect, absorbed, absorbed_ph)
+
+        if best_apply is None:
+            break
+        uid, new_rect, absorbed, absorbed_ph = best_apply
+        rects[uid] = new_rect
+        for puid in absorbed:
+            ar_p, ac_p = anchors[puid]
+            rects[puid] = (1, 1, int(ac_p), int(ar_p))
+        if absorbed_ph:
+            consumed_phantoms |= absorbed_ph
+            phantoms_absorbed_by.setdefault(uid, set()).update(absorbed_ph)
+
+    out: Dict[str, Tuple[int, int, int, int]] = {}
+    for uid, rect in rects.items():
+        w, h, dc, dr = rect
+        if not _unknown_contour_filt_has_shape_wh(filts[uid], w, h):
+            continue
+        if not _unknown_contour_merge_rect_feasible(
+            rect,
+            uid=uid,
+            absorbed_uids=set(),
+            absorbed_phantom_uids=phantoms_absorbed_by.get(uid, set()),
+            phantom_rects=phantom_rects,
+            rects=rects,
+            anchors=anchors,
+            baseline_occ=baseline_occ,
+            inferred_occ=inferred_occ,
+            manual_shapes=manual_shapes,
+            items_by_uid=items_by_uid,
+            suppress=suppress,
+            max_bid=max_bid,
+        ):
+            continue
+        out[uid] = rect
+    return out
+
+
+def _unknown_contour_log_item_eligible(
+    k: ItemKnowledge,
+    uid: str,
+    manual_shapes: Mapping[str, Tuple[int, int, int, int]],
+) -> bool:
+    if uid in manual_shapes:
+        return False
+    if k.shape is not None:
+        return False
+    if k.box_id is None:
+        return False
+    if k.quality is None:
+        return False
+    try:
+        q = int(k.quality)
+    except (TypeError, ValueError):
+        return False
+    if not (1 <= q <= 6):
+        return False
+    if k.item_cid is not None and k.price is not None:
+        return False
+    return True
+
+
+def _unknown_contour_merge_expand_log_shapes(
+    *,
+    game_state: GameState,
+    manual_shapes: Mapping[str, Tuple[int, int, int, int]],
+    phantom_items: Mapping[str, ItemKnowledge],
+    phantom_quality_pref: Mapping[str, Any],
+    occupied_cells: Set[Tuple[int, int]],
+    vacant_manual_suppress: Set[Tuple[int, int]],
+    max_box_id: int,
+    phantom_specs: List[VacantRectPhantomSpec],
+) -> Tuple[Dict[str, Tuple[int, int, int, int]], frozenset[str]]:
+    """
+    空置 ``phantom_vac_*`` 推断完成后：对品质已知、轮廓未知且未手动画框的日志物品做合并扩充。
+
+    ``occupied_cells`` 须已含场上占位；本函数会把 ``phantom_specs`` 与推断矩形写回该集合。
+    """
+    csv_index, csv_items = _load_item_prices_db()
+    if not csv_items:
+        return {}, frozenset()
+
+    sup = set(vacant_manual_suppress)
+    mx = int(max_box_id)
+    base_occupied: Set[Tuple[int, int]] = set(occupied_cells)
+
+    inferred_occ: Set[Tuple[int, int]] = set()
+    phantom_peer_rects = _unknown_contour_phantom_peer_rects_for_merge(
+        phantom_items,
+        manual_shapes,
+        phantom_quality_pref,
+        phantom_specs,
+    )
+    consumed_phantoms: Set[str] = set()
+
+    targets: List[Tuple[str, ItemKnowledge, int]] = []
+    for uid, k in game_state.items.items():
+        if not _unknown_contour_log_item_eligible(k, uid, manual_shapes):
+            continue
+        try:
+            q = int(k.quality or 0)
+        except (TypeError, ValueError):
+            continue
+        targets.append((str(uid), k, q))
+
+    quality_batches: Dict[
+        int, List[Tuple[str, ItemKnowledge, List[Any], int, int, bool]]
+    ] = {}
+    for uid, k, q in targets:
+        try:
+            item_cid_i = int(k.item_cid) if k.item_cid is not None else None
+        except (TypeError, ValueError):
+            item_cid_i = None
+        filt = item_db.filter_csv_candidates_for_query(
+            None,
+            int(k.quality),
+            set(k.categories),
+            item_cid_i,
+            csv_index,
+            csv_items,
+            excluded_categories=k.excluded_categories if k.excluded_categories else None,
+            excluded_qualities=k.excluded_qualities if k.excluded_qualities else None,
+            max_shape_wh=None,
+            categories_any=k.categories_any if k.categories_any else None,
+        )
+        if not filt:
+            continue
+        bid_i = int(k.box_id)
+        ar, ac = bid_i // GRID_COLS, bid_i % GRID_COLS
+        confirmed_tl = bool(getattr(k, "box_id_confirmed", False))
+        quality_batches.setdefault(int(q), []).append(
+            (uid, k, filt, int(ar), int(ac), confirmed_tl)
+        )
+
+    out: Dict[str, Tuple[int, int, int, int]] = {}
+    ordered_qualities = list(_MERGE_EXPAND_QUALITY_ORDER) + sorted(
+        q for q in quality_batches if q not in _MERGE_EXPAND_QUALITY_ORDER
+    )
+    for qq in ordered_qualities:
+        batch = quality_batches.get(int(qq))
+        if not batch:
+            continue
+        merged = _unknown_contour_iterative_merge_expand_batch(
+            batch,
+            base_occupied=base_occupied,
+            phantom_specs=phantom_specs,
+            inferred_occ=inferred_occ,
+            manual_shapes=manual_shapes,
+            phantom_peer_rects=phantom_peer_rects,
+            consumed_phantoms=consumed_phantoms,
+            suppress=sup,
+            max_bid=mx,
+        )
+        for uid, (w, h, dc, dr) in merged.items():
+            out[uid] = (int(w), int(h), int(dc), int(dr))
+            for ddr in range(h):
+                for ddc in range(w):
+                    inferred_occ.add((dr + ddr, dc + ddc))
+
+    occupied_cells.clear()
+    occupied_cells.update(
+        _unknown_contour_merge_baseline_occ(
+            base_occupied, phantom_specs, consumed_phantoms
+        )
+    )
+    occupied_cells.update(inferred_occ)
+    return out, frozenset(consumed_phantoms)
+
+
+def _filter_phantom_specs_absorbed_by_log_merge(
+    specs: List[VacantRectPhantomSpec],
+    absorbed_phantom_uids: Set[str],
+) -> List[VacantRectPhantomSpec]:
+    if not absorbed_phantom_uids:
+        return specs
+    absorbed = {str(u) for u in absorbed_phantom_uids}
+    return [sp for sp in specs if str(sp.uid) not in absorbed]
+
+
 def compute_vacant_rect_phantom_specs(
     *,
     game_state: GameState,
@@ -767,29 +1394,34 @@ def compute_vacant_rect_phantom_specs(
     max_hole_cells: int = DEFAULT_VACANT_RECT_MAX_HOLE_CELLS,
     min_bbox_area: int = DEFAULT_VACANT_RECT_MIN_BBOX_AREA,
     enabled: bool = True,
-) -> List[VacantRectPhantomSpec]:
+) -> VacantRectInferResult:
     """
     品质 1–4 全量扫描已发生、且场上 Q1–Q4 轮廓与锚格均已可靠锁定时：
-    多轮在剩余空置区推断 ``phantom_vac_*``。
+    多轮在剩余空置区推断 ``phantom_vac_*``，再对品质已知、轮廓未知的日志物品做合并扩充。
 
     1. 三面/四面围住的 1×1 → 临时幽灵占格（不立即输出）；
     2. 连通区近似实心矩形（原逻辑）；
     3. 不规则剩余区：逐点 H/V 双向贪心扩展 → 取最大矩形（3×3>2×5/5×2 等方度 tie-break），移除后重复；
     4. 第 1 步临时占格、仍未被 2/3 步吸收的 1×1 → 输出对应幽灵；
-    5. 所有 1×1 幽灵与相邻幽灵并集为实心矩形时合并，合并结果继续重复直至稳定。
+    5. 所有 1×1 幽灵与相邻幽灵并集为实心矩形时合并，合并结果继续重复直至稳定；
+    6. 各日志件自 1×1 锚格起，与四邻空置格、同品质邻接推断矩形、品质未定手画幽灵或
+       本轮 ``phantom_vac_*``（含已推断出显式品质的条）合并。
 
     - 须有 CSV 候选（扫描负向 + ``event_stats`` 件数配额）；
     - 候选品质唯一 → 写入 ``quality``；
     - 候选物品唯一 → 写入 ``manual_confirm_item_id``。
     """
+    empty = VacantRectInferResult([], {}, frozenset())
     if not enabled:
-        return []
+        return empty
+    if int(current_round) < AISHA_VACANT_RECT_INFER_ROUND:
+        return empty
     if not _vacant_infer_q1234_scan_and_q14_contours_ready(game_state, manual_shapes):
-        return []
+        return empty
 
     csv_index, csv_items = _load_item_prices_db()
     if not csv_items:
-        return []
+        return empty
 
     excl_q, excl_c = _scan_exclusions_for_vacant_phantom(game_state, raw_pricing)
     quality_counts = _count_quality_items(
@@ -803,38 +1435,50 @@ def compute_vacant_rect_phantom_specs(
         vacant_manual_suppress=set(vacant_manual_suppress),
         fraud_cells=fraud_cells,
     )
-    if not vacant:
-        return []
 
-    temp_ghost_1x1 = _pass1_collect_temp_ghost_1x1(vacant)
-    vacant -= temp_ghost_1x1
-    infer_occupied = base_occupied | temp_ghost_1x1
+    specs: List[VacantRectPhantomSpec] = []
+    if vacant:
+        temp_ghost_1x1 = _pass1_collect_temp_ghost_1x1(vacant)
+        vacant -= temp_ghost_1x1
+        infer_occupied = base_occupied | temp_ghost_1x1
 
-    ctx = _VacantRectInferCtx(
-        vacant=vacant,
-        base_occupied=base_occupied,
-        infer_occupied=infer_occupied,
-        temp_ghost_1x1=temp_ghost_1x1,
-        taken=set(),
-        out=[],
-        excl_q=excl_q,
-        excl_c=excl_c,
-        csv_index=csv_index,
-        csv_items=csv_items,
-        raw_pricing=raw_pricing,
-        quality_counts=quality_counts,
-        fraud_cells=fraud_cells,
+        ctx = _VacantRectInferCtx(
+            vacant=vacant,
+            base_occupied=base_occupied,
+            infer_occupied=infer_occupied,
+            temp_ghost_1x1=temp_ghost_1x1,
+            taken=set(),
+            out=[],
+            excl_q=excl_q,
+            excl_c=excl_c,
+            csv_index=csv_index,
+            csv_items=csv_items,
+            raw_pricing=raw_pricing,
+            quality_counts=quality_counts,
+            fraud_cells=fraud_cells,
+            max_box_id=int(max_box_id),
+            max_hole_cells=int(max_hole_cells),
+            min_bbox_area=int(min_bbox_area),
+        )
+
+        _pass_full_rect_fill(ctx)
+        _pass_three_sided_rect_fill(ctx)
+        _pass4_emit_deferred_temp_1x1_phantoms(ctx)
+        _pass5_merge_adjacent_phantom_rects(ctx)
+        specs = ctx.out
+
+    inferred, absorbed = _unknown_contour_merge_expand_log_shapes(
+        game_state=game_state,
+        manual_shapes=manual_shapes,
+        phantom_items=phantom_items,
+        phantom_quality_pref=phantom_quality_pref,
+        occupied_cells=occupied_cells,
+        vacant_manual_suppress=vacant_manual_suppress,
         max_box_id=int(max_box_id),
-        max_hole_cells=int(max_hole_cells),
-        min_bbox_area=int(min_bbox_area),
+        phantom_specs=specs,
     )
-
-    _pass_full_rect_fill(ctx)
-    _pass_three_sided_rect_fill(ctx)
-    _pass4_emit_deferred_temp_1x1_phantoms(ctx)
-    _pass5_merge_adjacent_phantom_rects(ctx)
-
-    return ctx.out
+    specs = _filter_phantom_specs_absorbed_by_log_merge(specs, set(absorbed))
+    return VacantRectInferResult(specs, inferred, absorbed)
 
 
 __all__ = [
@@ -842,6 +1486,7 @@ __all__ = [
     "AUTO_VACANT_RECT_PHANTOM_PREFIX",
     "DEFAULT_VACANT_RECT_MAX_HOLE_CELLS",
     "DEFAULT_VACANT_RECT_MIN_BBOX_AREA",
+    "VacantRectInferResult",
     "VacantRectPhantomSpec",
     "auto_vacant_rect_phantom_cell_count_from_snapshot",
     "compute_vacant_rect_phantom_specs",
