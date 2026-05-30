@@ -413,97 +413,119 @@ def _pass_full_rect_fill(ctx: _VacantRectInferCtx) -> None:
         _try_emit_rect_phantom(ctx, bbox)
 
 
-def _rect_edge_is_blocked(
-    edge_cells: List[Tuple[int, int]],
+def _vacant_rect_rank_key(w: int, h: int) -> Tuple[int, int]:
+    """面积优先；同面积时更方者优先（2×2 > 1×4，2×3/3×2 > 1×6）。"""
+    wi, hi = int(w), int(h)
+    return (wi * hi, min(wi, hi))
+
+
+def _expand_max_rect_h_first(
+    seed: Tuple[int, int],
     work: Set[Tuple[int, int]],
-) -> bool:
-    """矩形外侧整边皆非空置（含盘外缘）。"""
-    for r, c in edge_cells:
-        if 0 <= r < GRID_ROWS and 0 <= c < GRID_COLS and (r, c) in work:
-            return False
-    return True
+) -> Tuple[int, int, int, int]:
+    """从 seed 先横向扩满，再纵向扩满，得最大内接矩形 ``(w, h, dc, dr)``。"""
+    r, c = seed
+    if seed not in work:
+        return (0, 0, 0, 0)
+
+    left, right = c, c
+    while left > 0 and (r, left - 1) in work:
+        left -= 1
+    while right + 1 < GRID_COLS and (r, right + 1) in work:
+        right += 1
+
+    dc = left
+    w = right - left + 1
+    top, bottom = r, r
+
+    while top > 0 and all((top - 1, col) in work for col in range(dc, dc + w)):
+        top -= 1
+    while bottom + 1 < GRID_ROWS and all(
+        (bottom + 1, col) in work for col in range(dc, dc + w)
+    ):
+        bottom += 1
+
+    dr = top
+    h = bottom - top + 1
+    return (w, h, dc, dr)
 
 
-def _rect_snapped_blocked_edges(
-    dr: int,
-    dc: int,
-    w: int,
-    h: int,
+def _expand_max_rect_v_first(
+    seed: Tuple[int, int],
     work: Set[Tuple[int, int]],
-) -> int:
-    """矩形四边中，外侧整边皆非空置的边数。"""
-    n = 0
-    if _rect_edge_is_blocked([(dr - 1, c) for c in range(dc, dc + w)], work):
-        n += 1
-    if _rect_edge_is_blocked([(dr + h, c) for c in range(dc, dc + w)], work):
-        n += 1
-    if _rect_edge_is_blocked([(r, dc - 1) for r in range(dr, dr + h)], work):
-        n += 1
-    if _rect_edge_is_blocked([(r, dc + w) for r in range(dr, dr + h)], work):
-        n += 1
-    return n
+) -> Tuple[int, int, int, int]:
+    """从 seed 先纵向扩满，再横向扩满，得最大内接矩形 ``(w, h, dc, dr)``。"""
+    r, c = seed
+    if seed not in work:
+        return (0, 0, 0, 0)
+
+    top, bottom = r, r
+    while top > 0 and (top - 1, c) in work:
+        top -= 1
+    while bottom + 1 < GRID_ROWS and (bottom + 1, c) in work:
+        bottom += 1
+
+    dr = top
+    h = bottom - top + 1
+    left, right = c, c
+
+    while left > 0 and all((row, left - 1) in work for row in range(dr, dr + h)):
+        left -= 1
+    while right + 1 < GRID_COLS and all(
+        (row, right + 1) in work for row in range(dr, dr + h)
+    ):
+        right += 1
+
+    dc = left
+    w = right - left + 1
+    return (w, h, dc, dr)
 
 
-def _three_sided_rect_candidates(
+def _greedy_expand_rect_candidates(
     work: Set[Tuple[int, int]],
     local: Set[Tuple[int, int]],
-    seeds: Set[Tuple[int, int]],
     *,
     min_bbox_area: int,
 ) -> List[Tuple[int, int, int, int]]:
-    """在 ``local`` 内、外侧相对 ``work`` 三面贴边且覆盖 ``seeds`` 的矩形，按面积降序。"""
-    if not local or not seeds:
+    """遍历 ``local`` 每格，收集 H/V 双向贪心扩展矩形，按面积与方度降序。"""
+    if not local:
         return []
-    rows = [r for r, _ in local]
-    cols = [c for _, c in local]
-    min_r, max_r = min(rows), max(rows)
-    min_c, max_c = min(cols), max(cols)
 
-    ranked: List[Tuple[int, int, Tuple[int, int, int, int]]] = []
-    for dr in range(min_r, max_r + 1):
-        for dc in range(min_c, max_c + 1):
-            for h in range(1, max_r - dr + 2):
-                for w in range(1, max_c - dc + 2):
-                    area = w * h
-                    if area < min_bbox_area:
-                        continue
-                    cells = _rect_cells(dr, dc, w, h)
-                    if not cells <= local:
-                        continue
-                    if not cells & seeds:
-                        continue
-                    snapped = _rect_snapped_blocked_edges(dr, dc, w, h, work)
-                    if snapped < 3:
-                        continue
-                    ranked.append((area, snapped, (w, h, dc, dr)))
+    seen: Set[Tuple[int, int, int, int]] = set()
+    for cell in local:
+        for bbox in (
+            _expand_max_rect_h_first(cell, work),
+            _expand_max_rect_v_first(cell, work),
+        ):
+            w, h, dc, dr = bbox
+            if w <= 0 or h <= 0 or w * h < min_bbox_area:
+                continue
+            if not _rect_cells(dr, dc, w, h) <= work:
+                continue
+            seen.add(bbox)
 
-    ranked.sort(key=lambda item: (-item[0], -item[1]))
-    return [item[2] for item in ranked]
+    return sorted(
+        seen,
+        key=lambda b: _vacant_rect_rank_key(b[0], b[1]),
+        reverse=True,
+    )
 
 
 def _three_sided_fill_scope_recursive(
     ctx: _VacantRectInferCtx,
     scope: Set[Tuple[int, int]],
 ) -> None:
-    """单块不规则空置区：先贴三面取最大可发矩形，剩余再递归同样逻辑。"""
+    """单块不规则空置区：逐点双向贪心扩展取最大矩形，移除已覆盖格后重复。"""
     while True:
         work = ctx.vacant - ctx.taken
         local = scope & work
         if not local:
             return
-        seeds = {
-            cell
-            for cell in local
-            if _vacant_blocked_sides(cell[0], cell[1], work) >= 3
-        }
-        if not seeds:
-            return
 
         emitted = False
-        for bbox in _three_sided_rect_candidates(
+        for bbox in _greedy_expand_rect_candidates(
             work,
             local,
-            seeds,
             min_bbox_area=ctx.min_bbox_area,
         ):
             if _try_emit_rect_phantom(ctx, bbox):
@@ -661,34 +683,15 @@ def _pass4_emit_deferred_temp_1x1_phantoms(ctx: _VacantRectInferCtx) -> None:
 
 
 def _pass_three_sided_rect_fill(ctx: _VacantRectInferCtx) -> None:
-    """不规则剩余区：三面围住簇递归贴边取最大矩形推断幽灵。"""
+    """不规则剩余区：逐点双向贪心扩展取最大矩形推断幽灵，移除后重复。"""
     work = ctx.vacant - ctx.taken
     if not work:
         return
-    seeds = {
-        cell
-        for cell in work
-        if _vacant_blocked_sides(cell[0], cell[1], work) >= 3
-    }
-    if not seeds:
-        return
-
-    components = _find_continuous_regions(seeds, ctx.infer_occupied)
-    components.sort(key=lambda reg: -len(reg))
 
     work_regions = _find_continuous_regions(work, ctx.infer_occupied)
-    for comp in components:
-        comp = set(comp) & seeds
-        if not comp:
-            continue
-        scope: Optional[Set[Tuple[int, int]]] = None
-        for wreg in work_regions:
-            if wreg & comp:
-                scope = set(wreg)
-                break
-        if not scope:
-            continue
-        _three_sided_fill_scope_recursive(ctx, scope)
+    work_regions.sort(key=lambda reg: -len(reg))
+    for scope in work_regions:
+        _three_sided_fill_scope_recursive(ctx, set(scope))
 
 
 def compute_vacant_rect_phantom_specs(
@@ -713,7 +716,7 @@ def compute_vacant_rect_phantom_specs(
 
     1. 三面/四面围住的 1×1 → 临时幽灵占格（不立即输出）；
     2. 连通区近似实心矩形（原逻辑）；
-    3. 不规则剩余区：三面围住簇 → 递归贴三面取最大矩形，剩余重复；
+    3. 不规则剩余区：逐点 H/V 双向贪心扩展 → 取最大矩形（2×2>1×4 等同面积 tie-break），移除后重复；
     4. 第 1 步临时占格、仍未被 2/3 步吸收的 1×1 → 输出对应幽灵；
     5. 所有 1×1 幽灵与相邻幽灵并集为实心矩形时合并，合并结果继续重复直至稳定。
 

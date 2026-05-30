@@ -94,6 +94,23 @@ def event_stat_q4_grid_count_optional(st: Any) -> Optional[int]:
     return event_stat_grid_count_optional(st, "q4_grid_count")
 
 
+def event_stat_grid_avg_optional(st: Any, key: str) -> Optional[float]:
+    if not isinstance(st, dict):
+        return None
+    v = st.get(key)
+    if v is None:
+        return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if f >= 0.0 and f == f else None
+
+
+def event_stat_q4_grid_avg_optional(st: Any) -> Optional[float]:
+    return event_stat_grid_avg_optional(st, "q4_grid_avg")
+
+
 def vacant_early_unit_excluding_q4_when_q4_total_known(
     *,
     board_snapshot: Dict[str, Any],
@@ -1116,11 +1133,17 @@ def tier_min_extra_value_and_cells(
     uc_by_q = unknown_contour_excess_by_quality or {}
     extra_val = 0.0
     extra_cells_f = 0.0
+    skip_q4_grid_min = (
+        event_stat_q4_grid_count_optional(event_stats) is None
+        and event_stat_q4_grid_avg_optional(event_stats) is not None
+    )
     for min_k, csv_k, confirmed, q in (
         ("q4_grid_min", "q4", confirmed_q4, 4),
         ("q5_grid_min", "q5", confirmed_q5, 5),
         ("q6_grid_min", "q6", confirmed_q6, 6),
     ):
+        if q == 4 and skip_q4_grid_min:
+            continue
         m = event_stat_grid_min_optional(event_stats, min_k)
         if m is None:
             continue
