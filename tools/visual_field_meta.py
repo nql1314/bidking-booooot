@@ -19,8 +19,8 @@ FIELD_META: dict[str, dict[str, str]] = {
         "description": "单局出价上限；计算价超过此值时截断到此价格。0 表示不启用封顶。",
     },
     "automation.bid_cap_skip_when_total_above": {
-        "label": "估价超限跳过封顶",
-        "description": "本局估价总额超过此值时不再应用封顶（高估值局保留策略出价）。0 表示始终封顶。",
+        "label": "保险价",
+        "description": "已知物品总价（不含第4回合空置区自动 phantom_vac 填充）超过此值时不再应用封顶。0 表示与封顶价相同，推荐设为游戏内保险价",
     },
     "automation.bid_ratio_by_round.1": {
         "label": "第1回合系数",

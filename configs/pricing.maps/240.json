@@ -1,11 +1,11 @@
 {
   "pricing": {
     "vacant_red_floor_ceiling_pick_mode": "aggressive",
-    "enable_opponent_bid_adjustment": true,
-    "enable_vacant_red_floor_ceiling_pick": true,
+    "enable_opponent_bid_adjustment": false,
+    "enable_vacant_red_floor_ceiling_pick": false,
     "enable_big_gold_adjustment": false,
     "fallback_bid_price": 155555,
-    "enable_late_round_low_bid_surrender": true,
+    "enable_late_round_low_bid_surrender": false,
     "late_round_low_bid_surrender_after_round": 4,
     "late_round_low_bid_surrender_below": 355555,
     "late_round_low_bid_surrender_bid": 88888,
@@ -23,7 +23,8 @@
     "opponent_bid_blend_weights": {
       "bid": 0.0,
       "opponent": 0.0
-    }
+    },
+    "infer_vacant_rect_phantoms": true
   },
   "automation": {
     "bid_cap_price": 1280000,
@@ -35,6 +36,7 @@
       "5": 0.9
     },
     "aisha_round4_tool_min_vacant": 35,
-    "enable_aisha_round4_tool_vacant_gate": true
+    "enable_aisha_round4_tool_vacant_gate": true,
+    "bid_cap_skip_when_total_above": 0
   }
 }

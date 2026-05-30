@@ -12,6 +12,7 @@ def build_common_pricing_fields(ctx: SnapshotPricingContext) -> Dict[str, Any]:
     """组装与角色无关的 ``pricing`` 公共字段。"""
     return {
         "total": float(ctx.total_f),
+        "known_items_total": float(ctx.known_items_total_f),
         "vacant": int(ctx.vacant_num),
         "est_orange": int(round(ctx.est_orange)),
         "est_gold_red": int(round(ctx.est_gold_red)),

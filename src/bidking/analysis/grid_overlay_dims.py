@@ -12,6 +12,11 @@ DEFAULT_GEOMETRIC_PREFIX_ANCHOR_BOX_ID = 30
 # 艾莎第 4 回合起：空置区近似矩形 → 自动 ``phantom_vac_*`` 幽灵（手动画框 + 候选约束）。
 AISHA_VACANT_RECT_INFER_ROUND = 4
 
+
+def vacant_rect_phantom_infer_round_active(current_round: int) -> bool:
+    """第 4 回合及之后才做空置矩形自动幽灵推断。"""
+    return int(current_round) >= AISHA_VACANT_RECT_INFER_ROUND
+
 # 快照 ``grid_overlay`` 中序列化的占位格（BoxId 列表，与 UI ``_build_occupied`` 一致）
 OCCUPIED_CELL_BIDS = "occupied_cell_bids"
 

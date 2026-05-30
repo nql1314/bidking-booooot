@@ -19,7 +19,8 @@
     "opponent_bid_blend_weights": {
       "bid": 0.0,
       "opponent": 0.0
-    }
+    },
+    "infer_vacant_rect_phantoms": false
   },
   "automation": {
     "express_station_round1_emoji": {
@@ -39,6 +40,7 @@
       "5": 1.1
     },
     "aisha_round4_tool_min_vacant": 30,
-    "enable_aisha_round4_tool_vacant_gate": false
+    "enable_aisha_round4_tool_vacant_gate": false,
+    "bid_cap_skip_when_total_above": 0
   }
 }

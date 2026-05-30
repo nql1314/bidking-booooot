@@ -57,6 +57,7 @@ from ..parsing.item_db import (
     weighted_est_max_item_base_value,
 )
 from . import grid_overlay as _grid_overlay
+from .grid_overlay import is_auto_vacant_rect_phantom_uid
 from . import strategy as _strategy
 from ..logsys.perf_log import perf_log_elapsed
 
@@ -299,6 +300,33 @@ def compute_items_total(board_snapshot: Dict[str, Any]) -> float:
             map_category_weights=weights,
         )
     perf_log_elapsed(f"compute_items_total (items={len(items)})", t0)
+    return total
+
+
+def compute_known_items_total(board_snapshot: Dict[str, Any]) -> float:
+    """已知物品标价之和：与 :func:`compute_items_total` 同源，但排除自动 ``phantom_vac_*`` 填充。"""
+    t0 = time.perf_counter()
+    mid = map_id_from_board_snapshot(board_snapshot)
+    mid_n = item_db.normalize_map_id(mid)
+    items = _grid_overlay.merged_items_dict_from_snapshot(board_snapshot)
+    csv_index, csv_items = _load_item_prices_db()
+    if not csv_items:
+        return 0.0
+    weights = map_category_ratios(mid) or {}
+    total = 0.0
+    for uid, it in items.items():
+        if is_auto_vacant_rect_phantom_uid(str(uid)):
+            continue
+        if not isinstance(it, dict):
+            continue
+        total += _item_value(
+            it,
+            csv_index=csv_index,
+            csv_items=csv_items,
+            map_id_normalized=mid_n,
+            map_category_weights=weights,
+        )
+    perf_log_elapsed(f"compute_known_items_total (items={len(items)})", t0)
     return total
 
 

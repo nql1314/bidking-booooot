@@ -113,7 +113,7 @@ def prepare_snapshot_pricing_context(
 
 def compute_base_metrics(ctx: SnapshotPricingContext) -> None:
     """物品总价、空置格、档位占位与有效空置调整。"""
-    from .._board_pricing import compute_items_total
+    from .._board_pricing import compute_items_total, compute_known_items_total
 
     t0_vacant = time.perf_counter()
     vb = _grid_overlay.vacant_block_from_board_snapshot(ctx.snap_full)
@@ -147,6 +147,7 @@ def compute_base_metrics(ctx: SnapshotPricingContext) -> None:
     t0_items = time.perf_counter()
     ctx.total_f = float(compute_items_total(ctx.snap_full))
     perf_log_elapsed("build_snapshot_pricing_dict: compute_items_total", t0_items)
+    ctx.known_items_total_f = float(compute_known_items_total(ctx.snap_full))
 
     ctx.cq4, ctx.cq5, ctx.cq6 = _common.confirmed_tier_footprint_q456(ctx.snap_full)
 

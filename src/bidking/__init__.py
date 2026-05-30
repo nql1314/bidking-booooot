@@ -12,4 +12,4 @@
 - :mod:`bidking.runner`      —— 入口
 """
 
-__version__ = "v1.26_pre"
+__version__ = "v1.3"

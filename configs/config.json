@@ -5,13 +5,12 @@
     "late_round_low_bid_surrender_below": 222222,
     "late_round_low_bid_surrender_bid": 88888,
     "enable_vacant_red_floor_ceiling_pick": false,
-    "enable_opponent_bid_adjustment": true,
-    "infer_vacant_rect_phantoms": true,
+    "enable_opponent_bid_adjustment": false,
+    "infer_vacant_rect_phantoms": false,
     "price_avg_infer_max_item_count": 30,
     "grid_avg_infer_max_item_count": 30,
     "grid_avg_infer_max_grid_count": 60,
     "phantom_unknown_tier": {
-      "quality_prob_threshold": 0.5,
       "post_gold_quality_threshold_q5": 0.8,
       "post_gold_quality_threshold_q6": 0.8
     },
@@ -50,7 +49,7 @@
     "run_cycles": 1,
     "cycle_rest_minutes": 0.0,
     "enable_map_entry_money_check": false,
-    "enable_aisha_round4_tool_vacant_gate": true,
+    "enable_aisha_round4_tool_vacant_gate": false,
     "aisha_round4_tool_min_vacant": 30,
     "bid_cap_skip_when_total_above": 0,
     "game_start_timeout_seconds": 0.0,
@@ -79,7 +78,7 @@
     "role": "aisha"
   },
   "viewer": {
-    "game_report_max_matches": 0
+    "game_report_max_matches": 500
   },
   "express_emoji_public_blacklist": {
     "enabled": true,

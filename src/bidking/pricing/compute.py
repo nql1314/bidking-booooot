@@ -21,6 +21,7 @@ from .postprocess import (
     apply_early_round_fallback_floor,
     apply_human_like_price_tail,
     apply_late_round_low_bid_surrender,
+    known_items_total_from_pricing,
 )
 from .price_config_load import load_price_config
 from .snapshot_pricing import (
@@ -238,7 +239,10 @@ def compute_price(
                 if forced is not None:
                     fin = int(forced)
     fin, payload = apply_bid_cap(
-        effective_config, fin, payload, pricing_total=pricing.get("total")
+        effective_config,
+        fin,
+        payload,
+        known_items_total=known_items_total_from_pricing(pricing),
     )
     payload["final_round_used"] = effective_round
     return int(fin), payload

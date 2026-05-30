@@ -19,7 +19,12 @@
     "map_quality_unit_per_cell": {
       "q56": 8500.0,
       "q5": 8000.0
-    }
+    },
+    "opponent_bid_blend_weights": {
+      "bid": 0.0,
+      "opponent": 0.0
+    },
+    "infer_vacant_rect_phantoms": false
   },
   "automation": {
     "bid_cap_price": 400000,
@@ -31,6 +36,7 @@
       "5": 0.95
     },
     "aisha_round4_tool_min_vacant": 30,
-    "enable_aisha_round4_tool_vacant_gate": false
+    "enable_aisha_round4_tool_vacant_gate": false,
+    "bid_cap_skip_when_total_above": 0
   }
 }
