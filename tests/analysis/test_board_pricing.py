@@ -17,6 +17,7 @@ if str(SRC) not in sys.path:
 
 from bidking.analysis import _board_pricing as bp
 from bidking.analysis import grid_overlay as grid_overlay_mod
+from bidking.analysis.strategy import common as strategy_common
 from bidking.analysis.map_avg_csv import set_map_quality_csv_override
 from bidking.analysis.raw_pricing import build_raw_pricing_dict
 from bidking.analysis.scan_inference import (
@@ -1208,6 +1209,241 @@ class BoardPricingTests(unittest.TestCase):
         total = bp.compute_items_total(snap)
         self.assertAlmostEqual(total, float(pick.base_value))
 
+    def test_confirmed_tier_footprint_unknown_contour_counts_one_cell(self) -> None:
+        """品质已知、无 shape：``confirmed_tier_footprint_q456`` 按 1×1 计 1 格。"""
+        snap = {
+            "game_state": {
+                "items": {
+                    "a": {
+                        "uid": "a",
+                        "box_id": 8,
+                        "box_id_confirmed": True,
+                        "shape": None,
+                        "quality": 5,
+                        "categories": [],
+                        "item_cid": None,
+                        "price": None,
+                        "manual_confirm_item_id": None,
+                        "excluded_categories": [],
+                        "excluded_qualities": [],
+                    },
+                    "b": {
+                        "uid": "b",
+                        "box_id": 9,
+                        "box_id_confirmed": True,
+                        "shape": 22,
+                        "quality": 6,
+                        "categories": [],
+                        "item_cid": None,
+                        "price": None,
+                        "manual_confirm_item_id": None,
+                        "excluded_categories": [],
+                        "excluded_qualities": [],
+                    },
+                }
+            },
+        }
+        cq4, cq5, cq6 = strategy_common.confirmed_tier_footprint_q456(snap)
+        self.assertEqual((cq4, cq5, cq6), (0, 1, 4))
+
+    def test_confirmed_tier_footprint_unknown_contour_without_box_id_confirmed(
+        self,
+    ) -> None:
+        """品质已知、轮廓未知：不要求 ``box_id_confirmed`` 仍按 1×1 计 1 格。"""
+        snap = {
+            "game_state": {
+                "items": {
+                    "a": {
+                        "uid": "a",
+                        "box_id": 10,
+                        "box_id_confirmed": False,
+                        "shape": None,
+                        "quality": 5,
+                        "categories": [],
+                        "item_cid": None,
+                        "price": None,
+                        "manual_confirm_item_id": None,
+                        "excluded_categories": [],
+                        "excluded_qualities": [],
+                    },
+                }
+            },
+        }
+        self.assertEqual(strategy_common.confirmed_tier_footprint_q456(snap), (0, 1, 0))
+
+    def test_phantom_gold_capped_when_vacant_lt_rem5_and_pool_exceeds_budget(self) -> None:
+        """``rem5 = q5_grid_min - cq5``：空格不足时也不得整池标金（池 45 格、预算 44）。"""
+        from bidking.analysis.strategy import common as strat_common
+
+        excl = [1, 2, 3, 4]
+        ph: dict = {}
+        manual: dict = {}
+        total_fp = 0
+        specs = [
+            ("ph_a", 25, 10),
+            ("ph_b", 33, 9),
+            ("ph_c", 33, 9),
+            ("ph_d", 22, 4),
+            ("ph_e", 22, 4),
+            ("ph_f", 22, 4),
+            ("ph_g", 12, 2),
+            ("ph_h", 11, 1),
+            ("ph_i", 11, 1),
+            ("ph_j", 11, 1),
+        ]
+        for uid, shape, cells in specs:
+            total_fp += cells
+            ph[uid] = {
+                "uid": uid,
+                "box_id": 0,
+                "box_id_confirmed": True,
+                "shape": shape,
+                "quality": None,
+                "categories": [7],
+                "item_cid": None,
+                "price": None,
+                "manual_confirm_item_id": None,
+                "excluded_categories": [],
+                "excluded_qualities": excl,
+            }
+            manual[uid] = [2, 2, 0, 0] if shape == 22 else [shape // 10, shape % 10, 0, 0]
+        self.assertEqual(total_fp, 45)
+        snap = {
+            "game_state": {
+                "items": {
+                    "real_gold_uc": {
+                        "uid": "real_gold_uc",
+                        "box_id": 10,
+                        "box_id_confirmed": False,
+                        "shape": None,
+                        "quality": 5,
+                        "categories": [],
+                        "item_cid": None,
+                        "price": None,
+                        "manual_confirm_item_id": None,
+                        "excluded_categories": [],
+                        "excluded_qualities": excl,
+                    },
+                },
+                "map_id": 4501,
+                "current_round": 4,
+            },
+            "skill_logs": [],
+            "map_id": 4501,
+            "current_round": 4,
+            "grid_overlay": {
+                "vacant": {"geometric": 1, "source": "test"},
+                "phantom_items": ph,
+                "manual_shapes": manual,
+                "phantom_quality_pref": {k: "_phantom_q_infer" for k in ph},
+            },
+        }
+        raw = {
+            "csv_quality_groups_avg_per_cell": {
+                "q5": 100.0,
+                "q6": 200.0,
+                "q5+q6": 150.0,
+                "all": 1000.0,
+            },
+            "event_stats": {
+                "q1_grid_count": 1,
+                "q2_grid_count": 1,
+                "q3_grid_count": 1,
+                "q4_grid_count": 44,
+                "q5_grid_min": 45,
+                "q5_grid_count": 45,
+            },
+        }
+        board = {**snap, "raw_pricing": raw}
+        cq5_before = strat_common.confirmed_tier_footprint_q456(board)[1]
+        self.assertEqual(cq5_before, 1)
+        _, detail = strat_common.phantom_unknown_tier_credit_q456(
+            board,
+            event_stats=raw["event_stats"],
+            confirmed_q5=cq5_before,
+            confirmed_q6=0,
+        )
+        self.assertAlmostEqual(float(detail.get("tier_credit_q5") or 0), 44.0)
+        self.assertAlmostEqual(float(detail.get("gr_remaining_budget_final_q5") or 0), 0.0)
+        self.assertTrue(
+            any(
+                s.get("reason") == "vacant_lt_rem5_greedy_capped"
+                for s in (detail.get("gold_allocation_steps") or [])
+            )
+        )
+        cq5_after = strat_common.confirmed_tier_footprint_q456(board)[1]
+        self.assertEqual(cq5_after, 45)
+        ph = board["grid_overlay"]["phantom_items"]
+        gold_fp = sum(
+            int(
+                round(
+                    float(
+                        strat_common._geo_footprint_cells_from_shape_field(
+                            row.get("shape")
+                        )
+                        or 0
+                    )
+                )
+            )
+            for row in ph.values()
+            if isinstance(row, dict) and int(row.get("quality") or 0) == 5
+        )
+        self.assertEqual(gold_fp, 44)
+
+    def test_phantom_effective_q5_budget_is_q5_grid_min_minus_cq5(self) -> None:
+        """幽灵金格贪心预算 = ``q5_grid_min - confirmed_q5``（与 ``cq5`` 一致）。"""
+        rem5, count_known = strategy_common._phantom_effective_q5_budget(
+            {"q5_grid_min": 3},
+            confirmed_q5=1,
+        )
+        self.assertAlmostEqual(rem5, 2.0)
+        self.assertFalse(count_known)
+        rem5_cap, _ = strategy_common._phantom_effective_q5_budget(
+            {"q5_grid_min": 3, "q5_grid_count": 1},
+            confirmed_q5=1,
+        )
+        self.assertAlmostEqual(rem5_cap, 0.0)
+
+    def test_unknown_contour_q6_reduces_tier_extra_by_one_cell(self) -> None:
+        """无 shape 的红档占位：confirmed 计 1 格后 ``q6_grid_min`` 少补 1 格 tier_extra。"""
+        gs = {
+            "uid": "u1",
+            "map_id": 0,
+            "current_round": 5,
+            "players": {},
+            "items": {
+                "a": {
+                    "uid": "a",
+                    "box_id": 10,
+                    "box_id_confirmed": True,
+                    "shape": None,
+                    "quality": 6,
+                    "categories": [],
+                    "item_cid": 100161,
+                    "price": 8000,
+                    "manual_confirm_item_id": None,
+                    "excluded_categories": [],
+                    "excluded_qualities": [],
+                }
+            },
+            "displayed_event_uids": [],
+            "scan_history": [],
+        }
+        snap = {"game_state": gs, "skill_logs": [], "map_id": 0, "current_round": 5}
+        raw = {
+            "csv_quality_groups_avg_per_cell": {"q6": 200.0, "all": 1000.0},
+            "event_stats": {
+                "q1_grid_count": 1,
+                "q2_grid_count": 1,
+                "q3_grid_count": 1,
+                "q4_grid_count": 1,
+                "q6_grid_min": 4,
+            },
+        }
+        p = bp.build_snapshot_pricing_dict({**snap, "raw_pricing": raw}, snapshot_path_hint=None)
+        self.assertEqual(int(p.get("tier_extra_cells") or 0), 3)
+        self.assertAlmostEqual(float(p.get("tier_extra_value") or 0.0), 600.0)
+
     def test_early_round_vacant_dict_uses_geometry(self) -> None:
         """无 200009 时：``vacant_dict_from_board_snapshot`` 按几何前缀区计空置（与定价同源）。"""
         gs = {
@@ -1783,7 +2019,7 @@ class BoardPricingTests(unittest.TestCase):
         self.assertAlmostEqual(float(p.get("tier_extra_value") or 0.0), 0.0)
 
     def test_phantom_infer_tier_credit_splits_q5_q6_grid_min(self) -> None:
-        """已知 ``q5_grid_min`` 且几何空格不足：2×2 推断笔全部记金，``q6_grid_min`` 仍补 tier。"""
+        """已知 ``q5_grid_min`` 且几何空格不足：2×2 推断笔按 ``rem5`` 记金，``q6_grid_min`` 仍补 tier。"""
         snap = self._phantom_only_snapshot(quality_pref="_phantom_q_infer")
         raw = {
             "csv_quality_groups_avg_per_cell": {
@@ -1802,15 +2038,16 @@ class BoardPricingTests(unittest.TestCase):
             },
         }
         p = bp.build_snapshot_pricing_dict({**snap, "raw_pricing": raw}, snapshot_path_hint=None)
-        self.assertEqual(int(p.get("tier_extra_cells") or 0), 2)
-        puq = p.get("phantom_unknown_quality")
-        self.assertIsInstance(puq, dict)
-        self.assertAlmostEqual(float(puq.get("tier_credit_q5") or 0), 4.0)
-        self.assertAlmostEqual(float(puq.get("tier_credit_q6") or 0), 0.0)
+        # 幽灵仅消耗 ``rem5=2`` 金格预算，盘面金占位不足，q5/q6 各补 2 格 tier_extra
+        self.assertEqual(int(p.get("tier_extra_cells") or 0), 4)
+        self.assertNotIn("phantom_unknown_quality", p)
         ph_row = (snap.get("grid_overlay", {}).get("phantom_items") or {}).get(
             "phantom_9"
         ) or {}
-        self.assertEqual(int(ph_row.get("quality") or 0), 5)
+        self.assertGreaterEqual(
+            float(ph_row.get("phantom_tier_credit_by_quality", {}).get("5") or 0),
+            2.0,
+        )
 
     def test_phantom_infer_excluded_gr_no_tier_credit(self) -> None:
         """金红皆排除：无 phantom tier 分摊，``q6_grid_min`` 仍全额补格。"""
@@ -1849,12 +2086,11 @@ class BoardPricingTests(unittest.TestCase):
         p = bp.build_snapshot_pricing_dict({**snap, "raw_pricing": raw}, snapshot_path_hint=None)
         self.assertEqual(int(p.get("tier_extra_cells") or 0), 0)
         self.assertAlmostEqual(float(p.get("tier_extra_value") or 0.0), 0.0)
-        puq = p.get("phantom_unknown_quality") or {}
-        self.assertAlmostEqual(float(puq.get("tier_credit_q6") or 0), 4.0)
-        items_puq = puq.get("items") or []
-        self.assertTrue(items_puq)
-        self.assertEqual(int((items_puq[0] or {}).get("resolved_quality") or 0), 6)
-        self.assertAlmostEqual(float(puq.get("tier_credit_for_min_q6") or 0), 0.0)
+        self.assertNotIn("phantom_unknown_quality", p)
+        ph_row = (snap.get("grid_overlay", {}).get("phantom_items") or {}).get(
+            "phantom_9"
+        ) or {}
+        self.assertEqual(int(ph_row.get("quality") or 0), 6)
 
     def test_phantom_no_gold_alloc_when_q5_grid_count_zero(self) -> None:
         """末盘金格已满（``q5_grid_count`` 用尽）：新幽灵只分红，不写金品质。"""
@@ -1876,9 +2112,7 @@ class BoardPricingTests(unittest.TestCase):
             },
         }
         p = bp.build_snapshot_pricing_dict({**snap, "raw_pricing": raw}, snapshot_path_hint=None)
-        puq = p.get("phantom_unknown_quality") or {}
-        self.assertAlmostEqual(float(puq.get("tier_credit_q5") or 0), 0.0)
-        self.assertAlmostEqual(float(puq.get("tier_credit_q6") or 0), 4.0)
+        self.assertNotIn("phantom_unknown_quality", p)
         ph_row = (snap.get("grid_overlay", {}).get("phantom_items") or {}).get(
             "phantom_9"
         ) or {}
@@ -2087,7 +2321,7 @@ class BoardPricingTests(unittest.TestCase):
         self.assertAlmostEqual(float(detail.get("gr_remaining_budget_final_q5") or 0), 0.0)
 
     def test_phantom_all_gold_when_vacant_less_than_q5_grid_min(self) -> None:
-        """已知 ``q5_grid_min`` 且几何空格 < 金格预算：候选幽灵 footprint 全部记金。"""
+        """几何空格 < ``rem5`` 时仍按 ``rem5`` 贪心记金（池内格数不超过预算时仍可全金）。"""
         from bidking.analysis.strategy import common as strat_common
 
         snap = self._phantom_multi_infer_snapshot(vacant_geometric=5)
@@ -2121,7 +2355,7 @@ class BoardPricingTests(unittest.TestCase):
         global_steps = detail.get("gold_allocation_steps") or []
         self.assertTrue(
             any(
-                step.get("reason") == "vacant_insufficient_all_phantom_gold"
+                step.get("reason") == "vacant_lt_rem5_greedy_capped"
                 for step in global_steps
             )
         )
@@ -2203,10 +2437,14 @@ class BoardPricingTests(unittest.TestCase):
         self.assertTrue(detail.get("q5_grid_min_known"))
         overlay = board.get("grid_overlay") or {}
         ph = overlay.get("phantom_items") or {}
-        # vacant=0 < rem5=3 → 全部记金
-        self.assertEqual(int(ph["ph_s1"].get("quality") or 0), 5)
-        self.assertEqual(int(ph["ph_big"].get("quality") or 0), 5)
+        # vacant=0 < rem5=3：幽灵池 6 格，金预算内最多记 3 格金
         self.assertAlmostEqual(float(detail.get("gr_remaining_budget_final_q5") or 0), 0.0)
+        gold_cells = sum(
+            float((row.get("tier_credit_by_quality") or {}).get("5") or 0.0)
+            for row in (detail.get("items") or [])
+            if isinstance(row, dict)
+        )
+        self.assertAlmostEqual(gold_cells, 3.0)
 
     def test_phantom_rebalance_red_to_gold_when_rem5_exceeds_vacant(self) -> None:
         """``q5_grid_count`` 已知时：无精确金格匹配则空格吸收金预算，幽灵余格记红。"""
@@ -2263,16 +2501,11 @@ class BoardPricingTests(unittest.TestCase):
             },
         }
         p = bp.build_snapshot_pricing_dict({**snap, "raw_pricing": raw}, snapshot_path_hint=None)
-        puq = p.get("phantom_unknown_quality") or {}
-        self.assertAlmostEqual(float(puq.get("tier_credit_q5") or 0), 0.0)
-        self.assertAlmostEqual(float(puq.get("tier_credit_q6") or 0), 4.0)
+        self.assertNotIn("phantom_unknown_quality", p)
         ph_row = (snap.get("grid_overlay", {}).get("phantom_items") or {}).get(
             "phantom_9"
         ) or {}
         self.assertEqual(int(ph_row.get("quality") or 0), 6)
-        items_puq = puq.get("items") or []
-        self.assertTrue(items_puq)
-        self.assertEqual(int((items_puq[0] or {}).get("resolved_quality") or 0), 6)
 
     def test_phantom_post_gold_threshold_configurable(self) -> None:
         """``post_gold_quality_threshold_q5/q6`` 可分别配置；红阈值抬高时不直接定红。"""
@@ -2292,16 +2525,12 @@ class BoardPricingTests(unittest.TestCase):
             },
         }
         p = bp.build_snapshot_pricing_dict({**snap, "raw_pricing": raw}, snapshot_path_hint=None)
-        puq = p.get("phantom_unknown_quality") or {}
-        alloc = puq.get("alloc_config") or {}
-        self.assertAlmostEqual(
-            float(alloc.get("post_gold_quality_threshold_q5") or 0),
-            0.5,
+        self.assertNotIn("phantom_unknown_quality", p)
+        alloc = strategy_common.resolve_phantom_unknown_tier_config(
+            snapshot_override=raw.get("phantom_unknown_tier"),
         )
-        self.assertAlmostEqual(
-            float(alloc.get("post_gold_quality_threshold_q6") or 0),
-            0.99,
-        )
+        self.assertAlmostEqual(alloc["post_gold_quality_threshold_q5"], 0.5)
+        self.assertAlmostEqual(alloc["post_gold_quality_threshold_q6"], 0.99)
         ph_row = (snap.get("grid_overlay", {}).get("phantom_items") or {}).get(
             "phantom_9"
         ) or {}

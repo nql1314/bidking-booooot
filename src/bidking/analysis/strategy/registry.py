@@ -10,6 +10,7 @@ from ...logsys.perf_log import perf_log_elapsed
 from . import ahmad as _ahmad_strategy
 from . import generic as _generic_strategy
 from .context import SnapshotPricingContext
+from .context_dump import maybe_write_pricing_context_json
 from .pipeline import build_pricing_context
 
 EnrichFn = Callable[[SnapshotPricingContext, Dict[str, Any]], Dict[str, Any]]
@@ -36,6 +37,7 @@ def build_snapshot_pricing_dict(
         snapshot_path_hint=snapshot_path_hint,
         board_snapshot_config=board_snapshot_config,
     )
+    maybe_write_pricing_context_json(ctx)
     pricing = _generic_strategy.finalize_pricing_dict(ctx)
     for enrich in _ROLE_ENRICHERS:
         pricing = enrich(ctx, pricing)

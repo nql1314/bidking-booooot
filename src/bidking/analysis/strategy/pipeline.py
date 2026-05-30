@@ -137,23 +137,18 @@ def compute_base_metrics(ctx: SnapshotPricingContext) -> None:
 
     t0_tiers = time.perf_counter()
     ctx.cq4, ctx.cq5, ctx.cq6 = _common.confirmed_tier_footprint_q456(ctx.snap_full)
-    phantom_cr, phantom_detail = _common.phantom_unknown_tier_credit_q456(
+    _common.phantom_unknown_tier_credit_q456(
         ctx.snap_full,
         event_stats=ctx.st_ev,
         confirmed_q5=ctx.cq5,
         confirmed_q6=ctx.cq6,
     )
-    if phantom_detail:
-        ctx.phantom_unknown_detail = phantom_detail
 
     t0_items = time.perf_counter()
     ctx.total_f = float(compute_items_total(ctx.snap_full))
     perf_log_elapsed("build_snapshot_pricing_dict: compute_items_total", t0_items)
 
     ctx.cq4, ctx.cq5, ctx.cq6 = _common.confirmed_tier_footprint_q456(ctx.snap_full)
-    if phantom_detail:
-        ctx.cq5 += int(round(float(phantom_cr.get(5, 0.0) or 0.0)))
-        ctx.cq6 += int(round(float(phantom_cr.get(6, 0.0) or 0.0)))
 
     t0_unknown = time.perf_counter()
     mid_n = item_db.normalize_map_id(ctx.map_id if ctx.map_id else None)

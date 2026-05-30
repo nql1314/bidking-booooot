@@ -117,18 +117,10 @@ def weighted_cell_equiv_for_unknown_contour_item(
     csv_cells_raw: Optional[Dict[str, float]],
     pricing: Dict[str, Any],
     map_id_normalized: Optional[int],
-    *,
-    require_box_id_confirmed: bool = True,
 ) -> Optional[float]:
-    """品质已知、快照无外形时：按 CSV 期望价与档内 ``u_cell`` 得加权格数。
-
-    默认要求 ``box_id_confirmed``（与定价占位一致）。空置扣减等场景可传
-    ``require_box_id_confirmed=False``。
-    """
+    """品质已知、快照无外形时：按 CSV 期望价与档内 ``u_cell`` 得加权格数。"""
     _ = board_snapshot
     if it.get("shape") is not None:
-        return None
-    if require_box_id_confirmed and not it.get("box_id_confirmed"):
         return None
     csv_index, csv_items = _load_item_prices_db()
     if not csv_items:
@@ -177,7 +169,7 @@ def unknown_contour_vacant_weighted_excess(
     pricing: Dict[str, Any],
     map_id_normalized: Optional[int],
 ) -> Tuple[float, Dict[str, Any]]:
-    """无 ``shape`` 且已确认占位：用合并表（``game_state.items`` + overlay，与定价同源）遍历。
+    """无 ``shape`` 的未知轮廓：用合并表（``game_state.items`` + overlay，与定价同源）遍历。
 
     延迟导入 ``merged_items_dict_from_snapshot``，避免本模块与
     :mod:`bidking.analysis.grid_overlay_item_merge` 的循环依赖。
@@ -196,8 +188,6 @@ def unknown_contour_vacant_weighted_excess(
     n_uc = 0
     for uid, it in merged_items.items():
         if not isinstance(it, dict):
-            continue
-        if not it.get("box_id_confirmed"):
             continue
         if it.get("shape") is not None:
             continue
