@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Dict, Optional, Set, Tuple, Union
 
 from ...analysis.grid_overlay_infer_vacant_rects import (
@@ -114,17 +115,67 @@ def apply_scan_history_to_phantom_items(
                 pk.excluded_qualities.add(value)
 
 
+@dataclass(frozen=True)
+class AutoVacantPhantomSavedState:
+    """purge 自动 ``phantom_vac_*`` 前保存的用户态，供重算后恢复。"""
+
+    quality_pref: object
+    manual_confirm_item_id: Optional[int] = None
+    user_locked: bool = False
+
+
+def snapshot_auto_vacant_phantom_user_state(
+    phantom_items: Dict[str, ItemKnowledge],
+    phantom_quality_pref: Dict[str, Union[int, str]],
+    phantom_quality_user_locked: Set[str],
+) -> Dict[str, AutoVacantPhantomSavedState]:
+    """在 purge 自动 ``phantom_vac_*`` 前保存品质偏好与手动物品确认，供重算后恢复。"""
+    out: Dict[str, AutoVacantPhantomSavedState] = {}
+    for uid in phantom_items:
+        if not is_auto_vacant_rect_phantom_uid(uid):
+            continue
+        pk = phantom_items[uid]
+        mc_raw = pk.manual_confirm_item_id
+        mc_i: Optional[int] = None
+        if mc_raw is not None:
+            try:
+                v = int(mc_raw)
+                if v > 0:
+                    mc_i = v
+            except (TypeError, ValueError):
+                pass
+        out[uid] = AutoVacantPhantomSavedState(
+            quality_pref=phantom_quality_pref.get(uid, _VACANT_Q_PREF_ABSENT),
+            manual_confirm_item_id=mc_i,
+            user_locked=uid in phantom_quality_user_locked,
+        )
+    return out
+
+
 def snapshot_auto_vacant_phantom_quality_prefs(
     phantom_items: Dict[str, ItemKnowledge],
     phantom_quality_pref: Dict[str, Union[int, str]],
 ) -> Dict[str, object]:
-    """在 purge 自动 ``phantom_vac_*`` 前保存品质偏好，供重算后恢复用户手改。"""
-    out: Dict[str, object] = {}
-    for uid in phantom_items:
-        if not is_auto_vacant_rect_phantom_uid(uid):
-            continue
-        out[uid] = phantom_quality_pref.get(uid, _VACANT_Q_PREF_ABSENT)
-    return out
+    """兼容旧接口：仅保存品质偏好。"""
+    saved = snapshot_auto_vacant_phantom_user_state(
+        phantom_items, phantom_quality_pref, set()
+    )
+    return {uid: st.quality_pref for uid, st in saved.items()}
+
+
+def apply_auto_vacant_phantom_manual_confirm(
+    uid: str,
+    pk: ItemKnowledge,
+    spec: VacantRectPhantomSpec,
+    saved: Dict[str, AutoVacantPhantomSavedState],
+) -> None:
+    """重算后写入 ``manual_confirm_item_id``：用户锁定优先于推断自动补齐。"""
+    prev = saved.get(uid)
+    if prev is not None and prev.user_locked and prev.manual_confirm_item_id is not None:
+        pk.manual_confirm_item_id = int(prev.manual_confirm_item_id)
+        return
+    if spec.manual_confirm_item_id is not None:
+        pk.manual_confirm_item_id = int(spec.manual_confirm_item_id)
 
 
 def vacant_rect_spec_auto_quality_pref(spec: VacantRectPhantomSpec) -> object:
@@ -139,7 +190,7 @@ def apply_vacant_rect_phantom_quality_pref(
     uid: str,
     spec: VacantRectPhantomSpec,
     phantom_quality_pref: Dict[str, Union[int, str]],
-    saved: Dict[str, object],
+    saved: Dict[str, AutoVacantPhantomSavedState],
 ) -> None:
     """写入推断默认品质；若该 uid 此前存在且与用户手改不一致则保留手改。"""
     auto = vacant_rect_spec_auto_quality_pref(spec)
@@ -152,13 +203,23 @@ def apply_vacant_rect_phantom_quality_pref(
 
     if uid not in saved:
         return
-    prev = saved[uid]
+    prev = saved[uid].quality_pref
     if prev == auto:
         return
     if prev is _VACANT_Q_PREF_ABSENT:
         phantom_quality_pref.pop(uid, None)
     else:
         phantom_quality_pref[uid] = prev  # type: ignore[assignment]
+
+
+def restore_auto_vacant_phantom_user_locked(
+    uid: str,
+    saved: Dict[str, AutoVacantPhantomSavedState],
+    phantom_quality_user_locked: Set[str],
+) -> None:
+    prev = saved.get(uid)
+    if prev is not None and prev.user_locked:
+        phantom_quality_user_locked.add(uid)
 
 
 def reconcile_overlay_after_refresh(
