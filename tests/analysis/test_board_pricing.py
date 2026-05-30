@@ -968,7 +968,7 @@ class BoardPricingTests(unittest.TestCase):
         self.assertEqual((lp.w, lp.h, lp.dc, lp.dr), (1, 1, pc, pr))
 
     def test_vacant_rect_pass5_merge_adjacent_1x1_phantoms(self) -> None:
-        """第 5 步：相邻 1×1 幽灵并集为矩形时合并，合并结果继续重复。"""
+        """第 6 步：相邻 1×1 幽灵并集为矩形时合并，合并结果继续重复。"""
         from bidking.parsing.state import GameState, ItemKnowledge
 
         st = GameState()
@@ -1152,7 +1152,7 @@ class BoardPricingTests(unittest.TestCase):
         self.assertNotIn(ghost, ghost_cells)
 
     def test_unknown_contour_log_merges_infer_phantom_vac_before_emit(self) -> None:
-        """第 6 步：日志 Q5 与本轮 ``phantom_vac_*``（品质未定）合并，吸收幽灵并扩大轮廓。"""
+        """轮廓未知 Q5 日志 1×1 锚格释放后，空置推断矩形覆盖锚格并写入 Q5。"""
         from bidking.parsing.state import GameState, ItemKnowledge
 
         st = GameState()
@@ -1192,19 +1192,25 @@ class BoardPricingTests(unittest.TestCase):
             current_round=4,
             enabled=True,
         )
-        self.assertIn("log_g5", res.inferred_log_shapes)
-        w, h, dc, dr = res.inferred_log_shapes["log_g5"]
-        self.assertGreater(w * h, 1)
-        absorbed = set(res.absorbed_phantom_uids)
-        self.assertTrue(absorbed)
-        for sp in res.specs:
-            self.assertNotIn(sp.uid, absorbed)
-        self.assertEqual(w, 1)
-        self.assertGreaterEqual(h, 2)
+        self.assertEqual(res.inferred_log_shapes, {})
+        self.assertEqual(res.absorbed_phantom_uids, frozenset())
+        anchor = (4, 9)
+        covering = [
+            sp
+            for sp in res.specs
+            if anchor
+            in {
+                (sp.dr + ddr, sp.dc + ddc)
+                for ddr in range(sp.h)
+                for ddc in range(sp.w)
+            }
+        ]
+        self.assertTrue(covering, "expected phantom rect covering log_g5 anchor")
+        self.assertTrue(any(sp.quality == 5 for sp in covering))
+        self.assertTrue(any(sp.w * sp.h > 1 for sp in covering))
 
-    def test_unknown_contour_log_merges_explicit_q_phantom_vac_stack(self) -> None:
-        """Q5 日志 2×1 可与上方已标 Q6 的 phantom_vac 2×1 叠成 2×2。"""
-        from bidking.analysis.grid_overlay_infer_vacant_rects import VacantRectPhantomSpec
+    def test_unknown_contour_log_anchor_released_into_vacant_infer(self) -> None:
+        """Q5 日志 1×1 锚格释放后参与空置推断，覆盖锚格的幽灵带 Q5。"""
         from bidking.parsing.state import GameState, ItemKnowledge
 
         st = GameState()
@@ -1232,29 +1238,7 @@ class BoardPricingTests(unittest.TestCase):
         )
         occ = set(anchors)
         occ.update([(3, 7), (4, 7), (5, 8), (4, 9), (3, 8)])
-        specs_in = [
-            VacantRectPhantomSpec(
-                uid="phantom_vac_0408_1x1",
-                w=1,
-                h=1,
-                dc=8,
-                dr=4,
-                quality=None,
-            ),
-            VacantRectPhantomSpec(
-                uid="phantom_vac_0308_2x1",
-                w=2,
-                h=1,
-                dc=8,
-                dr=3,
-                quality=6,
-            ),
-        ]
-        from bidking.analysis.grid_overlay_infer_vacant_rects import (
-            _unknown_contour_merge_expand_log_shapes,
-        )
-
-        inferred, absorbed = _unknown_contour_merge_expand_log_shapes(
+        res = grid_overlay_mod.compute_vacant_rect_phantom_specs(
             game_state=st,
             manual_shapes={},
             phantom_items={},
@@ -1262,10 +1246,23 @@ class BoardPricingTests(unittest.TestCase):
             occupied_cells=set(occ),
             vacant_manual_suppress=set(),
             max_box_id=55,
-            phantom_specs=specs_in,
+            raw_pricing={"event_stats": {"q5_count": 99, "q6_count": 99}},
+            current_round=4,
+            enabled=True,
         )
-        self.assertEqual(inferred.get("log_g5"), (2, 2, 8, 3))
-        self.assertIn("phantom_vac_0308_2x1", absorbed)
+        anchor = (4, 9)
+        covering = [
+            sp
+            for sp in res.specs
+            if anchor
+            in {
+                (sp.dr + ddr, sp.dc + ddc)
+                for ddr in range(sp.h)
+                for ddc in range(sp.w)
+            }
+        ]
+        self.assertTrue(covering)
+        self.assertTrue(any(sp.quality == 5 for sp in covering))
 
     def test_vacant_rect_phantom_skipped_until_q1234_ready(self) -> None:
         """扫描史未覆盖 Q1–Q4 时不推断 phantom_vac（与回合数无关）。"""

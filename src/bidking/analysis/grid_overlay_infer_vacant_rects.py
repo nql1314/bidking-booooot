@@ -103,7 +103,7 @@ class VacantRectPhantomSpec:
 
 
 class VacantRectInferResult(NamedTuple):
-    """空置矩形幽灵推断 + 品质已知、轮廓未知日志物品的合并扩充。"""
+    """空置矩形幽灵推断结果（``phantom_vac_*`` 规格列表）。"""
 
     specs: List[VacantRectPhantomSpec]
     inferred_log_shapes: Dict[str, Tuple[int, int, int, int]]
@@ -1262,6 +1262,89 @@ def _unknown_contour_log_item_eligible(
     return True
 
 
+def _release_1x1_unknown_contour_items_to_vacant(
+    *,
+    game_state: GameState,
+    manual_shapes: Mapping[str, Tuple[int, int, int, int]],
+    phantom_items: Mapping[str, ItemKnowledge],
+    phantom_quality_pref: Mapping[str, Any],
+    base_occupied: Set[Tuple[int, int]],
+) -> Dict[Tuple[int, int], int]:
+    """
+    将场上 1×1 锚格的轮廓未知日志件、以及 1×1 品质未定手画幽灵，从占位中剥离并记锚格品质。
+
+    剥离后的格在随后收集前缀空置区时视为空置，参与推断步骤 1/2/3/4/5（合并）。
+    """
+    recorded: Dict[Tuple[int, int], int] = {}
+
+    for uid, k in game_state.items.items():
+        suid = str(uid)
+        if not _unknown_contour_log_item_eligible(k, suid, manual_shapes):
+            continue
+        cells = _unknown_contour_base_occupied_cells_for_uid(suid, k, manual_shapes)
+        if len(cells) != 1:
+            continue
+        cell = next(iter(cells))
+        recorded[cell] = int(k.quality)
+        base_occupied.discard(cell)
+
+    for uid, k in phantom_items.items():
+        suid = str(uid)
+        if is_auto_vacant_rect_phantom_uid(suid):
+            continue
+        if suid not in manual_shapes:
+            continue
+        w, h, dc, dr = manual_shapes[suid]
+        if int(w) != 1 or int(h) != 1:
+            continue
+        if not _unknown_contour_phantom_quality_undetermined(suid, k, phantom_quality_pref):
+            continue
+        cell = (int(dr), int(dc))
+        base_occupied.discard(cell)
+        explicit_q = phantom_quality_pref_explicit_quality(
+            phantom_quality_pref.get(suid)
+        )
+        if explicit_q is not None:
+            recorded[cell] = int(explicit_q)
+
+    return recorded
+
+
+def _apply_recorded_cell_qualities_to_specs(
+    specs: List[VacantRectPhantomSpec],
+    cell_quality: Mapping[Tuple[int, int], int],
+) -> List[VacantRectPhantomSpec]:
+    """推断矩形覆盖已记录品质的锚格时，写入对应 ``quality``。"""
+    if not cell_quality:
+        return specs
+    out: List[VacantRectPhantomSpec] = []
+    for spec in specs:
+        cells = _phantom_spec_cells(spec)
+        hits = {cell_quality[c] for c in cells if c in cell_quality}
+        if not hits:
+            out.append(spec)
+            continue
+        if len(hits) == 1:
+            q = next(iter(hits))
+        else:
+            anchor = (int(spec.dr), int(spec.dc))
+            q = cell_quality.get(anchor)
+            if q is None:
+                q = min(hits)
+        out.append(
+            VacantRectPhantomSpec(
+                uid=spec.uid,
+                w=spec.w,
+                h=spec.h,
+                dc=spec.dc,
+                dr=spec.dr,
+                quality=int(q),
+                manual_confirm_item_id=spec.manual_confirm_item_id,
+            )
+        )
+    return out
+
+
 def _unknown_contour_merge_expand_log_shapes(
     *,
     game_state: GameState,
@@ -1396,16 +1479,17 @@ def compute_vacant_rect_phantom_specs(
     enabled: bool = True,
 ) -> VacantRectInferResult:
     """
-    品质 1–4 全量扫描已发生、且场上 Q1–Q4 轮廓与锚格均已可靠锁定时：
-    多轮在剩余空置区推断 ``phantom_vac_*``，再对品质已知、轮廓未知的日志物品做合并扩充。
+    品质 1–4 全量扫描已发生、且场上 Q1–Q4 轮廓与锚格均已可靠锁定时，
+    在剩余空置区多轮推断 ``phantom_vac_*``。
 
+    0. 将场上 1×1 锚格的轮廓未知日志件、1×1 品质未定手画幽灵从占位中剥离为前置空置格，
+       并记录锚格品质（手画幽灵仅在手选显式 Q 时记录）；
     1. 三面/四面围住的 1×1 → 临时幽灵占格（不立即输出）；
     2. 连通区近似实心矩形（原逻辑）；
     3. 不规则剩余区：逐点 H/V 双向贪心扩展 → 取最大矩形（3×3>2×5/5×2 等方度 tie-break），移除后重复；
     4. 第 1 步临时占格、仍未被 2/3 步吸收的 1×1 → 输出对应幽灵；
     5. 所有 1×1 幽灵与相邻幽灵并集为实心矩形时合并，合并结果继续重复直至稳定；
-    6. 各日志件自 1×1 锚格起，与四邻空置格、同品质邻接推断矩形、品质未定手画幽灵或
-       本轮 ``phantom_vac_*``（含已推断出显式品质的条）合并。
+    6. 覆盖步骤 0 已记录品质锚格的推断矩形 → 写入对应 ``quality``。
 
     - 须有 CSV 候选（扫描负向 + ``event_stats`` 件数配额）；
     - 候选品质唯一 → 写入 ``quality``；
@@ -1429,6 +1513,13 @@ def compute_vacant_rect_phantom_specs(
     )
 
     base_occupied = set(occupied_cells)
+    recorded_cell_quality = _release_1x1_unknown_contour_items_to_vacant(
+        game_state=game_state,
+        manual_shapes=manual_shapes,
+        phantom_items=phantom_items,
+        phantom_quality_pref=phantom_quality_pref,
+        base_occupied=base_occupied,
+    )
     vacant = _collect_prefix_vacant_cells(
         occupied=base_occupied,
         max_box_id=int(max_box_id),
@@ -1437,6 +1528,7 @@ def compute_vacant_rect_phantom_specs(
     )
 
     specs: List[VacantRectPhantomSpec] = []
+    ctx: Optional[_VacantRectInferCtx] = None
     if vacant:
         temp_ghost_1x1 = _pass1_collect_temp_ghost_1x1(vacant)
         vacant -= temp_ghost_1x1
@@ -1464,21 +1556,14 @@ def compute_vacant_rect_phantom_specs(
         _pass_full_rect_fill(ctx)
         _pass_three_sided_rect_fill(ctx)
         _pass4_emit_deferred_temp_1x1_phantoms(ctx)
-        _pass5_merge_adjacent_phantom_rects(ctx)
         specs = ctx.out
+        if specs and ctx is not None:
+            ctx.out = specs
+            _pass5_merge_adjacent_phantom_rects(ctx)
+            specs = ctx.out
 
-    inferred, absorbed = _unknown_contour_merge_expand_log_shapes(
-        game_state=game_state,
-        manual_shapes=manual_shapes,
-        phantom_items=phantom_items,
-        phantom_quality_pref=phantom_quality_pref,
-        occupied_cells=occupied_cells,
-        vacant_manual_suppress=vacant_manual_suppress,
-        max_box_id=int(max_box_id),
-        phantom_specs=specs,
-    )
-    specs = _filter_phantom_specs_absorbed_by_log_merge(specs, set(absorbed))
-    return VacantRectInferResult(specs, inferred, absorbed)
+    specs = _apply_recorded_cell_qualities_to_specs(specs, recorded_cell_quality)
+    return VacantRectInferResult(specs, {}, frozenset())
 
 
 __all__ = [
