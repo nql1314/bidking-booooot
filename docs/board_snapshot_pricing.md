@@ -16,7 +16,7 @@
 total = Σ merged_items 的 CSV 标价（compute_items_total）
 ```
 
-- **数据源**：`merged_items_dict_from_snapshot`（`game_state.items` + `grid_overlay.phantom_items` + `manual_shapes` / `infer_shapes` + `phantom_quality_pref` / `unknown_cell_quality_pref` + 手动确认投影）。
+- **数据源**：`merged_items_dict_from_snapshot`（`game_state.items` + `grid_overlay.phantom_items` + `manual_shapes` + `phantom_quality_pref` / `unknown_cell_quality_pref` + 手动确认投影）。
 - **计入**：手画/自动幽灵（`phantom_vac_*`）、推断外形、多候选权重价（品质未知但有轮廓）等。
 - **已移除 kcw**：不再从 `total` 扣除 `known_contour_weighted_price`；`pricing.known_contour_weighted_*` 恒为 0。
 

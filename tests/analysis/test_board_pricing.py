@@ -385,7 +385,6 @@ class BoardPricingTests(unittest.TestCase):
             },
             "grid_overlay": {
                 "manual_shapes": {"z": [2, 1, 0, 0]},
-                "infer_shapes": {"z": [1, 2, 5, 4]},
                 "merged_items_dict": {
                     "z": {
                         "uid": "z",
@@ -400,7 +399,6 @@ class BoardPricingTests(unittest.TestCase):
                         "manual_confirm_item_id": None,
                         "excluded_categories": [],
                         "excluded_qualities": [],
-                        "_overlay_shape_origin": "infer",
                     }
                 },
             },
@@ -409,47 +407,17 @@ class BoardPricingTests(unittest.TestCase):
         self.assertEqual(m["z"]["shape"], 21)
         self.assertEqual(m["z"].get("_overlay_shape_origin"), "manual")
 
-    def test_merged_items_applies_infer_shapes_when_no_manual_shape(self) -> None:
-        """``grid_overlay.infer_shapes`` 在无 shape 时写入几何外形并标记推断来源。"""
-        snap = {
-            "game_state": {
-                "items": {
-                    "y": {
-                        "uid": "y",
-                        "box_id": 0,
-                        "box_id_confirmed": True,
-                        "shape": None,
-                        "quality": 5,
-                        "categories": [],
-                        "item_cid": None,
-                        "price": None,
-                        "manual_confirm_item_id": None,
-                        "excluded_categories": [],
-                        "excluded_qualities": [],
-                    }
-                }
-            },
-            "grid_overlay": {"infer_shapes": {"y": [2, 1, 0, 0]}},
-        }
-        m = grid_overlay_mod.merged_items_dict(snap)
-        self.assertEqual(m["y"]["shape"], 21)
-        self.assertEqual(m["y"].get("_overlay_shape_origin"), "infer")
-
-    def test_pricing_shape_int_for_csv_uses_infer_footprint(self) -> None:
-        """推算写入的 ``shape`` 须参与 CSV 轮廓匹配，避免仅知档位却按全外形候选加权。"""
+    def test_pricing_shape_int_for_csv_uses_merged_shape(self) -> None:
+        """合并行上的 ``shape`` 须参与 CSV 轮廓匹配。"""
         self.assertEqual(
-            bp._pricing_shape_int_for_csv(
-                {"shape": 11, "quality": 6, "_overlay_shape_origin": "infer"}
-            ),
+            bp._pricing_shape_int_for_csv({"shape": 11, "quality": 6}),
             11,
         )
         self.assertEqual(
             bp._pricing_shape_int_for_csv({"shape": 22, "_overlay_shape_origin": "game"}),
             22,
         )
-        self.assertIsNone(
-            bp._pricing_shape_int_for_csv({"shape": None, "_overlay_shape_origin": "infer"})
-        )
+        self.assertIsNone(bp._pricing_shape_int_for_csv({"shape": None}))
 
     def test_merged_items_applies_phantom_quality_pref(self) -> None:
         """``phantom_quality_pref`` 须并入合并表 ``quality``，定价才按红笔等已知档位计价。"""
@@ -773,10 +741,8 @@ class BoardPricingTests(unittest.TestCase):
                         "manual_confirm_item_id": None,
                         "excluded_categories": [],
                         "excluded_qualities": [],
-                        "_overlay_shape_origin": "infer",
                     }
                 },
-                "infer_shapes": {"t1": [1, 2, 5, 4]},
             },
         }
         m = grid_overlay_mod.merged_items_dict_from_snapshot(snap)
@@ -785,217 +751,6 @@ class BoardPricingTests(unittest.TestCase):
         self.assertEqual(m["t1"].get("price"), 3875)
         self.assertEqual(m["t1"].get("quality"), 3)
         self.assertEqual(m["t1"].get("_overlay_shape_origin"), "game")
-
-    def test_infer_shapes_empty_before_round4(self) -> None:
-        """第 4 回合前不做已知品质未知轮廓扩充。"""
-        from bidking.parsing.state import GameState, ItemKnowledge
-
-        st = GameState()
-        st.map_id = 2101
-        st.current_round = 3
-        st.items["x"] = ItemKnowledge(
-            uid="x",
-            box_id=0,
-            box_id_confirmed=False,
-            shape=None,
-            quality=5,
-        )
-        raw = {
-            "event_stats": {
-                "q1_grid_count": 1,
-                "q2_grid_count": 1,
-                "q3_grid_count": 1,
-                "q4_grid_count": 1,
-            }
-        }
-        inf = grid_overlay_mod.compute_grid_overlay_infer_shapes(
-            game_state=st,
-            manual_shapes={},
-            occupied_cells={(0, 0)},
-            vacant_manual_suppress=set(),
-            max_box_id=30,
-            raw_pricing=raw,
-            current_round=3,
-        )
-        self.assertEqual(inf.shapes, {})
-        self.assertEqual(inf.absorbed_phantom_uids, frozenset())
-
-    def test_infer_shapes_respects_disabled_flag(self) -> None:
-        """关闭共用自动填充开关时：``compute_grid_overlay_infer_shapes`` 返回空。"""
-        from bidking.parsing.state import GameState, ItemKnowledge
-
-        st = GameState()
-        st.map_id = 2101
-        st.items["x"] = ItemKnowledge(
-            uid="x",
-            box_id=0,
-            box_id_confirmed=False,
-            shape=None,
-            quality=5,
-        )
-        occ = {(0, 0)}
-        occ_copy = set(occ)
-        inf = grid_overlay_mod.compute_grid_overlay_infer_shapes(
-            game_state=st,
-            manual_shapes={},
-            occupied_cells=occ_copy,
-            vacant_manual_suppress=set(),
-            max_box_id=30,
-            raw_pricing={},
-            infer_unknown_contour_shapes=False,
-            current_round=4,
-        )
-        self.assertEqual(inf.shapes, {})
-        self.assertEqual(inf.absorbed_phantom_uids, frozenset())
-        self.assertEqual(occ_copy, occ)
-
-    def test_infer_shapes_q56_iterative_merge_into_vacant(self) -> None:
-        """Q14 齐后金物品自 1×1 向邻接空置格迭代合并，且须在空格填充占位之后。"""
-        from bidking.analysis._shape_wh import shape_wh_from_snapshot
-        from bidking.parsing.state import GameState, ItemKnowledge
-
-        _, csv_items = bp._load_item_prices_db()
-        pick_shape: int | None = None
-        for row in csv_items:
-            if int(row.quality) != 5:
-                continue
-            w, h = shape_wh_from_snapshot(row.shape)
-            if (w, h) == (2, 1):
-                pick_shape = int(row.shape)
-                break
-        if pick_shape is None:
-            self.skipTest("need Q5 1×2 CSV shape")
-
-        st = GameState()
-        st.map_id = 2101
-        st.current_round = 4
-        for q in (1, 2, 3, 4):
-            st._scan_history.append(("quality", q, frozenset({f"log_q{q}"})))
-        corners = [(0, 0), (0, 9), (9, 0), (9, 9)]
-        for q, (r, c) in zip((1, 2, 3, 4), corners):
-            st.items[f"log_q{q}"] = ItemKnowledge(
-                uid=f"log_q{q}",
-                box_id=r * 10 + c,
-                box_id_confirmed=True,
-                shape=11,
-                quality=q,
-            )
-        st.items["gold"] = ItemKnowledge(
-            uid="gold",
-            box_id=11,
-            box_id_confirmed=True,
-            shape=None,
-            quality=5,
-        )
-        occ = set(corners) | {(1, 1)}
-        for r in range(10):
-            for c in range(10):
-                if (r, c) in occ or (r, c) == (1, 2):
-                    continue
-                occ.add((r, c))
-        raw = {
-            "event_stats": {
-                "q1_grid_count": 1,
-                "q2_grid_count": 1,
-                "q3_grid_count": 1,
-                "q4_grid_count": 1,
-            }
-        }
-        inf = grid_overlay_mod.compute_grid_overlay_infer_shapes(
-            game_state=st,
-            manual_shapes={},
-            occupied_cells=set(occ),
-            vacant_manual_suppress=set(),
-            max_box_id=30,
-            raw_pricing=raw,
-            current_round=4,
-        )
-        self.assertEqual(inf.shapes.get("gold"), [2, 1, 1, 1])
-
-    def test_infer_shapes_absorbs_undetermined_phantom_without_double_use(self) -> None:
-        """品质未定幽灵被日志推断吸收后登记 uid，且不会跨品质批次重复吸收。"""
-        from bidking.analysis._shape_wh import shape_wh_from_snapshot
-        from bidking.analysis.phantom_pricing_ui_sync import PHANTOM_Q_INFER
-        from bidking.analysis.snapshot import game_state_to_json, item_knowledge_to_json
-        from bidking.parsing.state import GameState, ItemKnowledge
-
-        _, csv_items = bp._load_item_prices_db()
-        pick_shape: int | None = None
-        for row in csv_items:
-            if int(row.quality) != 5:
-                continue
-            w, h = shape_wh_from_snapshot(row.shape)
-            if (w, h) == (2, 1):
-                pick_shape = int(row.shape)
-                break
-        if pick_shape is None:
-            self.skipTest("need Q5 1×2 CSV shape")
-
-        st = GameState()
-        st.map_id = 2101
-        st.current_round = 4
-        for q in (1, 2, 3, 4):
-            st._scan_history.append(("quality", q, frozenset({f"log_q{q}"})))
-        corners = [(0, 0), (0, 9), (9, 0), (9, 9)]
-        for q, (r, c) in zip((1, 2, 3, 4), corners):
-            st.items[f"log_q{q}"] = ItemKnowledge(
-                uid=f"log_q{q}",
-                box_id=r * 10 + c,
-                box_id_confirmed=True,
-                shape=11,
-                quality=q,
-            )
-        st.items["gold"] = ItemKnowledge(
-            uid="gold",
-            box_id=11,
-            box_id_confirmed=True,
-            shape=None,
-            quality=5,
-        )
-        phid = "phantom_0"
-        phantom = ItemKnowledge(uid=phid, box_id=12, quality=None)
-        manual = {phid: (1, 1, 2, 1)}
-        occ = set(corners) | {(1, 1), (1, 2)}
-        for r in range(10):
-            for c in range(10):
-                if (r, c) in occ:
-                    continue
-                occ.add((r, c))
-        raw = {
-            "event_stats": {
-                "q1_grid_count": 1,
-                "q2_grid_count": 1,
-                "q3_grid_count": 1,
-                "q4_grid_count": 1,
-            }
-        }
-        inf = grid_overlay_mod.compute_grid_overlay_infer_shapes(
-            game_state=st,
-            manual_shapes=manual,
-            occupied_cells=set(occ),
-            vacant_manual_suppress=set(),
-            max_box_id=30,
-            raw_pricing=raw,
-            phantom_items={phid: phantom},
-            phantom_quality_pref={phid: PHANTOM_Q_INFER},
-            current_round=4,
-        )
-        self.assertEqual(inf.shapes.get("gold"), [2, 1, 1, 1])
-        self.assertEqual(inf.absorbed_phantom_uids, frozenset({phid}))
-        snap = {
-            "game_state": game_state_to_json(st),
-            "grid_overlay": {
-                "phantom_items": {phid: item_knowledge_to_json(phantom)},
-                "manual_shapes": {phid: [1, 1, 2, 1]},
-                "infer_shapes": {uid: list(v) for uid, v in inf.shapes.items()},
-                grid_overlay_mod.INFER_ABSORBED_PHANTOM_UIDS_KEY: sorted(
-                    inf.absorbed_phantom_uids
-                ),
-            },
-        }
-        merged = grid_overlay_mod.merged_items_dict(snap)
-        self.assertNotIn(phid, merged)
-        self.assertEqual(merged["gold"].get("shape"), 21)
 
     def test_infer_round4_auto_fill_switch_shared(self) -> None:
         from bidking.config.runtime import (
@@ -1414,31 +1169,6 @@ class BoardPricingTests(unittest.TestCase):
             enabled=True,
         )
         self.assertEqual(specs, [])
-
-    def test_infer_pseudo_blocked_keeps_prior_infer_on_foreign_anchor(self) -> None:
-        """先前推断占住的格不能再借 ``baseline - self_base`` 排除误放行。"""
-        pb = grid_overlay_mod._infer_pseudo_blocked(
-            {(0, 0), (0, 1)},
-            {(0, 1)},
-            {(0, 1)},
-        )
-        self.assertIn((0, 1), pb)
-
-    def test_infer_default_placement_candidates_unconfirmed_hit_any_cell_in_rect(self) -> None:
-        """未确认 BoxId 时枚举顶左使命中格落在矩形内。"""
-        from bidking.analysis.grid_overlay_infer_shapes import (
-            _infer_default_placement_candidates,
-        )
-
-        opts = _infer_default_placement_candidates(
-            0, 1, 2, 1, box_id_confirmed=False
-        )
-        self.assertIn((0, 0), opts)
-        self.assertIn((0, 1), opts)
-        self.assertEqual(
-            _infer_default_placement_candidates(0, 1, 2, 1, box_id_confirmed=True),
-            [(0, 1)],
-        )
 
     def test_unique_item_cid_without_snapshot_shape_price_matches_csv_row(self) -> None:
         """CSV 已唯一锁定 item_cid、快照无 shape 时：汇总价仍为该行 ``base_value``。"""

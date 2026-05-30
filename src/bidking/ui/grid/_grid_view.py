@@ -888,11 +888,6 @@ class GridWindow:
         # display_col/row 是用户设定的显示左上角；BoxId 必须在矩形内
         # log 确认形状后自动清除；phantom 项也放在这里
         self._manual_shapes: Dict[str, Tuple[int, int, int, int]] = {}
-        # 推算轮廓（与快照 grid_overlay.infer_shapes 同源）；手动画框优先覆盖
-        self._infer_shapes: Dict[str, Tuple[int, int, int, int]] = {}
-        self._infer_absorbed_phantoms: Set[str] = set()
-        # 用户右键取消「推算扩框」的 uid；``_sync_infer_shapes_from_analysis`` 与快照导出均会剔除
-        self._infer_suppress_uids: Set[str] = set()
         # 用户右键取消的 ``phantom_vac_*``；重绘重算时不再自动补回
         self._auto_vacant_rect_phantom_suppress_uids: Set[str] = set()
         # 最近一次点击「扩展日志物品」之前的 _manual_shapes 快照（用于一键还原）
@@ -997,93 +992,47 @@ class GridWindow:
 
     # ── 尺寸推断辅助 ──────────────────────────────────────────────────────
 
-    def _effective_shape_wh(
-        self,
-        uid: str,
-        k: ItemKnowledge,
-        *,
-        with_infer: bool = True,
-    ) -> Tuple[int, int]:
-        """返回物品的有效 (w, h)：log 形状 → 手动画框 → 推算框 → 手动确认候选 → 默认 1×1。"""
+    def _effective_shape_wh(self, uid: str, k: ItemKnowledge) -> Tuple[int, int]:
+        """返回物品的有效 (w, h)：log 形状 → 手动画框 → 手动确认候选 → 默认 1×1。"""
         if k.shape is not None:
             return self._shape_wh(k.shape)
         if uid in self._manual_shapes:
             w, h, _, _ = self._manual_shapes[uid]
-            return w, h
-        if with_infer and uid in self._infer_shapes:
-            w, h, _, _ = self._infer_shapes[uid]
             return w, h
         manual_item = self._valid_manual_confirm_item(uid, k)
         if manual_item is not None:
             return self._shape_wh(manual_item.shape)
         return (1, 1)
 
-    def _effective_display_origin(
-        self,
-        uid: str,
-        k: ItemKnowledge,
-        *,
-        with_infer: bool = True,
-    ) -> Tuple[int, int]:
-        """
-        返回物品在网格上显示的左上角 (col, row)。
-        有手动覆盖时使用手动值；否则推算框；否则以 BoxId 为 1×1 左上角。
-        """
+    def _effective_display_origin(self, uid: str, k: ItemKnowledge) -> Tuple[int, int]:
+        """返回物品在网格上显示的左上角 (col, row)；有手动画框时用手动值，否则以 BoxId 为 1×1 左上角。"""
         if uid in self._manual_shapes:
             _, _, dc, dr = self._manual_shapes[uid]
-            return dc, dr
-        if with_infer and uid in self._infer_shapes:
-            _, _, dc, dr = self._infer_shapes[uid]
             return dc, dr
         if k.box_id is None:
             return 0, 0
         return k.box_id % GRID_COLS, k.box_id // GRID_COLS
 
-    def _manual_shapes_merged_for_occupied(
-        self,
-    ) -> Dict[str, Tuple[int, int, int, int]]:
-        """占位用：推算与手动画框合并，手动画框覆盖同 uid 的推算。"""
-        out = dict(self._infer_shapes)
-        out.update(self._manual_shapes)
-        return out
-
-    def _phantom_items_for_occupancy(self) -> Dict[str, ItemKnowledge]:
-        """占位/定价用：已被日志 ``infer_shapes`` 吸收的幽灵不再单独计格。"""
-        if not self._infer_absorbed_phantoms:
-            return self._phantom_items
-        return {
-            uid: pk
-            for uid, pk in self._phantom_items.items()
-            if uid not in self._infer_absorbed_phantoms
-        }
-
-    def _occupied_cells_for_overlay_infer(self) -> Set[Tuple[int, int]]:
-        """
-        计算 ``infer_shapes`` 时用的占位图：不含推算矩形（避免互依赖），
-        仅用户手动画框 + 日志/幽灵真实占位。
-        """
+    def _occupied_cells_for_vacant_rect_infer(self) -> Set[Tuple[int, int]]:
+        """空置矩形自动幽灵推断用的占位图（仅手动画框 + 日志/幽灵，不含 ``phantom_vac_*`` 待推断区）。"""
         return _grid_overlay.build_occupied_cells(
             items=self.state.items,
             phantom_items=self._phantom_items,
             manual_shapes=self._manual_shapes,
             exclude_uid="",
-            item_shape_wh=lambda u, kk: self._effective_shape_wh(
-                u, kk, with_infer=False
-            ),
-            item_origin=lambda u, kk: self._effective_display_origin(
-                u, kk, with_infer=False
-            ),
+            item_shape_wh=self._effective_shape_wh,
+            item_origin=self._effective_display_origin,
         )
 
     def _infer_round4_auto_fill_active(self) -> bool:
-        """第 4 回合起：空格自动填充 + 已知品质未知轮廓扩充共用开关。"""
+        """第 4 回合起：空置区近似矩形 → 自动 ``phantom_vac_*``。"""
         return infer_vacant_rect_phantoms_enabled(
             self._runtime_raw,
             current_round=int(self.state.current_round or 1),
         )
 
-    def _sync_infer_shapes_from_analysis(self) -> None:
-        """按当前局面刷新 ``_infer_shapes``（与 ``build_grid_overlay_export_dict`` 中 infer 一致）。"""
+    def _sync_round4_overlay_from_analysis(self) -> None:
+        """第 4 回合起刷新 raw_pricing 与空置矩形自动幽灵（``phantom_vac_*``）。"""
         rp = build_raw_pricing_dict(
             map_id=int(self.state.map_id or 0),
             skill_logs=list(self._skill_logs),
@@ -1095,32 +1044,8 @@ class GridWindow:
         self._last_raw_pricing = rp
         if not self._infer_round4_auto_fill_active():
             self._purge_auto_vacant_rect_phantoms()
-            self._infer_shapes = {}
-            self._infer_absorbed_phantoms = set()
             return
         self._sync_vacant_rect_phantoms_from_analysis(rp)
-        occ = self._occupied_cells_for_overlay_infer()
-        infer_result = _grid_overlay.compute_grid_overlay_infer_shapes(
-            game_state=self.state,
-            manual_shapes=self._manual_shapes,
-            occupied_cells=set(occ),
-            vacant_manual_suppress=set(self._vacant_manual_suppress),
-            max_box_id=max_anchor_box_id_from_overlay_ui(
-                self.state.items, self._phantom_items
-            ),
-            raw_pricing=rp,
-            phantom_items=self._phantom_items,
-            phantom_quality_pref=self._phantom_quality_pref,
-            infer_unknown_contour_shapes=self._infer_round4_auto_fill_active(),
-            current_round=int(self.state.current_round or 1),
-        )
-        raw = infer_result.shapes
-        self._infer_absorbed_phantoms = set(infer_result.absorbed_phantom_uids)
-        self._infer_shapes = {
-            str(uid): (int(t[0]), int(t[1]), int(t[2]), int(t[3]))
-            for uid, t in raw.items()
-            if len(t) >= 4 and str(uid) not in self._infer_suppress_uids
-        }
 
     def _purge_auto_vacant_rect_phantoms(self) -> None:
         """移除上一轮自动推断的 ``phantom_vac_*``，保留用户手画幽灵。"""
@@ -1168,7 +1093,7 @@ class GridWindow:
             self._phantom_items, self._phantom_quality_pref
         )
         self._purge_auto_vacant_rect_phantoms()
-        occ = self._occupied_cells_for_overlay_infer()
+        occ = self._occupied_cells_for_vacant_rect_infer()
         fraud_cells = self._fraud_cells_for_vacant_rect_infer(occ)
         specs = _grid_overlay.compute_vacant_rect_phantom_specs(
             game_state=self.state,
@@ -1213,16 +1138,11 @@ class GridWindow:
         """
         return _grid_overlay.build_occupied_cells(
             items=self.state.items,
-            phantom_items=self._phantom_items_for_occupancy(),
-            manual_shapes=self._manual_shapes_merged_for_occupied(),
+            phantom_items=self._phantom_items,
+            manual_shapes=self._manual_shapes,
             exclude_uid=exclude_uid,
-            exclude_phantom_uids=self._infer_absorbed_phantoms,
-            item_shape_wh=lambda u, kk: self._effective_shape_wh(
-                u, kk, with_infer=True
-            ),
-            item_origin=lambda u, kk: self._effective_display_origin(
-                u, kk, with_infer=True
-            ),
+            item_shape_wh=self._effective_shape_wh,
+            item_origin=self._effective_display_origin,
         )
 
     def _fraud_placed_items_for_overlay(self) -> List[_grid_overlay.FraudPlacedItem]:
@@ -1231,16 +1151,11 @@ class GridWindow:
             self._perf_fraud_placed_overlay_calls += 1
         return _grid_overlay.fraud_placed_items_from_build_occupied_like(
             items=self.state.items,
-            phantom_items=self._phantom_items_for_occupancy(),
-            manual_shapes=self._manual_shapes_merged_for_occupied(),
+            phantom_items=self._phantom_items,
+            manual_shapes=self._manual_shapes,
             exclude_uid="",
-            exclude_phantom_uids=self._infer_absorbed_phantoms,
-            item_shape_wh=lambda u, kk: self._effective_shape_wh(
-                u, kk, with_infer=True
-            ),
-            item_origin=lambda u, kk: self._effective_display_origin(
-                u, kk, with_infer=True
-            ),
+            item_shape_wh=self._effective_shape_wh,
+            item_origin=self._effective_display_origin,
         )
 
     def _apply_phantom_manual_quality_override(self, uid: str) -> None:
@@ -1407,9 +1322,6 @@ class GridWindow:
                 if uid in self._manual_shapes:
                     mw, mh, _, _ = self._manual_shapes[uid]
                     effective_shape = mw * 10 + mh
-                elif uid in self._infer_shapes:
-                    iw, ih, _, _ = self._infer_shapes[uid]
-                    effective_shape = iw * 10 + ih
                 elif k.box_id is not None:
                     max_w, max_h = self._compute_max_size(uid, k)
                     if max_w < GRID_COLS or max_h < GRID_ROWS:
@@ -1466,10 +1378,6 @@ class GridWindow:
         elif uid in self._manual_shapes:
             mw, mh, _, _ = self._manual_shapes[uid]
             virtual_shape = mw * 10 + mh
-            candidates = [i for i in candidates if i.shape == virtual_shape]
-        elif uid in self._infer_shapes:
-            iw, ih, _, _ = self._infer_shapes[uid]
-            virtual_shape = iw * 10 + ih
             candidates = [i for i in candidates if i.shape == virtual_shape]
         elif k.box_id is not None:
             max_w, max_h = self._compute_max_size(uid, k)
@@ -2116,11 +2024,9 @@ class GridWindow:
     def _current_item_manual_rect(
         self, uid: str, k: ItemKnowledge
     ) -> Tuple[int, int, int, int]:
-        """当前显示用的 (w,h,dc,dr)；手动画框 → 推算框 → 否则按 BoxId 作 1×1 左上角。"""
+        """当前显示用的 (w,h,dc,dr)；手动画框 → 否则按 BoxId 作 1×1 左上角。"""
         if uid in self._manual_shapes:
             return self._manual_shapes[uid]
-        if uid in self._infer_shapes:
-            return self._infer_shapes[uid]
         bc = k.box_id % GRID_COLS
         br = k.box_id // GRID_COLS
         return (1, 1, bc, br)
@@ -2474,7 +2380,7 @@ class GridWindow:
                     grid_avg_infer_max_grid_count=self._grid_avg_infer_max_grid_count,
                 )
             self._last_raw_pricing = raw_pricing
-            occ_infer = self._occupied_cells_for_overlay_infer()
+            occ_export = self._occupied_cells_for_vacant_rect_infer()
             return {
                 "game_state": gs,
                 "skill_logs": list(self._skill_logs),
@@ -2482,7 +2388,7 @@ class GridWindow:
                 "map_id": int(self.state.map_id or 0),
                 "raw_pricing": raw_pricing,
                 "grid_overlay": self._grid_overlay_to_json(
-                    raw_pricing, occupied_cells=occ_infer
+                    raw_pricing, occupied_cells=occ_export
                 ),
             }
         finally:
@@ -2579,9 +2485,9 @@ class GridWindow:
         occupied_cells: Optional[set] = None,
     ) -> dict:
         if occupied_cells is None:
-            occ_for_infer = self._occupied_cells_for_overlay_infer()
+            occ_for_export = self._occupied_cells_for_vacant_rect_infer()
         else:
-            occ_for_infer = set(occupied_cells)
+            occ_for_export = set(occupied_cells)
         export = build_grid_overlay_export_dict(
             game_state=self.state,
             raw_pricing=raw_pricing,
@@ -2591,22 +2497,12 @@ class GridWindow:
             phantom_quality_user_locked=self._phantom_quality_user_locked,
             unknown_cell_quality_pref=self._unknown_cell_quality_pref,
             vacant_manual_suppress=self._vacant_manual_suppress,
-            occupied_cells=occ_for_infer,
+            occupied_cells=occ_for_export,
             max_box_id=max_anchor_box_id_from_overlay_ui(
                 self.state.items, self._phantom_items
             ),
-            infer_unknown_contour_shapes=self._infer_round4_auto_fill_active(),
             current_round=int(self.state.current_round or 1),
-            infer_suppress_uids=self._infer_suppress_uids,
         )
-        inf = export.get("infer_shapes") or {}
-        absorbed_raw = export.get(_grid_overlay.INFER_ABSORBED_PHANTOM_UIDS_KEY) or []
-        self._infer_absorbed_phantoms = {str(u) for u in absorbed_raw}
-        self._infer_shapes = {
-            str(uid): (int(v[0]), int(v[1]), int(v[2]), int(v[3]))
-            for uid, v in inf.items()
-            if isinstance(v, (list, tuple)) and len(v) >= 4
-        }
         occ_full = self._build_occupied()
         export[_grid_overlay.OCCUPIED_CELL_BIDS] = sorted(
             r * GRID_COLS + c for r, c in occ_full
@@ -2810,9 +2706,6 @@ class GridWindow:
         self._phantom_items.clear()
         self._phantom_draw_state = None
         self._manual_shapes.clear()
-        self._infer_shapes.clear()
-        self._infer_absorbed_phantoms.clear()
-        self._infer_suppress_uids.clear()
         self._auto_vacant_rect_phantom_suppress_uids.clear()
         self._phantom_quality_pref.clear()
         self._phantom_quality_user_locked.clear()
@@ -2872,7 +2765,6 @@ class GridWindow:
         self._sanitize_unknown_quality_prefs()
         self._sanitize_phantom_quality_prefs()
         self._validate_manual_confirmations()
-        self._sanitize_infer_suppress_uids()
         self._sanitize_auto_vacant_rect_phantom_suppress_uids()
 
         if perf:
@@ -2908,16 +2800,6 @@ class GridWindow:
                         f"draw_ms={draw_ms:.1f} emit_snapshot_ms={snap_ms:.1f}"
                     ),
                 )
-
-    def _sanitize_infer_suppress_uids(self) -> None:
-        """物品已消失或日志已锁定形状时，不再保留推算抑制。"""
-        drop = {
-            uid
-            for uid in self._infer_suppress_uids
-            if uid not in self.state.items
-            or self.state.items[uid].shape is not None
-        }
-        self._infer_suppress_uids -= drop
 
     def _sanitize_auto_vacant_rect_phantom_suppress_uids(self) -> None:
         self._auto_vacant_rect_phantom_suppress_uids = {
@@ -4034,13 +3916,13 @@ class GridWindow:
             self._perf_fraud_placed_overlay_calls = 0
         sync_ms = del_occ_ms = bg_ms = ez_ms = items_ms = header_ms = 0.0
 
-        # 手动画幽灵预览框时：占位与推断输入未变，不必每帧重算 raw_pricing + infer_shapes
+        # 手动画幽灵预览框时：占位与自动填充输入未变，不必每帧重算 raw_pricing + phantom_vac_*
         phantom_preview = self._phantom_draw_state is not None
         try:
             if perf:
                 _ts0 = time.perf_counter()
             if not phantom_preview:
-                self._sync_infer_shapes_from_analysis()
+                self._sync_round4_overlay_from_analysis()
                 self._refresh_pricing_and_phantom_ui(
                     raw_pricing=self._last_raw_pricing
                 )
@@ -4137,8 +4019,8 @@ class GridWindow:
                     continue
                 self._draw_item(uid, k)
 
-            # ── 3. 幽灵物品格子（手动画框；已被 infer 吸收的不绘制）────────────────
-            for phid, pk in self._phantom_items_for_occupancy().items():
+            # ── 3. 幽灵物品格子（手动画框）────────────────
+            for phid, pk in self._phantom_items.items():
                 if phid in self._manual_shapes:
                     self._draw_item(phid, pk)
             if perf:
@@ -4307,9 +4189,6 @@ class GridWindow:
         elif uid in self._manual_shapes:
             border_color = "#ffdd00"
             border_width = 2
-        elif uid in self._infer_shapes:
-            border_color = "#66b3ff"
-            border_width = 2
         else:
             border_color = "#ffffff"
             border_width = 1
@@ -4457,9 +4336,6 @@ class GridWindow:
         elif uid in self._manual_shapes:
             mw, mh, mdc, mdr = self._manual_shapes[uid]
             shape_text = f"{mw}x{mh}*"  # * 表示手动设置
-        elif uid in self._infer_shapes:
-            iw, ih, _, _ = self._infer_shapes[uid]
-            shape_text = f"{iw}x{ih}≈"  # ≈ 表示推算
         else:
             shape_text = "?x?"
 
@@ -4576,14 +4452,6 @@ class GridWindow:
             k = self.state.items[uid]
             if k.shape is None and uid in self._manual_shapes:
                 self._manual_shapes.pop(uid, None)
-                self._refresh()
-                return
-            if (
-                k.shape is None
-                and uid not in self._manual_shapes
-                and uid in self._infer_shapes
-            ):
-                self._infer_suppress_uids.add(str(uid))
                 self._refresh()
                 return
         if uid is not None:
@@ -5017,9 +4885,6 @@ class GridWindow:
             mw, mh, mdc, mdr = self._manual_shapes[uid]
             tag = "手动画框" if uid in self._phantom_items else "手动设置"
             hdr_parts.append(f"形状: {mw}x{mh}（{tag}，精确匹配）")
-        elif uid in self._infer_shapes:
-            iw, ih, _, _ = self._infer_shapes[uid]
-            hdr_parts.append(f"形状: {iw}x{ih}（推算，非日志锁定）")
         elif k.box_id is not None:
             max_w, max_h = self._compute_max_size(uid, k)
             if max_w < GRID_COLS or max_h < GRID_ROWS:
