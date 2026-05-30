@@ -36,7 +36,7 @@
   - 诈骗格规则**仅用于**上述自动空置区（计数与初始橘红），**不限制**右键手动剔除/恢复空置标记。由 ``grid_view.fraud_empty_cells_algorithm`` 指定：字符串 ``tiling_strict`` / ``none`` 等，或列表 ``["tiling", n]`` / 对象 ``{"tiling": n}`` 将铺板与 trim 写在一起。
   - 空置候选格：普通右键可手动剔除该格（不计空置、不铺橘红），再右键同一格可恢复。
   - 日志物品仍为「推算轮廓」（CSV 自动扩框、非手动画框）时：在该物品当前占格内右键可取消本次推算扩框（按锚格 1×1 显示），直至日志锁定形状或新对局。
-  - 第 4 回合起自动填充的 ``phantom_vac_*``：在占格上右键与手画幽灵相同可删除，本局内不再自动补回（新对局清空抑制表）。
+  - 第 4 回合起自动填充的 ``phantom_vac_*``：占格上 **Ctrl+左键** 直接改为金（Q5 默认），**Ctrl+右键** 直接改为红（Q6）；普通 **右键** 与手画幽灵相同可删除，本局内不再自动补回（新对局清空抑制表）。
 """
 
 import io
@@ -1094,7 +1094,7 @@ class GridWindow:
         )
         self._purge_auto_vacant_rect_phantoms()
         occ = self._occupied_cells_for_vacant_rect_infer()
-        fraud_cells = self._fraud_cells_for_vacant_rect_infer(occ)
+        # 诈骗格剔除仅用于橘红空置/定价计数；phantom_vac 推断用几何空置，在扩充之后由 UI 再套 fraud。
         infer_result = _grid_overlay.compute_vacant_rect_phantom_specs(
             game_state=self.state,
             manual_shapes=self._manual_shapes,
@@ -1107,7 +1107,6 @@ class GridWindow:
             ),
             raw_pricing=raw_pricing,
             current_round=int(self.state.current_round or 1),
-            fraud_cells=fraud_cells,
             enabled=True,
         )
         for uid, shape in infer_result.inferred_log_shapes.items():
@@ -1175,6 +1174,36 @@ class GridWindow:
         if pk is not None:
             clear_phantom_auto_resolution_on_item(pk)
         self._phantom_quality_user_locked.add(uid)
+
+    def _set_auto_vacant_phantom_quality_quick(self, uid: str, *, gold: bool) -> bool:
+        """自动填充 ``phantom_vac_*``：Ctrl+左键=金默认（Q5），Ctrl+右键=红（Q6）。非自动幽灵返回 False。"""
+        if uid not in self._phantom_items:
+            return False
+        if not _grid_overlay.is_auto_vacant_rect_phantom_uid(uid):
+            return False
+        k = self._phantom_items[uid]
+        prev = self._phantom_quality_pref.get(uid)
+        if gold:
+            self._phantom_quality_pref.pop(uid, None)
+        else:
+            self._phantom_quality_pref[uid] = 6
+        self._apply_phantom_manual_quality_override(uid)
+        if not self._candidate_items_for_grid(uid, k):
+            if prev is None and not gold:
+                self._phantom_quality_pref.pop(uid, None)
+            elif prev is not None:
+                self._phantom_quality_pref[uid] = prev
+            else:
+                self._phantom_quality_pref[uid] = PHANTOM_Q_INFER
+            self._apply_phantom_manual_quality_override(uid)
+            label = "金（Q5）" if gold else "红（Q6）"
+            messagebox.showwarning(
+                "自动填充品质",
+                f"当前约束下没有匹配{label}的物品，已恢复原品质筛选。",
+            )
+        self._validate_manual_confirmations()
+        self._refresh()
+        return True
 
     def _phantom_effective_quality(self, uid: str) -> Optional[int]:
         """幽灵用于筛选的品质：原推断为 None；显式 int；缺省为金 Q5（若扫描已排除 Q5 则不再强套金）。"""
@@ -3725,7 +3754,14 @@ class GridWindow:
             ("左键", "key"),
             ("拖；", "base"),
             ("右键", "key"),
-            ("幽灵删格（含第4回合起自动填充）；日志物品轮廓未锁时", "base"),
+            ("幽灵删格；自动填充格", "base"),
+            ("Ctrl", "mod"),
+            ("+左键", "base"),
+            ("金", "gold"),
+            ("、", "base"),
+            ("Ctrl", "mod"),
+            ("+右键", "base"),
+            ("红；日志物品轮廓未锁时", "base"),
             ("右键", "key"),
             ("命中可还原手动画框；", "base"),
             ("弹窗", "base"),
@@ -4411,14 +4447,19 @@ class GridWindow:
 
         uid = self._find_item_at(row, col)
 
-        # 3. 有物品 → 弹窗
+        # 3. 自动填充幽灵：Ctrl+左键直接改金（Q5）
+        if uid is not None and ctrl:
+            if self._set_auto_vacant_phantom_quality_quick(uid, gold=True):
+                return
+
+        # 4. 有物品 → 弹窗
         if uid is not None:
             k = self._phantom_items.get(uid) or self.state.items.get(uid)
             if k:
                 self._show_popup(uid, k, event.x_root, event.y_root)
             return
 
-        # 4. 空格左键拖幽灵：普通(推断) / Ctrl+左键=金（四角缩放已在上方处理）
+        # 5. 空格左键拖幽灵：普通(推断) / Ctrl+左键=金（四角缩放已在上方处理）
         self._phantom_draw_state = {
             "start_row": row,
             "start_col": col,
@@ -4437,6 +4478,7 @@ class GridWindow:
 
     def _on_right_click(self, event: tk.Event) -> None:
         """右键：幽灵物品（含自动填充 ``phantom_vac_*``）→ 删除且本局不再自动补回；
+        自动填充 ``phantom_vac_*`` 上 Ctrl+右键 → 直接改红（Q6）；
         日志手动画框 → 清除手动画框；日志推算扩框 → 取消推算扩框；
         空格无 Ctrl → 切换手动剔除空置；Ctrl+右键 + 空格 → 拖动画红幽灵（Q6）。"""
         cx = int(self.canvas.canvasx(event.x))
@@ -4448,6 +4490,8 @@ class GridWindow:
             return
         uid = self._find_item_at(row, col)
         if uid and uid in self._phantom_items:
+            if ctrl and self._set_auto_vacant_phantom_quality_quick(uid, gold=False):
+                return
             if _grid_overlay.is_auto_vacant_rect_phantom_uid(uid):
                 self._auto_vacant_rect_phantom_suppress_uids.add(str(uid))
             self._phantom_items.pop(uid, None)

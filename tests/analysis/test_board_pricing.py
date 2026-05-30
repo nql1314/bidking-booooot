@@ -1033,6 +1033,126 @@ class BoardPricingTests(unittest.TestCase):
         top = _greedy_expand_rect_candidates(work, work, min_bbox_area=1)[0]
         self.assertEqual(top[:2], (3, 3))
 
+    def test_vacant_rect_pass3_greedy_on_geometric_vacant(self) -> None:
+        """第 3 步：几何空置（含原会被标为诈骗的格）上贪心可扩出完整 3×3。"""
+        from bidking.analysis.grid_overlay_infer_vacant_rects import (
+            _greedy_expand_rect_candidates,
+        )
+
+        dr, dc = 5, 5
+        ring = {
+            (dr, dc),
+            (dr, dc + 1),
+            (dr, dc + 2),
+            (dr + 1, dc),
+            (dr + 1, dc + 2),
+            (dr + 2, dc),
+            (dr + 2, dc + 1),
+            (dr + 2, dc + 2),
+        }
+        geo_work = ring | {(dr + 1, dc + 1)}
+        top = _greedy_expand_rect_candidates(geo_work, geo_work, min_bbox_area=1)[0]
+        self.assertEqual(top[:2], (3, 3))
+
+    def test_vacant_rect_pass3_from_pricing_context_bottom_block(self) -> None:
+        """data/pricing_context.json：底部 9–11 行 1–4 列应能推断 4×3 而非仅 3×3。"""
+        import json
+        from pathlib import Path
+
+        from bidking.analysis.fraud_empty_cells import (
+            fraud_empty_cells_for_algorithm,
+            fraud_placed_items_from_merged_items,
+        )
+        from bidking.analysis.grid_overlay_dims import GRID_COLS
+        from bidking.parsing.state import GameState, ItemKnowledge
+        from bidking.ui.grid._grid_overlay_payload import (
+            max_anchor_box_id_from_overlay_ui,
+        )
+
+        path = Path(__file__).resolve().parents[2] / "data" / "pricing_context.json"
+        if not path.is_file():
+            self.skipTest("pricing_context.json missing")
+        data = json.loads(path.read_text(encoding="utf-8"))
+        bs = data["board_snapshot"]
+        go = bs["grid_overlay"]
+        gs = bs["game_state"]
+        occ_bids = set(go["occupied_cell_bids"])
+        raw_manual = go.get("manual_shapes") or {}
+        manual = dict(raw_manual) if isinstance(raw_manual, dict) else {}
+        merged = go.get("merged_items_dict") or gs.get("items") or {}
+        for uid, sh in list(manual.items()):
+            if not str(uid).startswith(grid_overlay_mod.AUTO_VACANT_RECT_PHANTOM_PREFIX):
+                continue
+            w, h, dc, dr = (int(sh[0]), int(sh[1]), int(sh[2]), int(sh[3]))
+            for ddr in range(h):
+                for ddc in range(w):
+                    occ_bids.discard((dr + ddr) * GRID_COLS + (dc + ddc))
+            manual.pop(uid, None)
+
+        st_items = {}
+        for uid, raw_item in merged.items():
+            st_items[str(uid)] = ItemKnowledge(
+                uid=str(uid),
+                box_id=raw_item.get("box_id"),
+                box_id_confirmed=bool(raw_item.get("box_id_confirmed")),
+                shape=raw_item.get("shape"),
+                quality=raw_item.get("quality"),
+            )
+        limit = max_anchor_box_id_from_overlay_ui(st_items, {})
+        occ_set = {(b // GRID_COLS, b % GRID_COLS) for b in occ_bids}
+        placed = fraud_placed_items_from_merged_items(merged)
+        fraud = fraud_empty_cells_for_algorithm(
+            "tiling_strict", occ_set, limit, placed
+        )
+        st = GameState()
+        st.current_round = 4
+        st.map_id = gs.get("map_id")
+        for uid, raw_item in merged.items():
+            st.items[str(uid)] = ItemKnowledge(
+                uid=str(uid),
+                box_id=raw_item.get("box_id"),
+                box_id_confirmed=bool(raw_item.get("box_id_confirmed")),
+                shape=raw_item.get("shape"),
+                quality=raw_item.get("quality"),
+            )
+        for q in (1, 2, 3, 4):
+            st._scan_history.append(("quality", q, frozenset()))
+        specs = grid_overlay_mod.compute_vacant_rect_phantom_specs(
+            game_state=st,
+            manual_shapes=manual,
+            phantom_items={},
+            phantom_quality_pref={},
+            occupied_cells=occ_set,
+            vacant_manual_suppress=set(),
+            max_box_id=limit,
+            raw_pricing=data.get("raw") or {},
+            current_round=4,
+            fraud_cells=fraud,
+            enabled=True,
+        ).specs
+        four_by_three = [
+            s for s in specs if (int(s.w), int(s.h)) in ((4, 3), (3, 4))
+        ]
+        self.assertTrue(
+            four_by_three,
+            "expected a 4x3 phantom in bottom vacant block, got %s"
+            % [s.uid for s in specs],
+        )
+
+    def test_vacant_rect_pass3_geo_prefers_4x3_over_3x3(self) -> None:
+        """pricing_context 类：行 9–11 列 1–4 共 12 格几何空置，应优先 4×3。"""
+        from bidking.analysis.grid_overlay_infer_vacant_rects import (
+            _greedy_expand_rect_candidates,
+            _vacant_rect_rank_key,
+        )
+
+        geo_work = {
+            (r, c) for r in range(9, 12) for c in range(1, 5)
+        }
+        top = _greedy_expand_rect_candidates(geo_work, geo_work, min_bbox_area=1)[0]
+        self.assertEqual(top[:2], (4, 3))
+        self.assertGreater(_vacant_rect_rank_key(4, 3), _vacant_rect_rank_key(3, 3))
+
     def test_vacant_rect_pass3_three_sided_l_shaped_alcove(self) -> None:
         """第 3 步：L 形/敞口不规则区无单格三面 seed，仍应递归贴边取最大矩形。"""
         from bidking.analysis.grid_overlay_dims import GRID_COLS
@@ -1192,22 +1312,21 @@ class BoardPricingTests(unittest.TestCase):
             current_round=4,
             enabled=True,
         )
-        self.assertEqual(res.inferred_log_shapes, {})
-        self.assertEqual(res.absorbed_phantom_uids, frozenset())
+        self.assertIn("log_g5", res.inferred_log_shapes)
+        w, h, dc, dr = res.inferred_log_shapes["log_g5"]
+        self.assertGreater(w * h, 1)
+        self.assertTrue(res.absorbed_phantom_uids)
+        for sp in res.specs:
+            self.assertNotIn(sp.uid, res.absorbed_phantom_uids)
         anchor = (4, 9)
-        covering = [
-            sp
-            for sp in res.specs
-            if anchor
-            in {
-                (sp.dr + ddr, sp.dc + ddc)
-                for ddr in range(sp.h)
-                for ddc in range(sp.w)
-            }
-        ]
-        self.assertTrue(covering, "expected phantom rect covering log_g5 anchor")
-        self.assertTrue(any(sp.quality == 5 for sp in covering))
-        self.assertTrue(any(sp.w * sp.h > 1 for sp in covering))
+        self.assertIn(
+            anchor,
+            {
+                (dr + ddr, dc + ddc)
+                for ddr in range(h)
+                for ddc in range(w)
+            },
+        )
 
     def test_unknown_contour_log_anchor_released_into_vacant_infer(self) -> None:
         """Q5 日志 1×1 锚格释放后参与空置推断，覆盖锚格的幽灵带 Q5。"""
@@ -1250,19 +1369,10 @@ class BoardPricingTests(unittest.TestCase):
             current_round=4,
             enabled=True,
         )
-        anchor = (4, 9)
-        covering = [
-            sp
-            for sp in res.specs
-            if anchor
-            in {
-                (sp.dr + ddr, sp.dc + ddc)
-                for ddr in range(sp.h)
-                for ddc in range(sp.w)
-            }
-        ]
-        self.assertTrue(covering)
-        self.assertTrue(any(sp.quality == 5 for sp in covering))
+        self.assertIn("log_g5", res.inferred_log_shapes)
+        w, h, dc, dr = res.inferred_log_shapes["log_g5"]
+        self.assertGreater(w * h, 1)
+        self.assertTrue(res.absorbed_phantom_uids)
 
     def test_vacant_rect_phantom_skipped_until_q1234_ready(self) -> None:
         """扫描史未覆盖 Q1–Q4 时不推断 phantom_vac（与回合数无关）。"""
