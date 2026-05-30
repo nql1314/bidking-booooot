@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import sys
 import tempfile
 import unittest
@@ -1255,6 +1256,79 @@ class BoardPricingTests(unittest.TestCase):
         sp = specs[0]
         self.assertEqual((sp.w, sp.h, sp.dc, sp.dr), (3, 1, 3, 1))
 
+    def test_vacant_rect_pass3_rank_prefers_squarer_rect(self) -> None:
+        """第 3 步 tie-break：方度优先，3×3 > 2×5/5×2，同 min 时面积更大者优先。"""
+        from bidking.analysis.grid_overlay_infer_vacant_rects import (
+            _greedy_expand_rect_candidates,
+            _vacant_rect_rank_key,
+        )
+
+        rk = _vacant_rect_rank_key
+        self.assertGreater(rk(3, 3), rk(2, 5))
+        self.assertGreater(rk(3, 3), rk(5, 2))
+        self.assertGreater(rk(2, 2), rk(1, 4))
+        self.assertGreater(rk(4, 3), rk(3, 3))
+
+        work = {
+            (11, 0), (11, 1), (11, 2), (11, 3), (11, 4),
+            (12, 0), (12, 1), (12, 2), (12, 3), (12, 4),
+            (13, 0), (13, 1), (13, 2),
+        }
+        top = _greedy_expand_rect_candidates(work, work, min_bbox_area=1)[0]
+        self.assertEqual(top[:2], (3, 3))
+
+    def test_vacant_rect_pass3_three_sided_l_shaped_alcove(self) -> None:
+        """第 3 步：L 形/敞口不规则区无单格三面 seed，仍应递归贴边取最大矩形。"""
+        from bidking.analysis.grid_overlay_dims import GRID_COLS
+        from bidking.parsing.state import GameState, ItemKnowledge
+
+        st = GameState()
+        st.current_round = 4
+        st.map_id = 2101
+        for q in (1, 2, 3, 4):
+            st._scan_history.append(("quality", q, frozenset({"log_q%d" % q})))
+        anchors = [(0, 0), (5, 0), (9, 0), (9, 9)]
+        for q, (r, c) in zip((1, 2, 3, 4), anchors):
+            st.items[f"log_q{q}"] = ItemKnowledge(
+                uid=f"log_q{q}",
+                box_id=r * GRID_COLS + c,
+                box_id_confirmed=True,
+                shape=11,
+                quality=q,
+            )
+        # 右上角 L 形空置（与 board_snapshot 同类：无单格三面 seed）
+        alcove = {
+            (0, 6), (0, 7), (0, 8), (0, 9),
+            (1, 6), (1, 7), (1, 8), (1, 9),
+            (2, 4), (2, 5), (2, 6), (2, 7), (2, 8), (2, 9),
+            (3, 4), (3, 5), (3, 8), (3, 9),
+        }
+        max_box_id = 5 * GRID_COLS + 9
+        occ = {(r, c) for r, c in anchors}
+        for bid in range(max_box_id + 1):
+            r, c = bid // GRID_COLS, bid % GRID_COLS
+            if (r, c) not in alcove:
+                occ.add((r, c))
+        specs = grid_overlay_mod.compute_vacant_rect_phantom_specs(
+            game_state=st,
+            manual_shapes={},
+            phantom_items={},
+            phantom_quality_pref={},
+            occupied_cells=occ,
+            vacant_manual_suppress=set(),
+            max_box_id=max_box_id,
+            raw_pricing={"event_stats": {"q5_count": 99, "q6_count": 99}},
+            current_round=4,
+            fraud_cells=set(),
+            enabled=True,
+        )
+        covered: set[tuple[int, int]] = set()
+        for sp in specs:
+            for dr in range(sp.dr, sp.dr + sp.h):
+                for dc in range(sp.dc, sp.dc + sp.w):
+                    covered.add((dr, dc))
+        self.assertEqual(alcove, covered)
+
     def test_vacant_rect_pass1_enclosed_1x1_before_larger_fill(self) -> None:
         """三面围住的 1×1 临时占格后，外侧仍可推断更大矩形，且不输出该 1×1。"""
         from bidking.parsing.state import GameState, ItemKnowledge
@@ -1749,6 +1823,50 @@ class BoardPricingTests(unittest.TestCase):
         # 少乘 2 格 u_early、多 2*q4 单价：差 = -2*1000 + 2*10 = -1980
         self.assertEqual(p1["points"], p0["points"] - 1980)
 
+    def test_tier_grid_min_skips_q4_when_q4_grid_avg_known_but_total_unknown(self) -> None:
+        """紫均格已知、紫总格未知时，``q4_grid_min`` 不计入 tier_extra。"""
+        gs = {
+            "uid": "u1",
+            "map_id": 0,
+            "current_round": 5,
+            "players": {},
+            "items": {
+                "a": {
+                    "uid": "a",
+                    "box_id": 3,
+                    "box_id_confirmed": True,
+                    "shape": 11,
+                    "quality": 1,
+                    "categories": [],
+                    "item_cid": None,
+                    "price": None,
+                    "manual_confirm_item_id": None,
+                    "excluded_categories": [],
+                    "excluded_qualities": [],
+                }
+            },
+            "displayed_event_uids": [],
+            "scan_history": [],
+        }
+        raw_base = {
+            "csv_quality_groups_avg_per_cell": {
+                "q4": 10.0,
+                "q5": 1.0,
+                "q5+q6": 1.0,
+                "q6": 1.0,
+                "all": 1000.0,
+            },
+            "event_stats": {},
+        }
+        raw_skip = {
+            **raw_base,
+            "event_stats": {"q4_grid_min": 2, "q4_grid_avg": 2.5},
+        }
+        snap = {"game_state": gs, "skill_logs": [], "map_id": 0, "current_round": 5}
+        p0 = bp.build_snapshot_pricing_dict({**snap, "raw_pricing": raw_base}, snapshot_path_hint=None)
+        p_skip = bp.build_snapshot_pricing_dict({**snap, "raw_pricing": raw_skip}, snapshot_path_hint=None)
+        self.assertEqual(p_skip["points"], p0["points"])
+
     def test_early_vacant_unit_excludes_q4_when_q4_grid_count_known(self) -> None:
         """事件给出 ``q4_grid_count`` 且扫描可能仍含紫时，早单价改查不含 q4 的 CSV 组合键。"""
         gs = {
@@ -1935,7 +2053,7 @@ class BoardPricingTests(unittest.TestCase):
         self.assertAlmostEqual(float(p.get("tier_extra_value") or 0.0), 0.0)
 
     def test_phantom_infer_tier_credit_splits_q5_q6_grid_min(self) -> None:
-        """推断笔 2×2：金权重未过阈值时不分摊金格；余 footprint 按红阈值定档。"""
+        """已知 ``q5_grid_min`` 且几何空格不足：2×2 推断笔全部记金，``q6_grid_min`` 仍补 tier。"""
         snap = self._phantom_only_snapshot(quality_pref="_phantom_q_infer")
         raw = {
             "csv_quality_groups_avg_per_cell": {
@@ -1957,8 +2075,12 @@ class BoardPricingTests(unittest.TestCase):
         self.assertEqual(int(p.get("tier_extra_cells") or 0), 2)
         puq = p.get("phantom_unknown_quality")
         self.assertIsInstance(puq, dict)
-        self.assertAlmostEqual(float(puq.get("tier_credit_q5") or 0), 0.0)
-        self.assertAlmostEqual(float(puq.get("tier_credit_q6") or 0), 4.0)
+        self.assertAlmostEqual(float(puq.get("tier_credit_q5") or 0), 4.0)
+        self.assertAlmostEqual(float(puq.get("tier_credit_q6") or 0), 0.0)
+        ph_row = (snap.get("grid_overlay", {}).get("phantom_items") or {}).get(
+            "phantom_9"
+        ) or {}
+        self.assertEqual(int(ph_row.get("quality") or 0), 5)
 
     def test_phantom_infer_excluded_gr_no_tier_credit(self) -> None:
         """金红皆排除：无 phantom tier 分摊，``q6_grid_min`` 仍全额补格。"""
@@ -2234,6 +2356,128 @@ class BoardPricingTests(unittest.TestCase):
         self.assertEqual(int(ph["ph_a"].get("quality") or 0), 6)
         self.assertAlmostEqual(float(detail.get("gr_remaining_budget_final_q5") or 0), 0.0)
 
+    def test_phantom_all_gold_when_vacant_less_than_q5_grid_min(self) -> None:
+        """已知 ``q5_grid_min`` 且几何空格 < 金格预算：候选幽灵 footprint 全部记金。"""
+        from bidking.analysis.strategy import common as strat_common
+
+        snap = self._phantom_multi_infer_snapshot(vacant_geometric=5)
+        raw = {
+            "csv_quality_groups_avg_per_cell": {
+                "q5": 100.0,
+                "q6": 200.0,
+                "q5+q6": 150.0,
+                "all": 1000.0,
+            },
+            "event_stats": {
+                "q1_grid_count": 1,
+                "q2_grid_count": 1,
+                "q3_grid_count": 1,
+                "q4_grid_count": 1,
+                "q5_grid_min": 10,
+            },
+        }
+        board = {**snap, "raw_pricing": raw}
+        _, detail = strat_common.phantom_unknown_tier_credit_q456(
+            board,
+            event_stats=raw["event_stats"],
+            confirmed_q5=0,
+            confirmed_q6=0,
+        )
+        overlay = board.get("grid_overlay") or {}
+        ph = overlay.get("phantom_items") or {}
+        self.assertEqual(int(ph["ph_s1"].get("quality") or 0), 5)
+        self.assertEqual(int(ph["ph_s2"].get("quality") or 0), 5)
+        self.assertEqual(int(ph["ph_big"].get("quality") or 0), 5)
+        global_steps = detail.get("gold_allocation_steps") or []
+        self.assertTrue(
+            any(
+                step.get("reason") == "vacant_insufficient_all_phantom_gold"
+                for step in global_steps
+            )
+        )
+
+    def test_phantom_greedy_gold_when_q5_grid_min_no_exact_match(self) -> None:
+        """已知 ``q5_grid_min`` 且空格充足：无精确组合时按金权重贪心略超，余格记红（有 count）。"""
+        from bidking.analysis.strategy import common as strat_common
+
+        excl = [1, 2, 3, 4]
+        pref = "_phantom_q_infer"
+        snap = {
+            "game_state": {"items": {}, "map_id": 0, "current_round": 5},
+            "skill_logs": [],
+            "map_id": 0,
+            "current_round": 5,
+            "grid_overlay": {
+                "vacant": {"geometric": 0, "source": "test"},
+                "phantom_items": {
+                    "ph_big": {
+                        "uid": "ph_big",
+                        "box_id": 0,
+                        "box_id_confirmed": True,
+                        "shape": 22,
+                        "quality": None,
+                        "categories": [7],
+                        "item_cid": None,
+                        "price": None,
+                        "manual_confirm_item_id": None,
+                        "excluded_categories": [],
+                        "excluded_qualities": excl,
+                    },
+                    "ph_s1": {
+                        "uid": "ph_s1",
+                        "box_id": 5,
+                        "box_id_confirmed": True,
+                        "shape": 11,
+                        "quality": None,
+                        "categories": [7],
+                        "item_cid": None,
+                        "price": None,
+                        "manual_confirm_item_id": None,
+                        "excluded_categories": [],
+                        "excluded_qualities": excl,
+                    },
+                },
+                "manual_shapes": {
+                    "ph_big": [2, 2, 0, 0],
+                    "ph_s1": [1, 1, 5, 0],
+                },
+                "phantom_quality_pref": {
+                    "ph_big": pref,
+                    "ph_s1": pref,
+                },
+            },
+        }
+        raw = {
+            "csv_quality_groups_avg_per_cell": {
+                "q5": 100.0,
+                "q6": 200.0,
+                "q5+q6": 150.0,
+                "all": 1000.0,
+            },
+            "event_stats": {
+                "q1_grid_count": 1,
+                "q2_grid_count": 1,
+                "q3_grid_count": 1,
+                "q4_grid_count": 1,
+                "q5_grid_min": 3,
+                "q5_grid_count": 3,
+            },
+        }
+        board = {**snap, "raw_pricing": raw}
+        _, detail = strat_common.phantom_unknown_tier_credit_q456(
+            board,
+            event_stats=raw["event_stats"],
+            confirmed_q5=0,
+            confirmed_q6=0,
+        )
+        self.assertTrue(detail.get("q5_grid_min_known"))
+        overlay = board.get("grid_overlay") or {}
+        ph = overlay.get("phantom_items") or {}
+        # vacant=0 < rem5=3 → 全部记金
+        self.assertEqual(int(ph["ph_s1"].get("quality") or 0), 5)
+        self.assertEqual(int(ph["ph_big"].get("quality") or 0), 5)
+        self.assertAlmostEqual(float(detail.get("gr_remaining_budget_final_q5") or 0), 0.0)
+
     def test_phantom_rebalance_red_to_gold_when_rem5_exceeds_vacant(self) -> None:
         """``q5_grid_count`` 已知时：无精确金格匹配则空格吸收金预算，幽灵余格记红。"""
         from bidking.analysis.strategy import common as strat_common
@@ -2491,8 +2735,8 @@ class BoardPricingTests(unittest.TestCase):
         merged = strat_common._grid_overlay.merged_items_dict(board2)
         self.assertEqual(int((merged.get("phantom_9") or {}).get("quality") or 0), 5)
 
-    def test_phantom_alloc_synced_row_reenters_allocation(self) -> None:
-        """仅分摊写回、用户未手改锁定时，下一轮仍可参与自动分摊。"""
+    def test_phantom_alloc_synced_row_skips_repeat_allocation(self) -> None:
+        """分摊写回且 ``quality`` 与 ``phantom_quality_pref`` 对齐后，同快照重算不再重复分摊。"""
         from bidking.analysis.strategy import common as strat_common
 
         snap = self._phantom_only_snapshot(quality_pref="_phantom_q_infer")
@@ -2511,11 +2755,52 @@ class BoardPricingTests(unittest.TestCase):
         }
         board = {**snap, "raw_pricing": raw}
         merged = strat_common._grid_overlay.merged_items_dict(board)
-        self.assertFalse(
+        self.assertTrue(
             strat_common._phantom_row_manually_confirmed(
                 board, "phantom_9", merged["phantom_9"]
             )
         )
+        _, detail = strat_common.phantom_unknown_tier_credit_q456(
+            board,
+            event_stats=raw["event_stats"],
+        )
+        self.assertEqual(detail.get("items") or [], [])
+
+    def test_phantom_item_confirm_syncs_pref_for_idempotent_repricing(self) -> None:
+        """分摊锁定物品后 ``phantom_quality_pref`` 与品质对齐，重算 ``pricing`` 与首次一致。"""
+        snap = self._phantom_only_snapshot(quality_pref="_phantom_q_infer")
+        overlay = snap["grid_overlay"]
+        overlay["phantom_items"]["phantom_9"]["shape"] = 52
+        overlay["manual_shapes"] = {"phantom_9": [5, 2, 0, 0]}
+        raw = {
+            "csv_quality_groups_avg_per_cell": {
+                "q5": 100.0,
+                "q6": 200.0,
+                "q5+q6": 150.0,
+                "all": 1000.0,
+            },
+            "event_stats": {
+                "q1_grid_count": 1,
+                "q2_grid_count": 1,
+                "q3_grid_count": 1,
+                "q4_grid_count": 1,
+                "q5_grid_min": 10,
+                "q5_grid_count": 0,
+            },
+        }
+        board = {**snap, "raw_pricing": raw}
+        p1 = bp.build_snapshot_pricing_dict(board, snapshot_path_hint=None)
+        ph_row = (board["grid_overlay"]["phantom_items"])["phantom_9"]
+        self.assertIsNotNone(ph_row.get("manual_confirm_item_id"))
+        self.assertEqual(
+            board["grid_overlay"]["phantom_quality_pref"]["phantom_9"],
+            int(ph_row["quality"]),
+        )
+        board2 = json.loads(json.dumps(board))
+        p2 = bp.build_snapshot_pricing_dict(board2, snapshot_path_hint=None)
+        self.assertEqual(p1.get("points"), p2.get("points"))
+        self.assertEqual(p1.get("total"), p2.get("total"))
+        self.assertEqual(p1.get("tier_extra_cells"), p2.get("tier_extra_cells"))
 
     def test_phantom_user_infer_pref_skips_auto_alloc(self) -> None:
         """用户手选「原推断」锁定后：弹窗仍看多品质权重，但不参与自动分摊。"""

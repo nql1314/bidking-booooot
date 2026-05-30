@@ -414,9 +414,9 @@ def _pass_full_rect_fill(ctx: _VacantRectInferCtx) -> None:
 
 
 def _vacant_rect_rank_key(w: int, h: int) -> Tuple[int, int]:
-    """面积优先；同面积时更方者优先（2×2 > 1×4，2×3/3×2 > 1×6）。"""
+    """``min(w,h)`` 更大者优先；同 min 时面积更大者优先（3×3 > 2×5/5×2，2×2 > 1×4）。"""
     wi, hi = int(w), int(h)
-    return (wi * hi, min(wi, hi))
+    return (min(wi, hi), wi * hi)
 
 
 def _expand_max_rect_h_first(
@@ -487,7 +487,7 @@ def _greedy_expand_rect_candidates(
     *,
     min_bbox_area: int,
 ) -> List[Tuple[int, int, int, int]]:
-    """遍历 ``local`` 每格，收集 H/V 双向贪心扩展矩形，按面积与方度降序。"""
+    """遍历 ``local`` 每格，收集 H/V 双向贪心扩展矩形，按方度与面积降序。"""
     if not local:
         return []
 
@@ -716,7 +716,7 @@ def compute_vacant_rect_phantom_specs(
 
     1. 三面/四面围住的 1×1 → 临时幽灵占格（不立即输出）；
     2. 连通区近似实心矩形（原逻辑）；
-    3. 不规则剩余区：逐点 H/V 双向贪心扩展 → 取最大矩形（2×2>1×4 等同面积 tie-break），移除后重复；
+    3. 不规则剩余区：逐点 H/V 双向贪心扩展 → 取最大矩形（3×3>2×5/5×2 等方度 tie-break），移除后重复；
     4. 第 1 步临时占格、仍未被 2/3 步吸收的 1×1 → 输出对应幽灵；
     5. 所有 1×1 幽灵与相邻幽灵并集为实心矩形时合并，合并结果继续重复直至稳定。
 

@@ -2566,7 +2566,6 @@ class GridWindow:
         sig = self._pricing_emit_signature(pricing)
         if sig == self._last_emitted_pricing_sig:
             return
-        self._last_emitted_pricing_sig = sig
         with self._lock:
             self._emit_board_snapshot_unlocked(raw_pricing)
 
