@@ -390,9 +390,6 @@ def _phantom_row_manually_confirmed(
             pval = pref.get(uid)
     explicit_pref = phantom_quality_pref_explicit_quality(pval)
 
-    if _phantom_row_alloc_synced(board_snapshot, uid_s, ph_row, explicit_pref):
-        return False
-
     mc = it.get("manual_confirm_item_id")
     if mc is not None:
         try:
@@ -407,6 +404,14 @@ def _phantom_row_manually_confirmed(
                 return True
         except (TypeError, ValueError):
             pass
+
+    if _phantom_row_alloc_synced(board_snapshot, uid_s, ph_row, explicit_pref):
+        tier_split = ph_row.get("phantom_tier_credit_by_quality")
+        if isinstance(tier_split, dict) and tier_split:
+            return False
+        if isinstance(pval, str) and pval.strip() == PHANTOM_Q_INFER:
+            return False
+        return True
 
     if isinstance(pval, str) and pval.strip() == PHANTOM_Q_INFER:
         return False
@@ -664,6 +669,56 @@ def _phantom_find_exact_gold_subset(
     return chosen
 
 
+def _phantom_greedy_gold_subset(
+    candidates: List[Dict[str, Any]],
+    target: float,
+) -> List[Dict[str, Any]]:
+    """已知 ``q5_grid_min`` 时：按金权重贪心选取 footprint 之和尽量逼近 ``target`` 的子集。
+
+    先尝试与 ``candidates`` 同序的精确匹配；若无解则按排序从高金权重累加至总和
+    ``>= target``（可略超）。
+    """
+    target_f = float(target)
+    if target_f <= 1e-9 or not candidates:
+        return []
+
+    exact = _phantom_find_exact_gold_subset(candidates, target_f)
+    if exact:
+        return exact
+
+    chosen: List[Dict[str, Any]] = []
+    total = 0.0
+    for rec in candidates:
+        if total >= target_f - 1e-9:
+            break
+        chosen.append(rec)
+        total += float(rec["fp"])
+    return chosen
+
+
+def _phantom_vacant_geometric_cells(board_snapshot: Dict[str, Any]) -> int:
+    vb = _grid_overlay.vacant_block_from_board_snapshot(board_snapshot)
+    return int(vb.get("geometric") or 0)
+
+
+def _phantom_assign_full_gold_to_pool(
+    gold_pool: List[Dict[str, Any]],
+    *,
+    rnd: Any,
+    reason: str,
+) -> float:
+    """将 ``gold_pool`` 中每条幽灵剩余 footprint 全部记入金格（不受 ``rem5`` 预算截断）。"""
+    total = 0.0
+    for rec in gold_pool:
+        remaining = _phantom_record_remaining_cells(rec)
+        if remaining <= 1e-9:
+            continue
+        rec["a5"] = float(rec.get("a5") or 0.0) + remaining
+        total += remaining
+        _phantom_record_append_step(rec, rnd, 5, remaining, reason=reason)
+    return total
+
+
 def _phantom_record_assign_gold(
     rec: Dict[str, Any],
     amount: float,
@@ -783,6 +838,7 @@ def _phantom_global_gold_allocate(
     *,
     board_snapshot: Dict[str, Any],
     rem5: float,
+    q5_min_known: bool,
     q5_count_known: bool,
     post_gold_thr_q5: float,
     post_gold_thr_q6: float,
@@ -791,9 +847,9 @@ def _phantom_global_gold_allocate(
     """
     艾莎第四回合幽灵全局分摊：
 
-    1. 按金权重从高到低，用回退算法选取 footprint 之和正好等于 ``rem5`` 的矩形；
-    2. 仍有金预算时从几何 ``vacant`` 扣减；
-    3. 金满后按 ``q5_grid_count`` / ``q5_grid_min`` 规则解析余格。
+    已知 ``q5_grid_min`` 且几何空格 < 金格预算：候选幽灵 footprint 全部记金；
+    否则按金权重贪心（先精确、再略超）或回退精确匹配。仍有金预算时从 ``vacant`` 扣减。
+    未分到金的幽灵：已知 ``q5_grid_count`` 则记红，否则阈值定档或 Q5/Q6 分拆。
     """
     global_steps: List[Dict[str, Any]] = []
     if not records:
@@ -816,8 +872,53 @@ def _phantom_global_gold_allocate(
         )
         return out
 
-    # ── 第一轮：按金权重回退精确匹配剩余金格 ──
     gold_pool = _eligible_for_gold()
+
+    # ── 空格不足以吸收金格预算：候选幽灵全部记金 ──
+    if (
+        q5_min_known
+        and gold_pool
+        and rem5_ref[0] > 1e-9
+        and rem5_ref[0] != float("inf")
+    ):
+        vacant = _phantom_vacant_geometric_cells(board_snapshot)
+        if vacant < rem5_ref[0] - 1e-9:
+            global_steps.append(
+                {
+                    "round": 0,
+                    "quality": 5,
+                    "reason": "vacant_insufficient_all_phantom_gold",
+                    "vacant": vacant,
+                    "rem5_budget": round(rem5_ref[0], 6),
+                }
+            )
+            phantom_gold = _phantom_assign_full_gold_to_pool(
+                gold_pool,
+                rnd=0,
+                reason="vacant_insufficient_all_gold",
+            )
+            rem5_ref[0] = max(0.0, rem5_ref[0] - phantom_gold)
+            if rem5_ref[0] > 1e-9 and vacant > 0:
+                deduct = min(float(vacant), rem5_ref[0])
+                rem5_ref[0] -= deduct
+                global_steps.append(
+                    {
+                        "round": 2,
+                        "quality": 5,
+                        "cells": round(deduct, 6),
+                        "reason": "vacant_absorb",
+                    }
+                )
+            _phantom_resolve_post_gold(
+                records,
+                q5_count_known=q5_count_known,
+                post_gold_thr_q5=post_gold_thr_q5,
+                post_gold_thr_q6=post_gold_thr_q6,
+                item_thr=item_thr,
+            )
+            return rem5_ref[0], global_steps
+
+    # ── 第一轮：按金权重回退精确匹配剩余金格 ──
     if gold_pool and rem5_ref[0] > 1e-9:
         if rem5_ref[0] == float("inf"):
             for rec in gold_pool:
@@ -829,7 +930,11 @@ def _phantom_global_gold_allocate(
                     rem5_ref,
                 )
         else:
-            for rec in _phantom_find_exact_gold_subset(gold_pool, rem5_ref[0]):
+            if q5_min_known:
+                gold_subset = _phantom_greedy_gold_subset(gold_pool, rem5_ref[0])
+            else:
+                gold_subset = _phantom_find_exact_gold_subset(gold_pool, rem5_ref[0])
+            for rec in gold_subset:
                 _phantom_record_assign_gold(
                     rec,
                     _phantom_record_remaining_cells(rec),
@@ -840,8 +945,7 @@ def _phantom_global_gold_allocate(
 
     # ── 第二轮：空格吸收金预算 ──
     if rem5_ref[0] > 1e-9:
-        vb = _grid_overlay.vacant_block_from_board_snapshot(board_snapshot)
-        vacant = int(vb.get("geometric") or 0)
+        vacant = _phantom_vacant_geometric_cells(board_snapshot)
         if vacant > 0:
             deduct = min(float(vacant), rem5_ref[0])
             rem5_ref[0] -= deduct
@@ -875,9 +979,9 @@ def phantom_unknown_tier_credit_q456(
     品质未知幽灵（``quality is None``）在 ``C_gr={5,6}\\excluded`` 上全局分摊占位，
     同步写回 ``grid_overlay`` 幽灵行（品质 / 手动确认物品 / 分拆 tier 字段）。
 
-    艾莎第四回合金格优先：按金权重回退精确匹配 → 空格吸收；
-    金满后若已知 ``q5_grid_count`` 则余格记红，否则按阈值定档或保留 Q5/Q6 候选分拆。
-    手动画板已确认品质或物品的幽灵格不参与分摊。
+    已知 ``q5_grid_min`` 时：几何空格不足则候选幽灵全部记金；否则按金权重贪心匹配金格预算。
+    未入选者及金满后余格：已知 ``q5_grid_count`` 记红，否则阈值定档或 Q5/Q6 分拆。
+    无 ``q5_grid_min`` 时仍用回退精确匹配 + 空格吸收。手动画板已确认品质或物品不参与分摊。
 
     返回 ``({5: cells, 6: cells}, detail)``；detail 写入 ``pricing.phantom_unknown_quality``。
     """
@@ -895,6 +999,7 @@ def phantom_unknown_tier_credit_q456(
         event_stats,
         confirmed_q5=int(confirmed_q5),
     )
+    q5_min_known = event_stat_grid_min_optional(event_stats, "q5_grid_min") is not None
     _, rem6_ref = _phantom_gr_remaining_budget(
         event_stats,
         confirmed_q5=int(confirmed_q5),
@@ -963,6 +1068,7 @@ def phantom_unknown_tier_credit_q456(
         pending_records,
         board_snapshot=board_snapshot,
         rem5=rem5_init,
+        q5_min_known=q5_min_known,
         q5_count_known=q5_count_known,
         post_gold_thr_q5=post_gold_thr_q5,
         post_gold_thr_q6=post_gold_thr_q6,
@@ -1043,6 +1149,23 @@ def phantom_unknown_tier_credit_q456(
                 ):
                     if key in src:
                         dst[key] = src[key]
+                q_sync = dst.get("quality")
+                mc_sync = dst.get("manual_confirm_item_id")
+                if (
+                    mc_sync is not None
+                    and q_sync is not None
+                    and uid_s not in _phantom_quality_user_locked_uids(board_snapshot)
+                ):
+                    try:
+                        q_i = int(q_sync)
+                    except (TypeError, ValueError):
+                        q_i = None
+                    if q_i is not None and 1 <= q_i <= 6:
+                        pref = overlay.get("phantom_quality_pref")
+                        if not isinstance(pref, dict):
+                            pref = {}
+                            overlay["phantom_quality_pref"] = pref
+                        pref[uid_s] = q_i
         merged_cache = overlay.get("merged_items_dict")
         if isinstance(merged_cache, dict):
             for uid_s, row in merged_after.items():
@@ -1065,6 +1188,7 @@ def phantom_unknown_tier_credit_q456(
             "post_gold_quality_threshold_q5": post_gold_thr_q5,
             "post_gold_quality_threshold_q6": post_gold_thr_q6,
         },
+        "q5_grid_min_known": q5_min_known,
         "q5_grid_count_known": q5_count_known,
         "gr_remaining_budget_initial": {
             "q5": round(rem5_init, 6),

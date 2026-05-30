@@ -3,7 +3,7 @@
     "vacant_red_floor_ceiling_pick_mode": "aggressive",
     "enable_opponent_bid_adjustment": true,
     "enable_vacant_red_floor_ceiling_pick": true,
-    "enable_big_gold_adjustment": true,
+    "enable_big_gold_adjustment": false,
     "fallback_bid_price": 155555,
     "enable_late_round_low_bid_surrender": true,
     "late_round_low_bid_surrender_after_round": 4,
@@ -19,6 +19,10 @@
     "map_quality_unit_per_cell": {
       "q56": 22000.0,
       "q456": 10000.0
+    },
+    "opponent_bid_blend_weights": {
+      "bid": 0.0,
+      "opponent": 0.0
     }
   },
   "automation": {

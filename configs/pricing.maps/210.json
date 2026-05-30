@@ -24,7 +24,7 @@
   "automation": {
     "express_station_round1_emoji": {
       "enabled": true,
-      "emoji": "生气",
+      "emoji": "赞赏",
       "seat_1_price": 520,
       "seat_2_price": 144,
       "round2_plus_high_random_max": 888,

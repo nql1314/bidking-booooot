@@ -105,7 +105,19 @@ def sync_phantom_items_from_overlay_after_pricing(
             isinstance(pref_v, str) and pref_v.strip() == PHANTOM_Q_INFER
         )
         q_new: Union[int, None] = _int_or_none(row.get("quality"))
-        if explicit_pref is not None:
+        if (
+            mc is not None
+            and q_new is not None
+            and 1 <= q_new <= 6
+            and uid_s not in (overlay.get("phantom_quality_user_locked") or [])
+        ):
+            if pk.quality != q_new:
+                pk.quality = q_new
+                uid_changed = True
+            if phantom_quality_pref.get(uid_s) != q_new:
+                phantom_quality_pref[uid_s] = q_new
+                uid_changed = True
+        elif explicit_pref is not None:
             if pk.quality != explicit_pref:
                 pk.quality = explicit_pref
                 uid_changed = True
