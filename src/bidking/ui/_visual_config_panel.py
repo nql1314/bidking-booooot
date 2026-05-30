@@ -20,7 +20,13 @@ from ..config.paths import (
 )
 from ..config.runtime import apply_board_snapshot_env_overrides
 from ..analysis.map_avg_csv import load_prefix3_to_min_map_id
-from ..analysis.map_quality_unit_config import CONFIG_KEYS, load_map_quality_unit_price_refs
+from ..analysis.map_quality_unit_config import (
+    CONFIG_KEYS,
+    MAP_QUALITY_UNIT_MAX_AVG_MULTIPLIER,
+    load_map_quality_unit_price_refs,
+    map_quality_unit_per_cell_ceiling_from_refs,
+    validate_map_quality_unit_per_cell_override,
+)
 from ..config.visual_schema import (
     coerce_field_value,
     field_is_display_only,
@@ -38,6 +44,7 @@ _MAP_QUALITY_UNIT_LABELS: dict[str, str] = {
     "q6": "红 (Q6) 格单价",
     "q56": "金+红 (Q56) 格单价",
     "q456": "紫+金+红 (Q456) 格单价",
+    "q3456": "蓝+紫+金+红 (Q3456) 格单价",
 }
 
 # 隐秘拍卖档与 24x/25x 共用格单价（游戏侧归并）；UI 仅提示去对应明拍档编辑
@@ -81,6 +88,7 @@ class VisualConfigPanel:
         self._config_bindings: list[_FieldBinding] = []
         self._map_bindings: list[_FieldBinding] = []
         self._map_quality_unit_vars: dict[str, tk.StringVar] = {}
+        self._map_quality_unit_refs: dict[str, Any] = {}
         self._autosave_after: dict[str, str | None] = {"config": None, "map": None}
         self._autosave_ms = 600
         self._rebuilding_form = False
@@ -184,6 +192,11 @@ class VisualConfigPanel:
         canvas = tk.Canvas(box, highlightthickness=0)
         vsb = ttk.Scrollbar(box, orient="vertical", command=canvas.yview)
         inner = ttk.Frame(canvas)
+        fields_host = ttk.Frame(inner)
+        fields_host.grid(row=0, column=0, sticky="ew")
+        extras_host = ttk.Frame(inner)
+        extras_host.grid(row=1, column=0, sticky="ew")
+        inner.columnconfigure(0, weight=1)
         inner.bind(
             "<Configure>",
             lambda e, c=canvas: c.configure(scrollregion=c.bbox("all")),
@@ -206,6 +219,8 @@ class VisualConfigPanel:
 
         setattr(inner, "_field_container", True)
         box._inner_frame = inner  # type: ignore[attr-defined]
+        box._fields_host = fields_host  # type: ignore[attr-defined]
+        box._extras_host = extras_host  # type: ignore[attr-defined]
         box._canvas = canvas  # type: ignore[attr-defined]
         return box
 
@@ -218,8 +233,8 @@ class VisualConfigPanel:
         *,
         autosave_scope: str,
     ) -> None:
-        inner: ttk.Frame = box._inner_frame  # type: ignore[attr-defined]
-        for child in inner.winfo_children():
+        host: ttk.Frame = getattr(box, "_fields_host", None) or box._inner_frame  # type: ignore[attr-defined]
+        for child in host.winfo_children():
             child.destroy()
         bindings.clear()
 
@@ -230,9 +245,9 @@ class VisualConfigPanel:
 
         row = 0
         for group_name in sorted(groups.keys()):
-            grp = ttk.LabelFrame(inner, text=group_name, padding=8)
+            grp = ttk.LabelFrame(host, text=group_name, padding=8)
             grp.grid(row=row, column=0, sticky="ew", pady=(0, 8))
-            inner.columnconfigure(0, weight=1)
+            host.columnconfigure(0, weight=1)
             row += 1
             gi = 0
             for field in groups[group_name]:
@@ -391,6 +406,11 @@ class VisualConfigPanel:
             map_key = self._effective_map_key()
             config_fields = schema_fields_for_scope(schema, "config")
             map_fields = schema_fields_for_scope(schema, "map", map_bundle_key=map_key)
+            shared = self._map_quality_unit_source_bundle(map_key)
+            rep_mid = self._representative_map_id_for_editor(shared)
+            self._map_quality_unit_refs = (
+                load_map_quality_unit_price_refs(rep_mid) if rep_mid > 0 else {}
+            )
 
             self._populate_scope_fields(
                 self._config_canvas_frame,
@@ -454,7 +474,14 @@ class VisualConfigPanel:
         avg = self._fmt_ref_price(row.get("avg_per_cell"))
         p25 = self._fmt_ref_price(row.get("p25_per_cell"))
         p50 = self._fmt_ref_price(row.get("p50_per_cell"))
-        return f"CSV 指导价（格）：均价 {avg}　P25 {p25}　P50 {p50}"
+        cap = map_quality_unit_per_cell_ceiling_from_refs(row)
+        cap_s = self._fmt_ref_price(cap) if cap is not None else "—"
+        mult = MAP_QUALITY_UNIT_MAX_AVG_MULTIPLIER
+        mult_s = str(int(mult)) if mult == int(mult) else str(mult)
+        return (
+            f"CSV 指导价（格）：均价 {avg}　P25 {p25}　P50 {p50}　"
+            f"自定义上限（均价×{mult_s}）{cap_s}"
+        )
 
     def _format_unit_overrides_summary(self, overrides: dict[str, Any]) -> str:
         parts: list[str] = []
@@ -474,17 +501,19 @@ class VisualConfigPanel:
         return "；".join(parts) if parts else "（未设置覆盖，使用 CSV 均价）"
 
     def _populate_map_quality_unit_section(self, box: ttk.Frame) -> None:
-        inner: ttk.Frame = box._inner_frame  # type: ignore[attr-defined]
+        host: ttk.Frame = getattr(box, "_extras_host", None) or box._inner_frame  # type: ignore[attr-defined]
+        for child in host.winfo_children():
+            child.destroy()
         mk = self._effective_map_key()
         shared = self._map_quality_unit_source_bundle(mk)
 
         grp = ttk.LabelFrame(
-            inner,
+            host,
             text="品质格单价覆盖（优先于 CSV，用于估价）",
             padding=8,
         )
-        grp.grid(row=999, column=0, sticky="ew", pady=(0, 8))
-        inner.columnconfigure(0, weight=1)
+        grp.pack(fill="x", pady=(0, 8))
+        host.columnconfigure(0, weight=1)
         self._map_quality_unit_vars.clear()
 
         if not self._map_quality_unit_editable(mk):
@@ -518,7 +547,8 @@ class VisualConfigPanel:
 
         hint = (
             f"写入 configs/pricing.maps/{shared}.json；代表 map_id={rep_mid or '—'}。"
-            "留空或 0 表示使用 CSV 均价；填写后覆盖 q5/q6/q5+q6/q4+q5+q6 格单价。"
+            f"留空或 0 表示使用 CSV 均价；可覆盖 q5 / q6 / q56 / q456 / q3456 格单价。"
+            f"自定义价不得超过 CSV 格均价的 {MAP_QUALITY_UNIT_MAX_AVG_MULTIPLIER:g} 倍。"
         )
         ttk.Label(grp, text=hint, foreground="#555577", wraplength=520, justify="left").grid(
             row=0, column=0, columnspan=2, sticky="w", pady=(0, 6)
@@ -562,9 +592,8 @@ class VisualConfigPanel:
         if not isinstance(pricing, dict):
             pricing = {}
             doc["pricing"] = pricing
-        bucket = pricing.get("map_quality_unit_per_cell")
-        if not isinstance(bucket, dict):
-            bucket = {}
+        raw_bucket = pricing.get("map_quality_unit_per_cell")
+        bucket = dict(raw_bucket) if isinstance(raw_bucket, dict) else {}
         for cfg_key, var in self._map_quality_unit_vars.items():
             raw = var.get().strip()
             if not raw:
@@ -577,6 +606,12 @@ class VisualConfigPanel:
             if val <= 0:
                 bucket.pop(cfg_key, None)
             else:
+                validate_map_quality_unit_per_cell_override(
+                    cfg_key,
+                    val,
+                    self._map_quality_unit_refs,
+                    label=_MAP_QUALITY_UNIT_LABELS.get(cfg_key, cfg_key),
+                )
                 bucket[cfg_key] = val
         if bucket:
             pricing["map_quality_unit_per_cell"] = bucket
@@ -671,7 +706,16 @@ class VisualConfigPanel:
             path = pricing_map_overlay_path(mk)
             prior = _load_json(path) if path.is_file() else {}
             doc = dict(prior)
+            shared = self._map_quality_unit_source_bundle(mk)
             self._apply_bindings(doc, self._map_bindings)
+            if self._map_quality_unit_editable(mk) and self._map_quality_unit_vars:
+                if shared == mk:
+                    self._apply_map_quality_unit_to_doc(doc)
+                else:
+                    spath = pricing_map_overlay_path(shared)
+                    sdoc = _load_json(spath) if spath.is_file() else {}
+                    self._apply_map_quality_unit_to_doc(sdoc)
+                    _save_json(spath, sdoc)
             pricing = doc.get("pricing")
             if isinstance(pricing, dict) and not self._map_quality_unit_editable(mk):
                 pricing.pop("map_quality_unit_per_cell", None)
@@ -683,13 +727,6 @@ class VisualConfigPanel:
             _save_json(path, doc)
             if mk == self._effective_map_key():
                 self.map_doc = doc
-
-            if self._map_quality_unit_editable(mk) and self._map_quality_unit_vars:
-                shared = self._map_quality_unit_source_bundle(mk)
-                spath = pricing_map_overlay_path(shared)
-                sdoc = _load_json(spath) if spath.is_file() else {}
-                self._apply_map_quality_unit_to_doc(sdoc)
-                _save_json(spath, sdoc)
 
             self.status_var.set(f"地图 {mk} 已自动保存" if silent else f"地图 {mk} 已保存")
         except (OSError, ValueError, TypeError) as exc:

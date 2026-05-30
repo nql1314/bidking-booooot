@@ -20,7 +20,8 @@
       "bid": 0.0,
       "opponent": 0.0
     },
-    "infer_vacant_rect_phantoms": true
+    "infer_vacant_rect_phantoms": true,
+    "auto_vacant_phantom_price": ""
   },
   "automation": {
     "bid_cap_price": 2222222,

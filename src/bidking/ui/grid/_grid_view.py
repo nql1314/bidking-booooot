@@ -1602,27 +1602,43 @@ class GridWindow:
         return estimate_snapshot_item_price_for_uid(snap, uid)
 
     @staticmethod
-    def _counts_as_unknown_quality_stat(uid: str, row: Dict[str, Any]) -> bool:
+    def _counts_as_unknown_contour_stat(uid: str, row: Dict[str, Any]) -> bool:
         """
-        顶栏「未知 N 格」：仅品质仍为空、且仍为 1×1 锚格的日志占位。
+        顶栏「未知」之一：日志物品品质已定、外形仍未锁定（合并表 ``shape`` 为空）。
 
-        不计入：自动 ``phantom_vac_*``、已写入推断/手动画框外形的格子、
-        以及 ``quality`` 已定的已知档位（含品质已知、轮廓未知的 1×1）。
-        几何空置见「空置 / 未知空置格」，与本品统计无关。
+        与 ``grid_overlay_infer_vacant_rects._unknown_contour_log_item_eligible`` 一致，
+        按合并投影计格（含手动画框写入的 ``shape``，有外形则不再计入）。
         """
-        if row.get("quality") is not None:
-            return False
         if str(uid).startswith(_grid_overlay.AUTO_VACANT_RECT_PHANTOM_PREFIX):
             return False
         if row.get("shape") is not None:
             return False
+        if row.get("box_id") is None:
+            return False
+        q = row.get("quality")
+        if q is None:
+            return False
+        try:
+            qi = int(q)
+        except (TypeError, ValueError):
+            return False
+        if not (1 <= qi <= 6):
+            return False
+        if row.get("item_cid") is not None and row.get("price") is not None:
+            return False
         return True
+
+    @staticmethod
+    def _counts_as_auto_vacant_phantom_stat(uid: str) -> bool:
+        """顶栏「未知」之一：第 4 回合起自动填充的 ``phantom_vac_*`` 占格。"""
+        return str(uid).startswith(_grid_overlay.AUTO_VACANT_RECT_PHANTOM_PREFIX)
 
     @staticmethod
     def _stats_from_merged_items(board_snapshot: Dict[str, Any]) -> Tuple[int, int, int, int, int, int, int]:
         """
         与 ``analysis.grid_overlay.merged_items_dict`` 一致：有 ``box_id`` 的占位行总格数及 Q5/Q6/
-        品质未知锚格（``quality`` 为空且 ``shape`` 为空，见 :meth:`_counts_as_unknown_quality_stat`）。
+        已知品质未知轮廓格、自动 ``phantom_vac_*`` 格（见 :meth:`_counts_as_unknown_contour_stat`、
+        :meth:`_counts_as_auto_vacant_phantom_stat`）。顶栏展示时另加几何空置格数。
 
         形状取合并表中的 ``shape``（已含手动画框、推断外形、手动确认投影）。
         """
@@ -1658,7 +1674,9 @@ class GridWindow:
             elif qi == 6:
                 q6_count += 1
                 q6_cells += cells
-            elif GridWindow._counts_as_unknown_quality_stat(str(uid), row):
+            elif GridWindow._counts_as_unknown_contour_stat(str(uid), row):
+                unknown_cells += cells
+            elif GridWindow._counts_as_auto_vacant_phantom_stat(str(uid)):
                 unknown_cells += cells
         return (
             total_cells,
@@ -1674,8 +1692,9 @@ class GridWindow:
         return (
             "画板金（Q5）/ 红（Q6）件数与格数\n"
             "与 ``merged_items_dict`` 一致（日志 + 幽灵、手动画框、推断外形、偏好与手动确认投影）。\n\n"
-            "「未知」：合并表中 ``quality`` 与 ``shape`` 均为空的日志锚格（1×1，品质未定）。\n"
-            "不含自动 ``phantom_vac_*``、推断/手画外形占位，也不含几何空置（见「空置」「未知空置格」）。"
+            "「未知」= 几何空置格 + 已知品质未知轮廓占格 + 自动 ``phantom_vac_*`` 占格。\n"
+            "几何空置与右侧「空置」同源；未知轮廓为合并表 ``quality`` 已定且 ``shape`` 仍空；\n"
+            "有效空置乘数见「未知空置格」。"
         )
 
     def _tooltip_text_vacant_geometric(self) -> str:
@@ -3219,9 +3238,10 @@ class GridWindow:
             self._map_round_label.config(text=f"地图 {mid}   第 {rnd} 回合")
         if hasattr(self, "_map_quality_stats_label"):
             stats_snap = self._make_board_snapshot(self._last_raw_pricing)
-            _tc, _ic, q5c, q5g, q6c, q6g, unk_cells = self._stats_from_merged_items(
+            _tc, _ic, q5c, q5g, q6c, q6g, unk_item_cells = self._stats_from_merged_items(
                 stats_snap
             )
+            unk_cells = int(vac_n) + int(unk_item_cells)
             board_cells = int(_tc) + int(vac_n)
             self._last_board_cells = board_cells
             self._map_quality_stats_label.config(

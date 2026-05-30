@@ -1,11 +1,12 @@
 """地图品质组合格单价：CSV 参考价与 ``pricing.map_quality_unit_per_cell`` 覆盖。
 
-覆盖项含 q5 / q6 / q5+q6（配置键 ``q56``）/ q4+q5+q6（配置键 ``q456``）。
+覆盖项含 q5 / q6 / q5+q6（配置键 ``q56``）/ q4+q5+q6（配置键 ``q456``）/ q3+q4+q5+q6（配置键 ``q3456``）。
 """
 
 from __future__ import annotations
 
 import csv
+import math
 import os
 from typing import Any, Dict, Mapping, Optional
 
@@ -16,15 +17,88 @@ CSV_QUALITY_Q5 = "q5"
 CSV_QUALITY_Q6 = "q6"
 CSV_QUALITY_Q56 = "q5+q6"
 CSV_QUALITY_Q456 = "q4+q5+q6"
+CSV_QUALITY_Q3456 = "q3+q4+q5+q6"
 
-# 配置键（``q56``→``q5+q6``，``q456``→``q4+q5+q6``）
-CONFIG_KEYS = (CSV_QUALITY_Q5, CSV_QUALITY_Q6, "q56", "q456")
+# 配置键（``q56``→``q5+q6``，``q456``→``q4+q5+q6``，``q3456``→``q3+q4+q5+q6``）
+CONFIG_KEYS = (CSV_QUALITY_Q5, CSV_QUALITY_Q6, "q56", "q456", "q3456")
 CONFIG_TO_CSV: dict[str, str] = {
     CSV_QUALITY_Q5: CSV_QUALITY_Q5,
     CSV_QUALITY_Q6: CSV_QUALITY_Q6,
     "q56": CSV_QUALITY_Q56,
     "q456": CSV_QUALITY_Q456,
+    "q3456": CSV_QUALITY_Q3456,
 }
+
+# 自定义格单价不得超过 CSV ``avg_per_cell`` 的该倍数（可视化配置保存时校验）
+MAP_QUALITY_UNIT_MAX_AVG_MULTIPLIER = 1.2
+
+
+def map_quality_unit_per_cell_ceiling_from_refs(
+    refs_row: Mapping[str, Any] | None,
+    *,
+    multiplier: float = MAP_QUALITY_UNIT_MAX_AVG_MULTIPLIER,
+) -> Optional[float]:
+    """由 CSV 参考行中的 ``avg_per_cell`` 计算允许的最高自定义格单价；无有效均价时返回 ``None``。"""
+    if not isinstance(refs_row, Mapping):
+        return None
+    raw = refs_row.get("avg_per_cell")
+    if raw is None:
+        return None
+    try:
+        avg = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if not (avg > 0 and math.isfinite(avg)):
+        return None
+    try:
+        mult = float(multiplier)
+    except (TypeError, ValueError):
+        mult = MAP_QUALITY_UNIT_MAX_AVG_MULTIPLIER
+    if not (mult > 0 and math.isfinite(mult)):
+        mult = MAP_QUALITY_UNIT_MAX_AVG_MULTIPLIER
+    cap = avg * mult
+    return cap if math.isfinite(cap) and cap > 0 else None
+
+
+def validate_map_quality_unit_per_cell_override(
+    cfg_key: str,
+    value: float,
+    refs: Mapping[str, Any] | None,
+    *,
+    label: str | None = None,
+    multiplier: float = MAP_QUALITY_UNIT_MAX_AVG_MULTIPLIER,
+) -> None:
+    """自定义格单价 >0 时不得超过 CSV 格均价的 ``multiplier`` 倍；否则 ``ValueError``。"""
+    if cfg_key not in CONFIG_TO_CSV:
+        return
+    if not (value > 0 and math.isfinite(value)):
+        return
+    row = refs.get(cfg_key) if isinstance(refs, Mapping) else None
+    ceiling = map_quality_unit_per_cell_ceiling_from_refs(row, multiplier=multiplier)
+    if ceiling is None:
+        return
+    if value <= ceiling + 1e-9:
+        return
+    disp = label or cfg_key
+    avg_raw = row.get("avg_per_cell") if isinstance(row, Mapping) else None
+    try:
+        avg_f = float(avg_raw) if avg_raw is not None else None
+    except (TypeError, ValueError):
+        avg_f = None
+    avg_s = f"{avg_f:,.0f}" if avg_f is not None and avg_f >= 1000 else (
+        f"{avg_f:.2f}".rstrip("0").rstrip(".") if avg_f is not None else "—"
+    )
+    cap_s = f"{ceiling:,.0f}" if ceiling >= 1000 else f"{ceiling:.2f}".rstrip("0").rstrip(".")
+    mult_s = (
+        str(int(multiplier))
+        if float(multiplier) == int(float(multiplier))
+        else str(float(multiplier))
+    )
+    raise ValueError(
+        f"{disp}：不能超过 CSV 格均价 {avg_s} 的 {mult_s} 倍（上限 {cap_s}，当前 {value:,.0f}）"
+        if value >= 1000
+        else f"{disp}：不能超过 CSV 格均价 {avg_s} 的 {mult_s} 倍（上限 {cap_s}，当前 {value}）"
+    )
 
 
 def _percentile_csv_basename(percentile: str) -> str:
@@ -111,7 +185,7 @@ def load_map_quality_unit_price_refs(
     snapshot_path_hint: Optional[str] = None,
 ) -> Dict[str, Dict[str, Optional[float]]]:
     """
-    返回 ``q5`` / ``q6`` / ``q56`` / ``q456`` 的 CSV 参考价（件价、格价 × 均价/P25/P50）。
+    返回 ``q5`` / ``q6`` / ``q56`` / ``q456`` / ``q3456`` 的 CSV 参考价（件价、格价 × 均价/P25/P50）。
 
     ``map_id`` 会先归一化为代表 ``map_id``（与同档最小图一致）。
     """
@@ -159,7 +233,7 @@ def apply_map_quality_unit_per_cell_overrides(
     """
     将配置覆盖写入 ``per_cell`` / ``per_item``（格价为主；件价按 CSV 均价比例缩放）。
 
-    返回新 dict 与已应用的 CSV 品质键列表（如 ``q5``、``q6``、``q5+q6``、``q4+q5+q6``）。
+    返回新 dict 与已应用的 CSV 品质键列表（如 ``q5``、``q6``、``q5+q6``、``q4+q5+q6``、``q3+q4+q5+q6``）。
     """
     cell_out = dict(per_cell)
     item_out = dict(per_item)
@@ -236,13 +310,17 @@ def merge_config_overrides_into_runtime(
 __all__ = [
     "CONFIG_KEYS",
     "CONFIG_TO_CSV",
+    "CSV_QUALITY_Q3456",
     "CSV_QUALITY_Q456",
     "CSV_QUALITY_Q56",
     "CSV_QUALITY_Q5",
     "CSV_QUALITY_Q6",
+    "MAP_QUALITY_UNIT_MAX_AVG_MULTIPLIER",
     "apply_map_overrides_to_csv_quality_groups",
     "apply_map_quality_unit_per_cell_overrides",
     "config_overrides_from_pricing",
     "load_map_quality_unit_price_refs",
+    "map_quality_unit_per_cell_ceiling_from_refs",
     "merge_config_overrides_into_runtime",
+    "validate_map_quality_unit_per_cell_override",
 ]

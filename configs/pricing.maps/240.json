@@ -18,13 +18,15 @@
     },
     "map_quality_unit_per_cell": {
       "q56": 22000.0,
-      "q456": 10000.0
+      "q456": 10000.0,
+      "q3456": 0.0
     },
     "opponent_bid_blend_weights": {
       "bid": 0.0,
       "opponent": 0.0
     },
-    "infer_vacant_rect_phantoms": true
+    "infer_vacant_rect_phantoms": true,
+    "auto_vacant_phantom_price": ""
   },
   "automation": {
     "bid_cap_price": 1280000,

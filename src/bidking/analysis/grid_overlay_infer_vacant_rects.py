@@ -774,33 +774,116 @@ def _pass4_emit_deferred_temp_1x1_phantoms(ctx: _VacantRectInferCtx) -> None:
         _try_emit_rect_phantom(ctx, (1, 1, c, r), block_temp_ghost=False)
 
 
-def _phantom_spec_fully_in_fraud_cells(
-    spec: VacantRectPhantomSpec,
+def _trim_rect_edges_fully_fraud(
+    w: int,
+    h: int,
+    dc: int,
+    dr: int,
     fraud_cells: Set[Tuple[int, int]],
-) -> bool:
-    if not fraud_cells:
-        return False
-    cells = _phantom_spec_cells(spec)
-    return bool(cells) and cells <= fraud_cells
+) -> Tuple[int, int, int, int]:
+    """裁掉矩形四边上「整行/整列均在诈骗格内」的边条。"""
+    w_i, h_i, dc_i, dr_i = int(w), int(h), int(dc), int(dr)
+    while h_i > 0:
+        bottom_r = dr_i + h_i - 1
+        if all((bottom_r, c) in fraud_cells for c in range(dc_i, dc_i + w_i)):
+            h_i -= 1
+        else:
+            break
+    while h_i > 0:
+        if all((dr_i, c) in fraud_cells for c in range(dc_i, dc_i + w_i)):
+            dr_i += 1
+            h_i -= 1
+        else:
+            break
+    while w_i > 0 and h_i > 0:
+        right_c = dc_i + w_i - 1
+        if all((r, right_c) in fraud_cells for r in range(dr_i, dr_i + h_i)):
+            w_i -= 1
+        else:
+            break
+    while w_i > 0 and h_i > 0:
+        if all((r, dc_i) in fraud_cells for r in range(dr_i, dr_i + h_i)):
+            dc_i += 1
+            w_i -= 1
+        else:
+            break
+    return w_i, h_i, dc_i, dr_i
 
 
-def _pass_post4_drop_specs_fully_in_fraud_cells(
+def _shrink_rect_phantom_bbox_excluding_fraud(
+    bbox: Tuple[int, int, int, int],
+    fraud_cells: Set[Tuple[int, int]],
+    *,
+    min_bbox_area: int,
+) -> Optional[Tuple[int, int, int, int]]:
+    """
+    若矩形 footprint 与诈骗格相交，尝试缩回仍不含诈骗格的实心矩形；
+    无法缩回则返回 ``None``（调用方应剔除该幽灵）。
+    """
+    w, h, dc, dr = bbox
+    cells = _rect_cells(dr, dc, w, h)
+    if not fraud_cells or not (cells & fraud_cells):
+        return bbox
+
+    good = cells - fraud_cells
+    if not good:
+        return None
+
+    tw, th, tdc, tdr = _trim_rect_edges_fully_fraud(w, h, dc, dr, fraud_cells)
+    if tw > 0 and th > 0:
+        trimmed = _rect_cells(tdr, tdc, tw, th)
+        if not (trimmed & fraud_cells) and tw * th >= min_bbox_area:
+            return (tw, th, tdc, tdr)
+
+    solid = _vacant_infer_solid_rectangle_bbox(good)
+    if solid is not None:
+        sw, sh, sdc, sdr = solid
+        scells = _rect_cells(sdr, sdc, sw, sh)
+        if not (scells & fraud_cells) and sw * sh >= min_bbox_area:
+            return solid
+    return None
+
+
+def _pass_post4_trim_specs_for_fraud_cells(
     ctx: _VacantRectInferCtx,
     fraud_cells: Optional[Set[Tuple[int, int]]],
 ) -> None:
-    """步骤 2–4 用几何空置推断；输出后剔除 footprint 完全落在诈骗格内的幽灵。"""
+    """步骤 2–4 用几何空置推断；输出后剔除或缩回不含诈骗格的实心矩形幽灵。"""
     fraud = fraud_cells or set()
     if not fraud:
         return
     kept: List[VacantRectPhantomSpec] = []
     for spec in ctx.out:
-        if _phantom_spec_fully_in_fraud_cells(spec, fraud):
-            cells = _phantom_spec_cells(spec)
-            ctx.taken -= cells
-            ctx.vacant |= cells
+        old_cells = _phantom_spec_cells(spec)
+        shrunk_bbox = _shrink_rect_phantom_bbox_excluding_fraud(
+            (spec.w, spec.h, spec.dc, spec.dr),
+            fraud,
+            min_bbox_area=ctx.min_bbox_area,
+        )
+        if shrunk_bbox is None:
+            ctx.taken -= old_cells
+            ctx.vacant |= old_cells
             _vacant_phantom_apply_quality_count_delta(ctx, spec, -1)
-        else:
+            continue
+
+        if shrunk_bbox == (spec.w, spec.h, spec.dc, spec.dr):
             kept.append(spec)
+            continue
+
+        _vacant_phantom_apply_quality_count_delta(ctx, spec, -1)
+        new_spec = _vacant_rect_phantom_spec_from_bbox(
+            shrunk_bbox, ctx=ctx, quality_counts=ctx.quality_counts
+        )
+        if new_spec is None:
+            ctx.taken -= old_cells
+            ctx.vacant |= old_cells
+            continue
+
+        new_cells = _phantom_spec_cells(new_spec)
+        ctx.taken = (ctx.taken - old_cells) | new_cells
+        ctx.vacant |= old_cells - new_cells
+        _vacant_phantom_apply_quality_count_delta(ctx, new_spec, 1)
+        kept.append(new_spec)
     ctx.out = kept
 
 
@@ -1567,7 +1650,7 @@ def compute_vacant_rect_phantom_specs(
     2. 连通区实心矩形；
     3. 不规则剩余区：逐点 H/V 双向贪心扩展 → 取最大矩形（方度 tie-break），移除后重复；
     4. 第 1 步临时占格、仍未被 2/3 步吸收的 1×1 → 输出对应幽灵；
-    4b. 剔除 footprint 完全位于 ``fraud_cells`` 内的幽灵（仅当 ``fraud_cells`` 非空）；
+    4b. 若 ``fraud_cells`` 非空：完全落在诈骗格内的幽灵剔除；与诈骗格相交者先裁边条或取非诈骗实心外包矩形缩回（须仍有 CSV 候选），否则剔除；
     5. 相邻幽灵并集为实心矩形时合并，直至稳定；
     6. 覆盖步骤 0 记录锚格的 ``phantom_vac_*`` → 源物品扩至该矩形，并删除对应幽灵。
 
@@ -1637,7 +1720,7 @@ def compute_vacant_rect_phantom_specs(
         _pass_full_rect_fill(ctx)
         _pass_three_sided_rect_fill(ctx)
         _pass4_emit_deferred_temp_1x1_phantoms(ctx)
-        _pass_post4_drop_specs_fully_in_fraud_cells(ctx, fraud_cells)
+        _pass_post4_trim_specs_for_fraud_cells(ctx, fraud_cells)
         specs = ctx.out
         if specs and ctx is not None:
             ctx.out = specs

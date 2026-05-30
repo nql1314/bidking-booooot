@@ -1033,6 +1033,31 @@ class BoardPricingTests(unittest.TestCase):
         top = _greedy_expand_rect_candidates(work, work, min_bbox_area=1)[0]
         self.assertEqual(top[:2], (3, 3))
 
+    def test_vacant_rect_post4_shrink_bottom_fraud_row(self) -> None:
+        """含底行诈骗格时缩回仍不含诈骗的实心矩形（如 4×3 → 4×2）。"""
+        from bidking.analysis.grid_overlay_infer_vacant_rects import (
+            _shrink_rect_phantom_bbox_excluding_fraud,
+        )
+
+        bbox = (4, 3, 1, 9)
+        fraud = {(11, c) for c in range(1, 5)}
+        shrunk = _shrink_rect_phantom_bbox_excluding_fraud(
+            bbox, fraud, min_bbox_area=1
+        )
+        self.assertEqual(shrunk, (4, 2, 1, 9))
+
+    def test_vacant_rect_post4_shrink_non_solid_good_returns_none(self) -> None:
+        """非诈骗格不成实心矩形时无法缩回。"""
+        from bidking.analysis.grid_overlay_infer_vacant_rects import (
+            _shrink_rect_phantom_bbox_excluding_fraud,
+        )
+
+        bbox = (3, 3, 0, 0)
+        fraud = {(0, 0), (0, 1), (1, 0)}
+        self.assertIsNone(
+            _shrink_rect_phantom_bbox_excluding_fraud(bbox, fraud, min_bbox_area=1)
+        )
+
     def test_vacant_rect_pass3_greedy_on_geometric_vacant(self) -> None:
         """第 3 步：几何空置（含原会被标为诈骗的格）上贪心可扩出完整 3×3。"""
         from bidking.analysis.grid_overlay_infer_vacant_rects import (
@@ -1146,8 +1171,8 @@ class BoardPricingTests(unittest.TestCase):
         for spec in specs_filtered:
             cells = _phantom_spec_cells(spec)
             self.assertFalse(
-                cells <= fraud,
-                "phantom %s must not lie entirely in fraud cells" % spec.uid,
+                cells & fraud,
+                "phantom %s must not overlap fraud cells after trim" % spec.uid,
             )
         dropped_uids = {
             s.uid for s in specs_geo if _phantom_spec_cells(s) <= fraud
