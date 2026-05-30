@@ -3,7 +3,7 @@
 画板快照定价：由 ``game_state.items`` 与 ``grid_overlay`` 合并后的有效物品表汇总总价、
 权重占位与空置格，再结合扫描推断与地图 CSV 格均价给出 ``points`` / ``est_*``。
 
-``items`` 合并优先使用快照 ``grid_overlay["merged_items_dict"]``（见 :func:`grid_overlay.merged_items_dict_from_snapshot`），否则由 :func:`grid_overlay.merged_items_dict` 计算（含 ``infer_shapes`` 几何补全；推算写入的 ``shape``（如 1×1→11）参与 CSV 轮廓匹配，避免「仅知档位」却按全轮廓候选加权）。
+``items`` 合并优先使用快照 ``grid_overlay["merged_items_dict"]``（见 :func:`grid_overlay.merged_items_dict_from_snapshot`），否则由 :func:`grid_overlay.merged_items_dict` 计算（含 ``manual_shapes`` 几何补全等）。
 
 不再维护独立的「艾莎 bid」分支；策略层直接消费 ``pricing.points`` / ``points_floor`` /
 ``points_ceiling``。
@@ -135,7 +135,7 @@ def _parse_shape_int(shape: Any) -> Optional[int]:
 
 
 def _pricing_shape_int_for_csv(it: Dict[str, Any]) -> Optional[int]:
-    """合并行上的 ``shape`` 用于 CSV 轮廓过滤（含 ``_overlay_shape_origin == "infer"`` 的推算行）。"""
+    """合并行上的 ``shape`` 用于 CSV 轮廓过滤（含手动画框写入的外形）。"""
     return _parse_shape_int(it.get("shape"))
 
 

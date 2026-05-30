@@ -28,14 +28,7 @@ from .grid_overlay_dims import (
     GRID_COLS,
     GRID_MAX_BOX_ID,
     GRID_ROWS,
-    INFER_ABSORBED_PHANTOM_UIDS_KEY,
     OCCUPIED_CELL_BIDS,
-    infer_absorbed_phantom_uid_set,
-)
-from .grid_overlay_infer_shapes import (
-    InferShapesResult,
-    _infer_pseudo_blocked,
-    compute_grid_overlay_infer_shapes,
 )
 from .grid_overlay_infer_vacant_rects import (
     AUTO_VACANT_RECT_PHANTOM_PREFIX,
@@ -45,7 +38,6 @@ from .grid_overlay_infer_vacant_rects import (
     is_auto_vacant_rect_phantom_uid,
 )
 from .grid_overlay_item_merge import (
-    apply_infer_shapes_to_items,
     apply_manual_confirm_projection,
     apply_manual_shapes_to_items,
     apply_phantom_default_quality_for_phantom_rows,
@@ -75,7 +67,6 @@ from .grid_overlay_vacant_zone import (
 __all__ = [
     "DEFAULT_GEOMETRIC_PREFIX_ANCHOR_BOX_ID",
     "OCCUPIED_CELL_BIDS",
-    "apply_infer_shapes_to_items",
     "apply_phantom_default_quality_for_phantom_rows",
     "apply_phantom_quality_pref_to_items",
     "apply_unknown_cell_quality_pref_to_items",
@@ -85,10 +76,6 @@ __all__ = [
     "board_display_occupied_cells_merged",
     "build_occupied_cells",
     "compute_overlay_vacant_dict",
-    "compute_grid_overlay_infer_shapes",
-    "InferShapesResult",
-    "INFER_ABSORBED_PHANTOM_UIDS_KEY",
-    "infer_absorbed_phantom_uid_set",
     "auto_vacant_rect_phantom_cell_count_from_snapshot",
     "compute_vacant_rect_phantom_specs",
     "AUTO_VACANT_RECT_PHANTOM_PREFIX",

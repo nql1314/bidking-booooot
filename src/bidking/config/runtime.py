@@ -126,10 +126,10 @@ from ..analysis.grid_overlay_infer_vacant_rects import vacant_rect_phantom_infer
 
 def _infer_vacant_rect_phantoms_config_flag(raw: Mapping[str, Any]) -> bool:
     """
-    第 4 回合起「空格自动填充 + 已知品质未知轮廓扩充」共用开关。
+    第 4 回合起「空置区近似矩形 → 自动 phantom_vac_*」开关。
 
     读取 ``pricing.infer_vacant_rect_phantoms``；键缺失时回退已废弃的
-    ``pricing.infer_unknown_contour_shapes``；二者均缺失时为 ``True``。
+    ``pricing.infer_unknown_contour_shapes``（曾用于轮廓扩充，已移除）；二者均缺失时为 ``True``。
     """
     p = raw.get("pricing")
     if not isinstance(p, dict):
@@ -153,7 +153,7 @@ def infer_vacant_rect_phantoms_enabled(
     current_round: Optional[int] = None,
 ) -> bool:
     """
-    艾莎第 4 回合起：空置区近似矩形 → 自动 ``phantom_vac_*``，并在此后做已知品质未知轮廓扩充。
+    艾莎第 4 回合起：空置区近似矩形 → 自动 ``phantom_vac_*``。
 
     读取 ``pricing.infer_vacant_rect_phantoms``；键缺失时为 ``True``。
     传入 ``current_round`` 时，仅当回合 ≥ 第 4 回合才为 ``True``（与推断层一致）。
@@ -178,7 +178,7 @@ def infer_unknown_contour_shapes_enabled(
     current_round: Optional[int] = None,
 ) -> bool:
     """
-    向后兼容别名：与 :func:`infer_vacant_rect_phantoms_enabled` 相同（共用 ``infer_vacant_rect_phantoms`` 开关）。
+    向后兼容别名：与 :func:`infer_vacant_rect_phantoms_enabled` 相同（仅空置矩形自动幽灵）。
     """
     return infer_vacant_rect_phantoms_enabled(cfg, current_round=current_round)
 

@@ -36,7 +36,7 @@
 
 ## 2. 现状（as-is）
 
-对 **有 `shape`（含 `manual_shapes` / `infer_shapes`）且 `quality is None`** 的幽灵行，`compute_items_total` → `_item_value` 行为为：
+对 **有 `shape`（含 `manual_shapes`）且 `quality is None`** 的幽灵行，`compute_items_total` → `_item_value` 行为为：
 
 ```text
 query_item(shape=sh, quality=None, excluded_*=行上字段)

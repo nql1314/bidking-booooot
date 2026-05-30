@@ -6,8 +6,6 @@ from typing import Any, Dict, Optional, Set, Tuple
 
 from ..parsing import item_db
 from . import unknown_value as _unknown_value
-from .grid_overlay_dims import infer_absorbed_phantom_uid_set
-
 _item_prices_cache: Optional[Tuple[Dict[int, Any], list]] = None
 
 
@@ -120,7 +118,7 @@ def apply_manual_confirm_projection(
 
 def apply_manual_shapes_to_items(items: Dict[str, Any], manual_shapes: Any) -> None:
     """
-    ``manual_shapes`` 与 ``infer_shapes`` 同格式 ``[w,h,dc,dr]``。
+    ``manual_shapes`` 格式为 ``[w,h,dc,dr]``。
 
     凡在 ``manual_shapes`` 中有条目的 uid，一律写入 ``shape=w*10+h`` 并标记 ``_overlay_shape_origin="manual"``，
     **覆盖**日志已有外形与先前推断外形，与画板拖框后 ``_manual_shapes`` 优先于推算一致。
@@ -140,25 +138,6 @@ def apply_manual_shapes_to_items(items: Dict[str, Any], manual_shapes: Any) -> N
         if isinstance(row, dict):
             row["shape"] = sh
             row["_overlay_shape_origin"] = "manual"
-
-
-def apply_infer_shapes_to_items(items: Dict[str, Any], infer_shapes: Any) -> None:
-    """``infer_shapes`` 与 ``manual_shapes`` 同格式；仅填补仍为 ``shape is None`` 的行（不覆盖手动画框）。"""
-    if not isinstance(infer_shapes, dict):
-        return
-    for uid, entry in infer_shapes.items():
-        uid_s = str(uid)
-        tup = _parse_manual_shape_entry(entry)
-        if tup is None:
-            continue
-        w, h = tup[0], tup[1]
-        sh = _shape_int_from_wh(w, h)
-        if sh is None:
-            continue
-        row = items.get(uid_s)
-        if isinstance(row, dict) and row.get("shape") is None:
-            row["shape"] = sh
-            row["_overlay_shape_origin"] = "infer"
 
 
 _PHANTOM_QUALITY_PREF_INFER = "_phantom_q_infer"
@@ -247,16 +226,10 @@ def sync_phantom_row_quality_from_overlay(items: Dict[str, Any], overlay: Any) -
     apply_phantom_default_quality_for_phantom_rows(items, overlay)
 
 
-def _drop_infer_absorbed_phantom_rows(out: Dict[str, Any], overlay: Any) -> None:
-    for uid in infer_absorbed_phantom_uid_set(overlay):
-        out.pop(uid, None)
-
-
 def merged_items_dict(board_snapshot: Dict[str, Any]) -> Dict[str, Any]:
     """
     ``game_state.items`` 与 ``grid_overlay`` 合并后的定价用物品表（浅拷贝各行 dict，可原地改投影字段）。
 
-    ``grid_overlay.infer_shapes`` 会写入几何用 ``shape``，并标记 ``_overlay_shape_origin == "infer"``；
     ``phantom_quality_pref`` 会把显式 Q1–Q6 写入幽灵行的 ``quality``（与画板一致）；
     ``unknown_cell_quality_pref`` 将弹窗「候选品质」写入日志行 ``quality``（与画板一致）；
     缺省金笔且无推断偏好键时补 **Q5**（与 ``GridWindow._phantom_effective_quality`` 一致）。
@@ -274,26 +247,20 @@ def merged_items_dict(board_snapshot: Dict[str, Any]) -> Dict[str, Any]:
                 items[str(k)] = row
     overlay = board_snapshot.get("grid_overlay")
     if isinstance(overlay, dict):
-        absorbed_phantoms = infer_absorbed_phantom_uid_set(overlay)
         ph = overlay.get("phantom_items")
         if isinstance(ph, dict):
             for uid, it in ph.items():
                 suid = str(uid)
-                if suid in absorbed_phantoms:
-                    continue
                 if suid not in items and isinstance(it, dict):
                     prow = dict(it)
                     if prow.get("shape") is not None:
                         prow["_overlay_shape_origin"] = "game"
                     items[suid] = prow
         apply_manual_shapes_to_items(items, overlay.get("manual_shapes"))
-        apply_infer_shapes_to_items(items, overlay.get("infer_shapes"))
         sync_phantom_row_quality_from_overlay(items, overlay)
         apply_unknown_cell_quality_pref_to_items(items, overlay)
     csv_index, _csv_items = _load_item_prices_db()
     apply_manual_confirm_projection(items, csv_index)
-    if isinstance(overlay, dict):
-        _drop_infer_absorbed_phantom_rows(items, overlay)
     return items
 
 
@@ -331,8 +298,7 @@ def _patch_cached_merged_log_rows_from_game_items(
     将当前 ``game_state.items`` 写回缓存合并表中的日志行，再跑 overlay 管线。
 
     否则插件/桥接只刷新了 ``items``、未重写 ``merged_items_dict`` 时，会出现推断外形/品质/确认 id
-    与日志脱节；亦无法反映 ``infer_shapes`` 随局面重算后的变化（旧缓存行上 ``shape`` 已非空，
-    仅靠 :func:`apply_infer_shapes_to_items` 不会更新）。
+    与日志脱节。
     """
     if not isinstance(gs_items, dict) or not isinstance(out, dict):
         return True
@@ -365,13 +331,9 @@ def _patch_cached_merged_phantom_rows_from_overlay(
     ph = overlay.get("phantom_items")
     if not isinstance(ph, dict):
         return True
-    absorbed = infer_absorbed_phantom_uid_set(overlay)
     keys = _snapshot_item_row_keys_from_game()
     for pid, it in ph.items():
         ps = str(pid)
-        if ps in absorbed:
-            out.pop(ps, None)
-            continue
         if not isinstance(it, dict):
             continue
         row = out.get(ps)
@@ -395,9 +357,8 @@ def _merged_items_dict_cache_phantom_set_stale(overlay: Any, out: Dict[str, Any]
     ph = overlay.get("phantom_items")
     if not isinstance(ph, dict):
         return False
-    absorbed = infer_absorbed_phantom_uid_set(overlay)
-    ph_ids = {str(k) for k in ph} - absorbed
-    out_ph = {str(k) for k in out if str(k).startswith("phantom_")} - absorbed
+    ph_ids = {str(k) for k in ph}
+    out_ph = {str(k) for k in out if str(k).startswith("phantom_")}
     if ph_ids != out_ph:
         return True
     for pid in ph_ids:
@@ -434,7 +395,7 @@ def merged_items_dict_from_snapshot(board_snapshot: Dict[str, Any]) -> Dict[str,
        避免桥接只更新 ``items``、未重写 ``merged_items_dict`` 时定价仍用旧推断/旧确认。
     2. 若幽灵 uid 集与 ``phantom_items`` 不一致（新增/删除手画幽灵），放弃缓存、全量合并。
     3. 若缓存行标 ``manual`` 但 ``manual_shapes`` 已无该 uid（撤销拖框），全量合并。
-    4. 再按 ``manual_shapes`` / ``infer_shapes``、``phantom_quality_pref``、``unknown_cell_quality_pref``、
+    4. 再按 ``manual_shapes``、``phantom_quality_pref``、``unknown_cell_quality_pref``、
        ``manual_confirm_projection`` 与全量路径一致地刷新。
 
     任一步发现日志 uid 在 ``items`` 中有而缓存合并表无，则全量 :func:`merged_items_dict`。
@@ -458,11 +419,9 @@ def merged_items_dict_from_snapshot(board_snapshot: Dict[str, Any]) -> Dict[str,
             if _merged_items_dict_cache_orphan_manual_shape(out, manual_raw):
                 return merged_items_dict(board_snapshot)
             apply_manual_shapes_to_items(out, manual_raw)
-            apply_infer_shapes_to_items(out, overlay.get("infer_shapes"))
             sync_phantom_row_quality_from_overlay(out, overlay)
             apply_unknown_cell_quality_pref_to_items(out, overlay)
             csv_index, _ = _load_item_prices_db()
             apply_manual_confirm_projection(out, csv_index)
-            _drop_infer_absorbed_phantom_rows(out, overlay)
             return out
     return merged_items_dict(board_snapshot)

@@ -8,10 +8,6 @@ from typing import Any, Dict, List, Mapping, Optional, Set, Tuple
 from ..parsing import item_db
 from ..parsing.state import GameState, ItemKnowledge
 from .grid_overlay_dims import GRID_COLS, GRID_ROWS, AISHA_VACANT_RECT_INFER_ROUND, rect_cells_wh
-from .grid_overlay_infer_shapes import (
-    _infer_q1234_scan_and_q14_contours_ready,
-    _infer_solid_rectangle_bbox,
-)
 from .grid_overlay_item_merge import _load_item_prices_db
 from .scan_inference import census_absent_qualities_from_board_snapshot
 from .strategy.common import _find_continuous_regions
@@ -26,6 +22,68 @@ _ORTHO_DELTAS = ((-1, 0), (1, 0), (0, -1), (0, 1))
 def vacant_rect_phantom_infer_round_active(current_round: int) -> bool:
     """第 4 回合及之后才做空置矩形自动幽灵推断。"""
     return int(current_round) >= AISHA_VACANT_RECT_INFER_ROUND
+
+
+def _vacant_infer_q1234_scan_and_q14_contours_ready(
+    state: GameState,
+    manual_shapes: Mapping[str, Tuple[int, int, int, int]],
+) -> bool:
+    """品质 1–4 的全量扫描均已发生，且场上 Q1–Q4 物品轮廓与锚格均已可靠锁定。"""
+    hist = getattr(state, "_scan_history", []) or []
+    need = {1, 2, 3, 4}
+    seen: Set[int] = set()
+    for ent in hist:
+        if not ent or len(ent) < 2:
+            continue
+        stype, val = ent[0], ent[1]
+        if stype == "quality":
+            try:
+                vi = int(val)
+            except (TypeError, ValueError):
+                continue
+            if vi in need:
+                seen.add(vi)
+    if seen < need:
+        return False
+    for uid, k in state.items.items():
+        q = k.quality
+        if q is None:
+            continue
+        try:
+            qi = int(q)
+        except (TypeError, ValueError):
+            continue
+        if qi not in (1, 2, 3, 4):
+            continue
+        if k.box_id is None:
+            continue
+        su = str(uid)
+        if k.shape is None and su not in manual_shapes:
+            return False
+        if not k.box_id_confirmed and su not in manual_shapes:
+            return False
+    return True
+
+
+def _vacant_infer_solid_rectangle_bbox(
+    cells: Set[Tuple[int, int]],
+) -> Optional[Tuple[int, int, int, int]]:
+    """若 ``cells`` 恰为实心矩形，返回 ``(w, h, dc, dr)``；否则 ``None``。"""
+    if not cells:
+        return None
+    rows = [r for r, _ in cells]
+    cols = [c for _, c in cells]
+    min_r, max_r = min(rows), max(rows)
+    min_c, max_c = min(cols), max(cols)
+    h = max_r - min_r + 1
+    w = max_c - min_c + 1
+    if len(cells) != w * h:
+        return None
+    for r in range(min_r, max_r + 1):
+        for c in range(min_c, max_c + 1):
+            if (r, c) not in cells:
+                return None
+    return (w, h, min_c, min_r)
 
 
 @dataclass(frozen=True)
@@ -192,7 +250,7 @@ def _region_to_bbox_or_none(
     若连通空置区为实心矩形，或外接矩形内仅少量空洞（优先为诈骗格误判），
     返回 ``(w, h, dc, dr)``。
     """
-    solid = _infer_solid_rectangle_bbox(region)
+    solid = _vacant_infer_solid_rectangle_bbox(region)
     if solid is not None:
         w, h, dc, dr = solid
         if w * h < min_bbox_area:
@@ -626,7 +684,7 @@ def _try_merge_adjacent_phantom_pair(
     if not _phantom_specs_orthogonally_adjacent(cells_a, cells_b):
         return None
     union = cells_a | cells_b
-    bbox = _infer_solid_rectangle_bbox(union)
+    bbox = _vacant_infer_solid_rectangle_bbox(union)
     if bbox is None:
         return None
     for other in all_specs:
@@ -726,7 +784,7 @@ def compute_vacant_rect_phantom_specs(
     """
     if not enabled:
         return []
-    if not _infer_q1234_scan_and_q14_contours_ready(game_state, manual_shapes):
+    if not _vacant_infer_q1234_scan_and_q14_contours_ready(game_state, manual_shapes):
         return []
 
     csv_index, csv_items = _load_item_prices_db()
