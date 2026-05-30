@@ -290,6 +290,8 @@
     "print_ocr_snippet": true,
     "save_round_debug": false,
     "print_round_debug": false,
+    "save_pricing_context_json": true,
+    "pricing_context_json_path": "data/pricing_context.json",
     "gui_verbose": false,
     "runs_dir": "runs"
   },

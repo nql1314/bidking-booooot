@@ -159,6 +159,20 @@ def _geo_footprint_cells_from_shape_field(shape_val: Any) -> Optional[float]:
     return float(max(1, w * h))
 
 
+def _confirmed_tier_item_footprint_cells(it: Dict[str, Any]) -> Optional[float]:
+    """Q4–Q6 档位 ``confirmed_q*`` 单行占位格数。
+
+    有几何 ``shape`` 时用 w×h；品质已知、轮廓未知（``shape is None``）按占位
+    1×1 计 1 格，与 ``unknown_contour`` 基数一致（不要求 ``box_id_confirmed``）。
+    """
+    fp = _geo_footprint_cells_from_shape_field(it.get("shape"))
+    if fp is not None:
+        return fp
+    if it.get("shape") is not None:
+        return None
+    return 1.0
+
+
 _PHANTOM_TIER_CANDIDATE_QUALITIES = frozenset({5, 6})
 _PHANTOM_TIER_DEFAULT_ITEM_PROB_THRESHOLD = 0.6
 _PHANTOM_TIER_DEFAULT_QUALITY_PROB_THRESHOLD = 0.6
@@ -287,17 +301,23 @@ def _phantom_effective_q5_budget(
     *,
     confirmed_q5: int,
 ) -> Tuple[float, bool]:
-    """返回 ``(rem5, q5_grid_count_known)``。
+    """返回 ``(rem5, q5_grid_count_known)`` — 幽灵金格贪心/精确匹配的剩余预算。
 
-    无 ``q5_grid_count`` 且无 ``q5_grid_min`` 时视为 ``q5_grid_min=0``。
+    已知 ``q5_grid_min`` 时：``rem5 = max(0, q5_grid_min - confirmed_q5)``（与定价 ``cq5`` 同源）；
+    若另有 ``q5_grid_count`` 再取更紧的 ``max(0, q5_grid_count - confirmed_q5)``。
+    仅 ``q5_grid_count`` 时用 count 差；二者皆无则 ``0``（无赛事金格预算）。
     """
     g5 = event_stat_grid_count_optional(event_stats, "q5_grid_count")
     m5 = event_stat_grid_min_optional(event_stats, "q5_grid_min")
-    if g5 is None and m5 is None:
-        m5 = 0
-    r5 = _phantom_tier_remaining_cells(m5, g5, confirmed_q5)
-    rem5 = float("inf") if r5 is None else float(r5)
-    return rem5, g5 is not None
+    q5 = int(confirmed_q5)
+    if m5 is not None:
+        rem5 = float(max(0, int(m5) - q5))
+        if g5 is not None:
+            rem5 = min(rem5, float(max(0, int(g5) - q5)))
+        return rem5, g5 is not None
+    if g5 is not None:
+        return float(max(0, int(g5) - q5)), True
+    return 0.0, False
 
 
 def _excluded_qualities_set_from_row(row: Dict[str, Any]) -> Set[int]:
@@ -847,8 +867,10 @@ def _phantom_global_gold_allocate(
     """
     艾莎第四回合幽灵全局分摊：
 
-    已知 ``q5_grid_min`` 且几何空格 < 金格预算：候选幽灵 footprint 全部记金；
-    否则按金权重贪心（先精确、再略超）或回退精确匹配。仍有金预算时从 ``vacant`` 扣减。
+    金格贪心/精确匹配预算 ``rem5`` = ``q5_grid_min - cq5``（``cq5`` 为合并表已占金格，含未知轮廓 1×1）；
+    有 ``q5_grid_count`` 时再与 ``q5_grid_count - cq5`` 取更紧者。
+    几何空格 < ``rem5`` 时仍只按 ``rem5`` 贪心记金（不无视预算整池标金）。
+    仍有金预算时从 ``vacant`` 扣减。
     未分到金的幽灵：已知 ``q5_grid_count`` 则记红，否则阈值定档或 Q5/Q6 分拆。
     """
     global_steps: List[Dict[str, Any]] = []
@@ -874,51 +896,25 @@ def _phantom_global_gold_allocate(
 
     gold_pool = _eligible_for_gold()
 
-    # ── 空格不足以吸收金格预算：候选幽灵全部记金 ──
+    vacant_geometric = _phantom_vacant_geometric_cells(board_snapshot)
     if (
         q5_min_known
         and gold_pool
         and rem5_ref[0] > 1e-9
         and rem5_ref[0] != float("inf")
+        and vacant_geometric < rem5_ref[0] - 1e-9
     ):
-        vacant = _phantom_vacant_geometric_cells(board_snapshot)
-        if vacant < rem5_ref[0] - 1e-9:
-            global_steps.append(
-                {
-                    "round": 0,
-                    "quality": 5,
-                    "reason": "vacant_insufficient_all_phantom_gold",
-                    "vacant": vacant,
-                    "rem5_budget": round(rem5_ref[0], 6),
-                }
-            )
-            phantom_gold = _phantom_assign_full_gold_to_pool(
-                gold_pool,
-                rnd=0,
-                reason="vacant_insufficient_all_gold",
-            )
-            rem5_ref[0] = max(0.0, rem5_ref[0] - phantom_gold)
-            if rem5_ref[0] > 1e-9 and vacant > 0:
-                deduct = min(float(vacant), rem5_ref[0])
-                rem5_ref[0] -= deduct
-                global_steps.append(
-                    {
-                        "round": 2,
-                        "quality": 5,
-                        "cells": round(deduct, 6),
-                        "reason": "vacant_absorb",
-                    }
-                )
-            _phantom_resolve_post_gold(
-                records,
-                q5_count_known=q5_count_known,
-                post_gold_thr_q5=post_gold_thr_q5,
-                post_gold_thr_q6=post_gold_thr_q6,
-                item_thr=item_thr,
-            )
-            return rem5_ref[0], global_steps
+        global_steps.append(
+            {
+                "round": 0,
+                "quality": 5,
+                "reason": "vacant_lt_rem5_greedy_capped",
+                "vacant": vacant_geometric,
+                "rem5_budget": round(rem5_ref[0], 6),
+            }
+        )
 
-    # ── 第一轮：按金权重回退精确匹配剩余金格 ──
+    # ── 第一轮：按金权重贪心/精确匹配，单笔分配受 ``rem5_ref`` 截断 ──
     if gold_pool and rem5_ref[0] > 1e-9:
         if rem5_ref[0] == float("inf"):
             for rec in gold_pool:
@@ -945,9 +941,8 @@ def _phantom_global_gold_allocate(
 
     # ── 第二轮：空格吸收金预算 ──
     if rem5_ref[0] > 1e-9:
-        vacant = _phantom_vacant_geometric_cells(board_snapshot)
-        if vacant > 0:
-            deduct = min(float(vacant), rem5_ref[0])
+        if vacant_geometric > 0:
+            deduct = min(float(vacant_geometric), rem5_ref[0])
             rem5_ref[0] -= deduct
             global_steps.append(
                 {
@@ -983,7 +978,7 @@ def phantom_unknown_tier_credit_q456(
     未入选者及金满后余格：已知 ``q5_grid_count`` 记红，否则阈值定档或 Q5/Q6 分拆。
     无 ``q5_grid_min`` 时仍用回退精确匹配 + 空格吸收。手动画板已确认品质或物品不参与分摊。
 
-    返回 ``({5: cells, 6: cells}, detail)``；detail 写入 ``pricing.phantom_unknown_quality``。
+    返回 ``({5: cells, 6: cells}, detail)``；``detail`` 仅供调试/单测，不再写入 ``pricing``。
     """
     t0 = time.perf_counter()
     phantom_uids = _phantom_uids_from_snapshot(board_snapshot)
@@ -1209,6 +1204,7 @@ def phantom_unknown_tier_credit_q456(
 def confirmed_tier_footprint_q456(
     board_snapshot: Dict[str, Any],
 ) -> Tuple[int, int, int]:
+    """合并表 Q4/Q5/Q6 已确认档位占位格数（几何 shape + 未知轮廓 1×1）。"""
     t0 = time.perf_counter()
     items = _grid_overlay.merged_items_dict_from_snapshot(board_snapshot)
     s4 = s5 = s6 = 0.0
@@ -1229,7 +1225,7 @@ def confirmed_tier_footprint_q456(
             continue
         if q not in (4, 5, 6):
             continue
-        fp = _geo_footprint_cells_from_shape_field(it.get("shape"))
+        fp = _confirmed_tier_item_footprint_cells(it)
         if fp is None:
             continue
         if q == 4:

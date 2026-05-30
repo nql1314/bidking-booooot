@@ -2438,17 +2438,14 @@ class GridWindow:
             self._phantom_pricing_busy = False
 
     def _pricing_emit_signature(self, pricing: Dict[str, Any]) -> Tuple[Any, ...]:
-        ph = pricing.get("phantom_unknown_quality")
-        ph_items = (ph.get("items") if isinstance(ph, dict) else None) or []
         resolved = tuple(
             sorted(
                 (
-                    str(row.get("uid") or ""),
-                    row.get("resolved_quality"),
-                    row.get("resolved_item_id"),
+                    str(uid),
+                    getattr(pk, "quality", None),
+                    getattr(pk, "manual_confirm_item_id", None),
                 )
-                for row in ph_items
-                if isinstance(row, dict)
+                for uid, pk in (getattr(self, "_phantom_items", {}) or {}).items()
             )
         )
         return (
