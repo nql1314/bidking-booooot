@@ -226,6 +226,17 @@ def log(message: str, *, gui_verbose_only: bool = False) -> None:
     print(line, flush=True)
 
 
+def _log_aisha_vacant_gate(message: str) -> None:
+    """艾莎第 4 回合道具空置门控：GUI 运行日志 + ``fresh_aisha_bot.log`` 等应用日志文件。"""
+    line = f"[aisha_vacant_gate] {message}"
+    # GUI 将 ``log`` 换成 GuiLogger（只写文本框、不走 stdout tee），需显式 append_app_log。
+    if type(log).__name__ == "GuiLogger":
+        log(line)
+        append_app_log(f"[{log_timestamp()}] {line}")
+    else:
+        log(line)
+
+
 def format_bid_details_line(details: dict[str, Any]) -> str:
     """将 :func:`compute_price` 返回的 ``details`` 压成单行，便于控制台查看出价链路。"""
     parts: list[str] = []
@@ -2369,10 +2380,17 @@ def _aisha_round4_tool_gate_vacant_count(
     pricing = board_snapshot.get("pricing") or {}
     vacant = pricing.get("vacant")
     if vacant is None:
+        _log_aisha_vacant_gate(
+            "effective=None (pricing.vacant 未知，无法计算 geom+auto_phantom)"
+        )
         return None, 0, 0
     geom = int(vacant)
     auto_cells = auto_vacant_rect_phantom_cell_count_from_snapshot(board_snapshot)
-    return geom + auto_cells, geom, auto_cells
+    effective = geom + auto_cells
+    _log_aisha_vacant_gate(
+        f"effective={effective} = pricing.vacant({geom}) + auto_phantom_cells({auto_cells})"
+    )
+    return effective, geom, auto_cells
 
 
 def _aisha_round4_q5_grid_stats_known(
@@ -2444,23 +2462,36 @@ def should_skip_tool_for_aisha_vacant_gate(
     auto = _automation_with_map_overlay(config, board_snapshot)
     min_vacant = _aisha_round4_tool_min_vacant(auto)
     if not isinstance(board_snapshot, dict):
+        _log_aisha_vacant_gate(f"round {rn}: no board snapshot, skip tool")
         return True, f"round {rn}: aisha round4 no board snapshot, skip tool"
-    q5_known, q5_key = _aisha_round4_q5_grid_stats_known(board_snapshot)
-    if q5_known:
-        return True, f"round {rn}: aisha round4 {q5_key} known, skip tool"
     effective, geom, auto_phantom = _aisha_round4_tool_gate_vacant_count(
         board_snapshot
     )
+    _log_aisha_vacant_gate(
+        f"round {rn}: min_vacant={min_vacant} (aisha_round4_tool_min_vacant)"
+    )
+    q5_known, q5_key = _aisha_round4_q5_grid_stats_known(board_snapshot)
+    if q5_known:
+        _log_aisha_vacant_gate(
+            f"round {rn}: {q5_key} known -> skip tool (effective 见上条)"
+        )
+        return True, f"round {rn}: aisha round4 {q5_key} known, skip tool"
     if effective is None:
         return True, f"round {rn}: aisha round4 vacant unknown, skip tool"
     if int(effective) < min_vacant:
         vac_detail = f"vacant={geom}"
         if auto_phantom > 0:
             vac_detail = f"{vac_detail}+auto_phantom={auto_phantom}={effective}"
+        _log_aisha_vacant_gate(
+            f"round {rn}: {vac_detail} < {min_vacant} -> skip tool"
+        )
         return (
             True,
             f"round {rn}: aisha round4 {vac_detail} < {min_vacant}, skip tool",
         )
+    _log_aisha_vacant_gate(
+        f"round {rn}: effective={effective} >= {min_vacant} -> 不拦截道具"
+    )
     return False, ""
 
 
@@ -2523,6 +2554,11 @@ def handle_round(
         tool_rounds=tool_rounds,
         board_snapshot=bs_data,
     )
+    if int(round_no) == AISHA_ROUND4_TOOL_ROUND:
+        _log_aisha_vacant_gate(
+            f"handle_round: skip_tool={skip_tool}"
+            + (f" reason={skip_reason}" if skip_reason else " (门控未介入)")
+        )
     if ran_tool_this_round and skip_tool:
         log(skip_reason, gui_verbose_only=True)
         ran_tool_this_round = False
@@ -2622,6 +2658,13 @@ def run_loop(
     prepare_target_window(config, center=True)
 
     log("BidKing bot 已启动（交互层；出价由 pricing.compute_price 读快照计算）；按 F9 停止")
+    if _aisha_round4_vacant_gate_enabled(config):
+        auto = _automation_with_map_overlay(config)
+        _log_aisha_vacant_gate(
+            "已启用第4回合道具空置门控；"
+            f"min_vacant={_aisha_round4_tool_min_vacant(auto)}；"
+            "第4回合将打印 effective=pricing.vacant+auto_phantom_cells"
+        )
     log("mode: full-window OCR -> lobby/end/round handling", gui_verbose_only=True)
     log(
         f"运行计划：每循环 {runs_per_cycle} 局 × {run_cycles} 循环 → 合计 {max_runs} 局；"

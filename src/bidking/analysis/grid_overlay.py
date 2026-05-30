@@ -32,6 +32,7 @@ from .grid_overlay_dims import (
 )
 from .grid_overlay_infer_vacant_rects import (
     AUTO_VACANT_RECT_PHANTOM_PREFIX,
+    VacantRectInferResult,
     VacantRectPhantomSpec,
     auto_vacant_rect_phantom_cell_count_from_snapshot,
     compute_vacant_rect_phantom_specs,
@@ -79,6 +80,7 @@ __all__ = [
     "auto_vacant_rect_phantom_cell_count_from_snapshot",
     "compute_vacant_rect_phantom_specs",
     "AUTO_VACANT_RECT_PHANTOM_PREFIX",
+    "VacantRectInferResult",
     "VacantRectPhantomSpec",
     "is_auto_vacant_rect_phantom_uid",
     "empty_zone_ignore_fraud_filter",

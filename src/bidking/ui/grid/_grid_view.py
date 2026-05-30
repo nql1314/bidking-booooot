@@ -1095,7 +1095,7 @@ class GridWindow:
         self._purge_auto_vacant_rect_phantoms()
         occ = self._occupied_cells_for_vacant_rect_infer()
         fraud_cells = self._fraud_cells_for_vacant_rect_infer(occ)
-        specs = _grid_overlay.compute_vacant_rect_phantom_specs(
+        infer_result = _grid_overlay.compute_vacant_rect_phantom_specs(
             game_state=self.state,
             manual_shapes=self._manual_shapes,
             phantom_items=self._phantom_items,
@@ -1110,6 +1110,17 @@ class GridWindow:
             fraud_cells=fraud_cells,
             enabled=True,
         )
+        for uid, shape in infer_result.inferred_log_shapes.items():
+            w, h, dc, dr = shape
+            if int(w) * int(h) <= 1:
+                self._manual_shapes.pop(uid, None)
+                continue
+            self._manual_shapes[uid] = (int(w), int(h), int(dc), int(dr))
+        for uid in infer_result.absorbed_phantom_uids:
+            self._phantom_items.pop(uid, None)
+            self._manual_shapes.pop(uid, None)
+            self._phantom_quality_pref.pop(uid, None)
+        specs = infer_result.specs
         for spec in specs:
             if spec.uid in self._auto_vacant_rect_phantom_suppress_uids:
                 continue

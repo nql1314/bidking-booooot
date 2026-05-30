@@ -865,7 +865,7 @@ class BoardPricingTests(unittest.TestCase):
             current_round=4,
             fraud_cells=set(),
             enabled=True,
-        )
+        ).specs
         self.assertEqual(len(specs), 1)
         sp = specs[0]
         self.assertTrue(sp.uid.startswith(grid_overlay_mod.AUTO_VACANT_RECT_PHANTOM_PREFIX))
@@ -915,7 +915,7 @@ class BoardPricingTests(unittest.TestCase):
             current_round=4,
             fraud_cells=set(),
             enabled=True,
-        )
+        ).specs
         prefix_bottom = max_box_id // GRID_COLS
         bottom_uids = {
             s.uid for s in specs if s.h == 1 and s.dr + s.h - 1 >= prefix_bottom
@@ -961,7 +961,7 @@ class BoardPricingTests(unittest.TestCase):
             current_round=4,
             fraud_cells=set(),
             enabled=True,
-        )
+        ).specs
         one_by_one = [s for s in specs if s.w == 1 and s.h == 1]
         self.assertEqual(len(one_by_one), 1)
         lp = one_by_one[0]
@@ -1007,7 +1007,7 @@ class BoardPricingTests(unittest.TestCase):
             current_round=4,
             fraud_cells=set(),
             enabled=True,
-        )
+        ).specs
         self.assertEqual(len(specs), 1)
         sp = specs[0]
         self.assertEqual((sp.w, sp.h, sp.dc, sp.dr), (3, 1, 3, 1))
@@ -1077,7 +1077,7 @@ class BoardPricingTests(unittest.TestCase):
             current_round=4,
             fraud_cells=set(),
             enabled=True,
-        )
+        ).specs
         covered: set[tuple[int, int]] = set()
         for sp in specs:
             for dr in range(sp.dr, sp.dr + sp.h):
@@ -1136,7 +1136,7 @@ class BoardPricingTests(unittest.TestCase):
             current_round=4,
             fraud_cells=set(),
             enabled=True,
-        )
+        ).specs
         one_by_one = [s for s in specs if s.w == 1 and s.h == 1]
         self.assertEqual(one_by_one, [])
         larger = [s for s in specs if s.w > 1 or s.h > 1]
@@ -1150,6 +1150,122 @@ class BoardPricingTests(unittest.TestCase):
             for ddc in range(lp.w)
         }
         self.assertNotIn(ghost, ghost_cells)
+
+    def test_unknown_contour_log_merges_infer_phantom_vac_before_emit(self) -> None:
+        """第 6 步：日志 Q5 与本轮 ``phantom_vac_*``（品质未定）合并，吸收幽灵并扩大轮廓。"""
+        from bidking.parsing.state import GameState, ItemKnowledge
+
+        st = GameState()
+        st.current_round = 4
+        st.map_id = 4509
+        for q in (1, 2, 3, 4):
+            st._scan_history.append(("quality", q, frozenset({f"log_q{q}"})))
+        anchors = [(0, 0), (0, 9), (9, 0), (9, 9)]
+        for q, (r, c) in zip((1, 2, 3, 4), anchors):
+            st.items[f"log_q{q}"] = ItemKnowledge(
+                uid=f"log_q{q}",
+                box_id=r * 10 + c,
+                box_id_confirmed=True,
+                shape=11,
+                quality=q,
+            )
+        st.items["log_g5"] = ItemKnowledge(
+            uid="log_g5",
+            box_id=49,
+            box_id_confirmed=False,
+            shape=None,
+            quality=5,
+            excluded_qualities={1, 2, 3, 4},
+            excluded_categories={101},
+        )
+        occ = set(anchors)
+        occ.update([(3, 8), (4, 7), (5, 8), (4, 9)])
+        res = grid_overlay_mod.compute_vacant_rect_phantom_specs(
+            game_state=st,
+            manual_shapes={},
+            phantom_items={},
+            phantom_quality_pref={},
+            occupied_cells=set(occ),
+            vacant_manual_suppress=set(),
+            max_box_id=55,
+            raw_pricing={"event_stats": {"q5_count": 99}},
+            current_round=4,
+            enabled=True,
+        )
+        self.assertIn("log_g5", res.inferred_log_shapes)
+        w, h, dc, dr = res.inferred_log_shapes["log_g5"]
+        self.assertGreater(w * h, 1)
+        absorbed = set(res.absorbed_phantom_uids)
+        self.assertTrue(absorbed)
+        for sp in res.specs:
+            self.assertNotIn(sp.uid, absorbed)
+        self.assertEqual(w, 1)
+        self.assertGreaterEqual(h, 2)
+
+    def test_unknown_contour_log_merges_explicit_q_phantom_vac_stack(self) -> None:
+        """Q5 日志 2×1 可与上方已标 Q6 的 phantom_vac 2×1 叠成 2×2。"""
+        from bidking.analysis.grid_overlay_infer_vacant_rects import VacantRectPhantomSpec
+        from bidking.parsing.state import GameState, ItemKnowledge
+
+        st = GameState()
+        st.current_round = 4
+        st.map_id = 4509
+        for q in (1, 2, 3, 4):
+            st._scan_history.append(("quality", q, frozenset({f"log_q{q}"})))
+        anchors = [(0, 0), (0, 9), (9, 0), (9, 9)]
+        for q, (r, c) in zip((1, 2, 3, 4), anchors):
+            st.items[f"log_q{q}"] = ItemKnowledge(
+                uid=f"log_q{q}",
+                box_id=r * 10 + c,
+                box_id_confirmed=True,
+                shape=11,
+                quality=q,
+            )
+        st.items["log_g5"] = ItemKnowledge(
+            uid="log_g5",
+            box_id=49,
+            box_id_confirmed=False,
+            shape=None,
+            quality=5,
+            excluded_qualities={1, 2, 3, 4},
+            excluded_categories={101},
+        )
+        occ = set(anchors)
+        occ.update([(3, 7), (4, 7), (5, 8), (4, 9), (3, 8)])
+        specs_in = [
+            VacantRectPhantomSpec(
+                uid="phantom_vac_0408_1x1",
+                w=1,
+                h=1,
+                dc=8,
+                dr=4,
+                quality=None,
+            ),
+            VacantRectPhantomSpec(
+                uid="phantom_vac_0308_2x1",
+                w=2,
+                h=1,
+                dc=8,
+                dr=3,
+                quality=6,
+            ),
+        ]
+        from bidking.analysis.grid_overlay_infer_vacant_rects import (
+            _unknown_contour_merge_expand_log_shapes,
+        )
+
+        inferred, absorbed = _unknown_contour_merge_expand_log_shapes(
+            game_state=st,
+            manual_shapes={},
+            phantom_items={},
+            phantom_quality_pref={},
+            occupied_cells=set(occ),
+            vacant_manual_suppress=set(),
+            max_box_id=55,
+            phantom_specs=specs_in,
+        )
+        self.assertEqual(inferred.get("log_g5"), (2, 2, 8, 3))
+        self.assertIn("phantom_vac_0308_2x1", absorbed)
 
     def test_vacant_rect_phantom_skipped_until_q1234_ready(self) -> None:
         """扫描史未覆盖 Q1–Q4 时不推断 phantom_vac（与回合数无关）。"""
@@ -1168,7 +1284,7 @@ class BoardPricingTests(unittest.TestCase):
             raw_pricing={},
             current_round=4,
             enabled=True,
-        )
+        ).specs
         self.assertEqual(specs, [])
 
     def test_unique_item_cid_without_snapshot_shape_price_matches_csv_row(self) -> None:
