@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..vacant_red import apply_vacant_red_floor_ceiling_pick
+from ..vacant_red import (
+    apply_early_auto_fill_ceiling_anchor,
+    apply_vacant_red_floor_ceiling_pick,
+)
 
 
 def compute_base_bid_points(
@@ -35,11 +38,23 @@ def compute_base_bid_points(
     if config is None or board_snapshot is None or round_no is None:
         return p, meta
 
-    anchor, vac_pick = apply_vacant_red_floor_ceiling_pick(
-        config, board_snapshot, pricing, int(round_no), int(p)
-    )
+    anchor = int(p)
     meta_out = dict(meta)
     meta_out["pricing_reason"] = f"{meta_out.get('bid_points_source', '')}: base={p}"
+
+    early_pick, early_detail = apply_early_auto_fill_ceiling_anchor(
+        config, pricing, int(round_no), anchor
+    )
+    if early_detail.get("applied"):
+        anchor = int(early_pick)
+        meta_out["early_auto_fill_ceiling_anchor"] = early_detail
+        meta_out["pricing_reason"] = (
+            f"{meta_out['pricing_reason']}; early_auto_fill_ceiling->{anchor}"
+        ).strip("; ")
+
+    anchor, vac_pick = apply_vacant_red_floor_ceiling_pick(
+        config, board_snapshot, pricing, int(round_no), anchor
+    )
     if vac_pick.get("applied"):
         meta_out["vacant_red_floor_ceiling_pick"] = vac_pick
         meta_out["pricing_reason"] = (

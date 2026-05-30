@@ -24,6 +24,44 @@ class TestPricingComputeSmoke(unittest.TestCase):
         self.assertTrue(det.get("fallback"))
         self.assertIn("reason", det)
 
+    def test_aisha_early_round_ceiling_when_auto_fill_on_vacant_red_off(self) -> None:
+        cfg: dict = {
+            "board_snapshot": {"enabled": False},
+            "pricing": {
+                "fallback_bid_price": 11111,
+                "infer_vacant_rect_phantoms": True,
+                "enable_vacant_red_floor_ceiling_pick": False,
+            },
+            "automation": {
+                "selected_mode": "aisha_premium",
+                "bid_ratio_by_round": {"3": 1.0},
+            },
+        }
+        snap = {
+            "schema_version": 2,
+            "game_state": {"map_id": 4501, "players": {}},
+            "pricing": {
+                "total": 1000.0,
+                "points": 50000,
+                "points_floor": 40000,
+                "points_ceiling": 90000,
+                "vacant": 8,
+                "ahmad_points": 100,
+            },
+        }
+        p, det = compute_price(
+            cfg,
+            config_path=Path(__file__).resolve(),
+            round_no=3,
+            board_snapshot=snap,
+            price_config={"enable_opponent_bid_adjustment": False},
+        )
+        self.assertFalse(det.get("fallback"))
+        self.assertEqual(int(det.get("source_value") or 0), 90000)
+        early = (det.get("board_snapshot_bid") or {}).get("early_auto_fill_ceiling_anchor")
+        self.assertTrue(isinstance(early, dict) and early.get("applied"))
+        self.assertGreater(p, 0)
+
     def test_aisha_role_uses_points(self) -> None:
         cfg: dict = {
             "board_snapshot": {"enabled": False},

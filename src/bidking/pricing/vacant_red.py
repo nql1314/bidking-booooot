@@ -241,7 +241,7 @@ def _aggressive_floor_ceiling_choice(
         mo = float(max_opponent_bid)
         fl = float(pf_i)
         if fl > mo * 1.2:
-            return pf_i, "aggressive_floor_gt_opp_x1_2", detail
+            return avg_i, "aggressive_floor_gt_opp_x1_2", detail
         if fl > mo:
             return avg_i, "aggressive_floor_gt_max_opp_avg", detail
         if mo >= 1.2 * fl:
@@ -252,6 +252,44 @@ def _aggressive_floor_ceiling_choice(
     if 5 <= vac_i <= 15:
         return avg_i, "aggressive_vac_5_12_avg", detail
     return red_i, "aggressive_vac_ge_12_red", detail
+
+
+def apply_early_auto_fill_ceiling_anchor(
+    config: dict[str, Any],
+    pricing: dict[str, Any],
+    round_no: int,
+    fin: int,
+) -> tuple[int, dict[str, Any]]:
+    """第 1–3 回合：自动填充已开、未启用空置红格价格选取时，锚定价用 ``points_ceiling``。"""
+    from ..config.runtime import infer_vacant_rect_phantoms_enabled
+
+    r = int(round_no)
+    if r not in (1, 2, 3):
+        return int(fin), {"applied": False, "reason": "not_round_1_2_or_3"}
+    if config.get("pricing", {}).get("enable_vacant_red_floor_ceiling_pick", True):
+        return int(fin), {"applied": False, "reason": "vacant_red_floor_ceiling_pick_enabled"}
+    if not infer_vacant_rect_phantoms_enabled(config, current_round=None):
+        return int(fin), {"applied": False, "reason": "auto_fill_disabled"}
+    pf = pricing.get("points_floor")
+    pc = pricing.get("points_ceiling")
+    if pf is None or pc is None:
+        return int(fin), {"applied": False, "reason": "missing_floor_ceiling"}
+    try:
+        pf_i, pc_i = int(pf), int(pc)
+    except (TypeError, ValueError):
+        return int(fin), {"applied": False, "reason": "invalid_floor_ceiling"}
+    if pf_i == pc_i:
+        return int(fin), {"applied": False, "reason": "floor_equals_ceiling"}
+    return pc_i, {
+        "applied": True,
+        "decision_rule": "early_auto_fill_points_ceiling",
+        "chosen_points": pc_i,
+        "points_floor": pf_i,
+        "points_ceiling": pc_i,
+        "before_pick": int(fin),
+        "after_pick": pc_i,
+        "round": r,
+    }
 
 
 def apply_vacant_red_floor_ceiling_pick(

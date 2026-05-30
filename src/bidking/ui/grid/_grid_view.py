@@ -1110,7 +1110,7 @@ class GridWindow:
         )
         self._purge_auto_vacant_rect_phantoms()
         occ = self._occupied_cells_for_vacant_rect_infer()
-        # 诈骗格剔除仅用于橘红空置/定价计数；phantom_vac 推断用几何空置，在扩充之后由 UI 再套 fraud。
+        fraud_for_infer = self._fraud_cells_for_vacant_rect_infer(occ)
         infer_result = _grid_overlay.compute_vacant_rect_phantom_specs(
             game_state=self.state,
             manual_shapes=self._manual_shapes,
@@ -1123,6 +1123,7 @@ class GridWindow:
             ),
             raw_pricing=raw_pricing,
             current_round=int(self.state.current_round or 1),
+            fraud_cells=fraud_for_infer,
             enabled=True,
         )
         for uid, shape in infer_result.inferred_log_shapes.items():

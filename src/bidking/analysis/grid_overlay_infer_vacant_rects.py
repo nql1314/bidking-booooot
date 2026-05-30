@@ -774,6 +774,36 @@ def _pass4_emit_deferred_temp_1x1_phantoms(ctx: _VacantRectInferCtx) -> None:
         _try_emit_rect_phantom(ctx, (1, 1, c, r), block_temp_ghost=False)
 
 
+def _phantom_spec_fully_in_fraud_cells(
+    spec: VacantRectPhantomSpec,
+    fraud_cells: Set[Tuple[int, int]],
+) -> bool:
+    if not fraud_cells:
+        return False
+    cells = _phantom_spec_cells(spec)
+    return bool(cells) and cells <= fraud_cells
+
+
+def _pass_post4_drop_specs_fully_in_fraud_cells(
+    ctx: _VacantRectInferCtx,
+    fraud_cells: Optional[Set[Tuple[int, int]]],
+) -> None:
+    """步骤 2–4 用几何空置推断；输出后剔除 footprint 完全落在诈骗格内的幽灵。"""
+    fraud = fraud_cells or set()
+    if not fraud:
+        return
+    kept: List[VacantRectPhantomSpec] = []
+    for spec in ctx.out:
+        if _phantom_spec_fully_in_fraud_cells(spec, fraud):
+            cells = _phantom_spec_cells(spec)
+            ctx.taken -= cells
+            ctx.vacant |= cells
+            _vacant_phantom_apply_quality_count_delta(ctx, spec, -1)
+        else:
+            kept.append(spec)
+    ctx.out = kept
+
+
 def _pass_three_sided_rect_fill(ctx: _VacantRectInferCtx) -> None:
     """不规则剩余区：逐点双向贪心扩展取最大矩形推断幽灵，移除后重复。"""
     work = ctx.vacant - ctx.taken
@@ -1527,8 +1557,9 @@ def compute_vacant_rect_phantom_specs(
     品质 1–4 全量扫描已发生、且场上 Q1–Q4 轮廓与锚格均已可靠锁定时，
     在剩余空置区多轮推断 ``phantom_vac_*``。
 
-    推断全程使用**几何空置**（仅剔除占位与手动画板 suppress），**不使用** ``fraud_cells``；
-    诈骗格剔除仅在画板橘红空置与定价计数中生效（见 UI 同步顺序）。
+    步骤 1–4 使用**几何空置**（仅剔除占位与手动画板 suppress），不在推断中剔除诈骗格；
+    步骤 4 之后若提供 ``fraud_cells``，则丢弃 footprint **完全**落在诈骗格内的幽灵。
+    诈骗格剔除在画板橘红空置与定价计数中另行生效。
 
     0. 将场上 1×1 锚格的轮廓未知日志件、1×1 品质未定手画幽灵从占位中剥离为前置空置格，
        并记录锚格品质（手画幽灵仅在手选显式 Q 时记录）；
@@ -1536,6 +1567,7 @@ def compute_vacant_rect_phantom_specs(
     2. 连通区实心矩形；
     3. 不规则剩余区：逐点 H/V 双向贪心扩展 → 取最大矩形（方度 tie-break），移除后重复；
     4. 第 1 步临时占格、仍未被 2/3 步吸收的 1×1 → 输出对应幽灵；
+    4b. 剔除 footprint 完全位于 ``fraud_cells`` 内的幽灵（仅当 ``fraud_cells`` 非空）；
     5. 相邻幽灵并集为实心矩形时合并，直至稳定；
     6. 覆盖步骤 0 记录锚格的 ``phantom_vac_*`` → 源物品扩至该矩形，并删除对应幽灵。
 
@@ -1543,9 +1575,8 @@ def compute_vacant_rect_phantom_specs(
     - 候选品质唯一 → 写入 ``quality``；
     - 候选物品唯一 → 写入 ``manual_confirm_item_id``。
 
-    ``fraud_cells`` 保留兼容旧调用，推断内忽略；``max_hole_cells`` 仅写入上下文（第 2 步已不做诈骗空洞容错）。
+    ``max_hole_cells`` 仅写入上下文（第 2 步已不做诈骗空洞容错）。
     """
-    del fraud_cells
     empty = VacantRectInferResult([], {}, frozenset())
     if not enabled:
         return empty
@@ -1606,6 +1637,7 @@ def compute_vacant_rect_phantom_specs(
         _pass_full_rect_fill(ctx)
         _pass_three_sided_rect_fill(ctx)
         _pass4_emit_deferred_temp_1x1_phantoms(ctx)
+        _pass_post4_drop_specs_fully_in_fraud_cells(ctx, fraud_cells)
         specs = ctx.out
         if specs and ctx is not None:
             ctx.out = specs

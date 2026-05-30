@@ -226,8 +226,8 @@ class RawPricingBoundsTests(unittest.TestCase):
         )
         self.assertIsNone(d.get("q4_grid_count"))
 
-    def test_build_raw_pricing_unique_q5_count_from_map_skill_avg(self) -> None:
-        """金均价日志 + 阈值内唯一 ``n`` → 写入 ``q5_count`` / ``q5_price_total``。"""
+    def test_build_raw_pricing_does_not_infer_q5_from_price_avg_only(self) -> None:
+        """仅金均价日志不得反推件数/总价。"""
         logs = [
             {
                 "game_data": {
@@ -237,16 +237,31 @@ class RawPricingBoundsTests(unittest.TestCase):
                 }
             }
         ]
-        raw = build_raw_pricing_dict(
-            map_id=0,
-            skill_logs=logs,
-            price_avg_infer_max_item_count=30,
-        )
+        raw = build_raw_pricing_dict(map_id=0, skill_logs=logs)
         st = raw["event_stats"]
-        self.assertEqual(st.get("q5_count"), 6)
-        self.assertEqual(st.get("q5_price_total"), int(round(38398.168 * 6)))
+        self.assertEqual(st.get("q5_price_avg"), 38398.168)
+        self.assertIsNone(st.get("q5_count"))
+        self.assertIsNone(st.get("q5_price_total"))
 
-    def test_finalize_tier_with_integer_price_avg(self) -> None:
+    def test_build_raw_pricing_q4_from_total_via_csv_combo(self) -> None:
+        """紫总价日志 + CSV 预计算唯一解 → 写入件数/占格（不依赖均价）。"""
+        logs = [
+            {
+                "game_data": {
+                    "MapSkillLog": [
+                        {"SkillCid": 503, "HitItemTotalPrice": 15492},
+                    ]
+                }
+            }
+        ]
+        raw = build_raw_pricing_dict(map_id=0, skill_logs=logs)
+        st = raw["event_stats"]
+        self.assertEqual(st.get("q4_price_total"), 15492)
+        self.assertEqual(st.get("q4_count"), 2)
+        self.assertEqual(st.get("q4_grid_count"), 7)
+        self.assertEqual(st.get("q4_price_avg"), 7746.0)
+
+    def test_finalize_tier_with_observed_count(self) -> None:
         d = {
             "count": 4,
             "grid_count": 12,
@@ -258,7 +273,6 @@ class RawPricingBoundsTests(unittest.TestCase):
             count_k="count",
             grid_k="grid_count",
             avg_grid_k="grid_avg",
-            avg_price_k="price_avg",
             count_min_k="count_min",
             grid_min_k="grid_min",
         )
@@ -278,7 +292,6 @@ class RawPricingBoundsTests(unittest.TestCase):
             count_k="count",
             grid_k="grid_count",
             avg_grid_k="grid_avg",
-            avg_price_k="price_avg",
             count_min_k="count_min",
             grid_min_k="grid_min",
         )

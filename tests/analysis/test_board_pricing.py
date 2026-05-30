@@ -1055,7 +1055,7 @@ class BoardPricingTests(unittest.TestCase):
         self.assertEqual(top[:2], (3, 3))
 
     def test_vacant_rect_pass3_from_pricing_context_bottom_block(self) -> None:
-        """data/pricing_context.json：底部 9–11 行 1–4 列应能推断 4×3 而非仅 3×3。"""
+        """pricing_context：几何推断可出幽灵；步骤 4 后完全落在诈骗格内的幽灵被剔除。"""
         import json
         from pathlib import Path
 
@@ -1117,7 +1117,7 @@ class BoardPricingTests(unittest.TestCase):
             )
         for q in (1, 2, 3, 4):
             st._scan_history.append(("quality", q, frozenset()))
-        specs = grid_overlay_mod.compute_vacant_rect_phantom_specs(
+        kw = dict(
             game_state=st,
             manual_shapes=manual,
             phantom_items={},
@@ -1127,16 +1127,38 @@ class BoardPricingTests(unittest.TestCase):
             max_box_id=limit,
             raw_pricing=data.get("raw") or {},
             current_round=4,
-            fraud_cells=fraud,
             enabled=True,
+        )
+        from bidking.analysis.grid_overlay_infer_vacant_rects import (
+            _phantom_spec_cells,
+        )
+
+        specs_geo = grid_overlay_mod.compute_vacant_rect_phantom_specs(
+            **kw, fraud_cells=set()
         ).specs
-        four_by_three = [
-            s for s in specs if (int(s.w), int(s.h)) in ((4, 3), (3, 4))
-        ]
         self.assertTrue(
-            four_by_three,
-            "expected a 4x3 phantom in bottom vacant block, got %s"
-            % [s.uid for s in specs],
+            specs_geo,
+            "expected geometric vacant-rect phantoms before fraud filter",
+        )
+        specs_filtered = grid_overlay_mod.compute_vacant_rect_phantom_specs(
+            **kw, fraud_cells=fraud
+        ).specs
+        for spec in specs_filtered:
+            cells = _phantom_spec_cells(spec)
+            self.assertFalse(
+                cells <= fraud,
+                "phantom %s must not lie entirely in fraud cells" % spec.uid,
+            )
+        dropped_uids = {
+            s.uid for s in specs_geo if _phantom_spec_cells(s) <= fraud
+        }
+        self.assertTrue(
+            dropped_uids,
+            "pricing_context should have at least one phantom fully in fraud cells",
+        )
+        self.assertEqual(
+            {s.uid for s in specs_filtered},
+            {s.uid for s in specs_geo if s.uid not in dropped_uids},
         )
 
     def test_vacant_rect_pass3_geo_prefers_4x3_over_3x3(self) -> None:
@@ -2181,6 +2203,93 @@ class BoardPricingTests(unittest.TestCase):
         p = bp.build_snapshot_pricing_dict(snap, snapshot_path_hint=None)
         self.assertNotEqual(p.get("early_vacant_csv_group"), "q4+q5+q6~q5+q6")
         self.assertNotEqual(p.get("early_vacant_unit_from_scan"), 7500)
+
+    def test_parse_auto_vacant_phantom_price_quantile(self) -> None:
+        from bidking.config.runtime import (
+            parse_auto_vacant_phantom_price_quantile,
+            resolve_auto_vacant_phantom_price_quantile,
+        )
+        from bidking.parsing import item_db
+        from bidking.parsing.state import CsvItem
+
+        self.assertIsNone(parse_auto_vacant_phantom_price_quantile(None))
+        self.assertIsNone(parse_auto_vacant_phantom_price_quantile("avg"))
+        self.assertAlmostEqual(
+            parse_auto_vacant_phantom_price_quantile("p50") or 0.0, 0.5
+        )
+        self.assertAlmostEqual(
+            parse_auto_vacant_phantom_price_quantile("p25") or 0.0, 0.25
+        )
+        self.assertAlmostEqual(
+            resolve_auto_vacant_phantom_price_quantile(
+                pricing_dict={"auto_vacant_phantom_price": "p50"}
+            )
+            or 0.0,
+            0.5,
+        )
+        pairs = [(100.0, 0.9), (10_000.0, 0.05), (20_000.0, 0.05)]
+        self.assertAlmostEqual(item_db.weighted_percentile(pairs, 0.25), 100.0)
+        mean = sum(v * w for v, w in pairs) / sum(w for _, w in pairs)
+        self.assertGreater(mean, 500.0)
+        cands = [
+            CsvItem(901, "low", [101], 22, 5, 100),
+            CsvItem(902, "mid", [101], 22, 5, 10_000),
+            CsvItem(903, "high", [101], 22, 6, 20_000),
+        ]
+        est_avg = item_db._weighted_est_price(cands, None, None, quantile=None)
+        est_p25 = item_db._weighted_est_price(cands, None, None, quantile=0.25)
+        self.assertAlmostEqual(est_p25, 100.0)
+        self.assertGreater(est_avg or 0.0, est_p25 or 0.0)
+
+    def test_auto_vacant_phantom_total_respects_p25_config(self) -> None:
+        from unittest.mock import patch
+
+        from bidking.parsing.state import CsvItem
+
+        uid = "phantom_vac_3_3_2x2"
+        snap = {
+            "map_id": 2101,
+            "game_state": {"items": {}},
+            "grid_overlay": {
+                "phantom_items": {
+                    uid: {
+                        "uid": uid,
+                        "box_id": 33,
+                        "box_id_confirmed": True,
+                        "shape": 22,
+                        "quality": None,
+                        "categories": [],
+                        "item_cid": None,
+                        "price": None,
+                        "manual_confirm_item_id": None,
+                        "excluded_categories": [],
+                        "excluded_qualities": [1, 2, 3, 4],
+                    }
+                },
+                "manual_shapes": {uid: [2, 2, 3, 3]},
+                "phantom_quality_pref": {uid: "_phantom_q_infer"},
+            },
+        }
+        fake = [
+            CsvItem(901, "low", [101], 22, 5, 100),
+            CsvItem(902, "mid", [101], 22, 5, 10_000),
+            CsvItem(903, "high", [101], 22, 6, 20_000),
+        ]
+        idx = {i.item_id: i for i in fake}
+        with patch.object(bp, "_load_item_prices_db", return_value=(idx, fake)):
+            total_avg = bp.compute_items_total(
+                {**snap, "raw_pricing": {"auto_vacant_phantom_price": "avg"}}
+            )
+            total_p25 = bp.compute_items_total(
+                {**snap, "raw_pricing": {"auto_vacant_phantom_price": "p25"}}
+            )
+            hand_snap = self._phantom_only_snapshot(quality_pref="_phantom_q_infer")
+            hand_avg = bp.compute_items_total(
+                {**hand_snap, "raw_pricing": {"auto_vacant_phantom_price": "p25"}}
+            )
+        self.assertAlmostEqual(total_p25, 100.0)
+        self.assertGreater(total_avg, total_p25)
+        self.assertGreater(hand_avg, total_p25)
 
     def _phantom_only_snapshot(
         self,
