@@ -175,7 +175,6 @@ def _confirmed_tier_item_footprint_cells(it: Dict[str, Any]) -> Optional[float]:
 
 _PHANTOM_TIER_CANDIDATE_QUALITIES = frozenset({5, 6})
 _PHANTOM_TIER_DEFAULT_ITEM_PROB_THRESHOLD = 0.6
-_PHANTOM_TIER_DEFAULT_QUALITY_PROB_THRESHOLD = 0.6
 _PHANTOM_TIER_DEFAULT_POST_GOLD_Q5_THRESHOLD = 0.7
 _PHANTOM_TIER_DEFAULT_POST_GOLD_Q6_THRESHOLD = 0.7
 
@@ -188,7 +187,6 @@ def resolve_phantom_unknown_tier_config(
     """解析 ``pricing.phantom_unknown_tier`` / ``raw_pricing.phantom_unknown_tier`` 阈值。"""
     cfg: Dict[str, float] = {
         "item_prob_threshold": _PHANTOM_TIER_DEFAULT_ITEM_PROB_THRESHOLD,
-        "quality_prob_threshold": _PHANTOM_TIER_DEFAULT_QUALITY_PROB_THRESHOLD,
         "post_gold_quality_threshold_q5": _PHANTOM_TIER_DEFAULT_POST_GOLD_Q5_THRESHOLD,
         "post_gold_quality_threshold_q6": _PHANTOM_TIER_DEFAULT_POST_GOLD_Q6_THRESHOLD,
     }
@@ -207,7 +205,6 @@ def resolve_phantom_unknown_tier_config(
                 cfg["post_gold_quality_threshold_q6"] = legacy_f
         for key in (
             "item_prob_threshold",
-            "quality_prob_threshold",
             "post_gold_quality_threshold_q5",
             "post_gold_quality_threshold_q6",
         ):
@@ -987,7 +984,6 @@ def phantom_unknown_tier_credit_q456(
 
     alloc_cfg = _phantom_tier_alloc_config(board_snapshot)
     item_thr = float(alloc_cfg["item_prob_threshold"])
-    qual_thr = float(alloc_cfg["quality_prob_threshold"])
     post_gold_thr_q5 = float(alloc_cfg["post_gold_quality_threshold_q5"])
     post_gold_thr_q6 = float(alloc_cfg["post_gold_quality_threshold_q6"])
     rem5_init, q5_count_known = _phantom_effective_q5_budget(
@@ -1179,7 +1175,6 @@ def phantom_unknown_tier_credit_q456(
         "tier_credit_for_min_q6": round(credit_for_tier_min[6], 6),
         "alloc_config": {
             "item_prob_threshold": item_thr,
-            "quality_prob_threshold": qual_thr,
             "post_gold_quality_threshold_q5": post_gold_thr_q5,
             "post_gold_quality_threshold_q6": post_gold_thr_q6,
         },

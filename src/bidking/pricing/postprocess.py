@@ -169,13 +169,28 @@ def apply_late_round_low_bid_surrender(
     return fin, payload
 
 
+def known_items_total_from_pricing(pricing: Any) -> float | None:
+    """从 ``pricing`` 取已知物品总价；缺字段时返回 ``None``（由调用方决定是否回算）。"""
+    if not isinstance(pricing, dict):
+        return None
+    raw = pricing.get("known_items_total")
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 def apply_bid_cap(
     config: dict[str, Any],
     final_price: int,
     payload: dict[str, Any],
     *,
+    known_items_total: float | int | None = None,
     pricing_total: float | int | None = None,
 ) -> tuple[int, dict[str, Any]]:
+    """封顶出价；``bid_cap_skip_when_total_above`` 与 **已知物品总价**（不含 ``phantom_vac_*`` 自动填充）比较。"""
     automation = config.get("automation") or {}
     bid_cap = max(0, parse_int_config(automation.get("bid_cap_price"), 0))
     if bid_cap <= 0:
@@ -188,21 +203,26 @@ def apply_bid_cap(
     if skip_threshold <= 0:
         skip_threshold = bid_cap
 
-    total_f: float | None = None
-    if pricing_total is not None:
+    compare_total: float | None = None
+    if known_items_total is not None:
         try:
-            total_f = float(pricing_total)
+            compare_total = float(known_items_total)
         except (TypeError, ValueError):
-            total_f = None
+            compare_total = None
+    if compare_total is None and pricing_total is not None:
+        try:
+            compare_total = float(pricing_total)
+        except (TypeError, ValueError):
+            compare_total = None
 
-    if total_f is not None and total_f > float(skip_threshold):
+    if compare_total is not None and compare_total > float(skip_threshold):
         payload["bid_cap"] = {
             "enabled": True,
             "cap_price": bid_cap,
             "applied": False,
             "skipped": True,
-            "reason": "pricing_total_above_skip_threshold",
-            "pricing_total": total_f,
+            "reason": "known_items_total_above_skip_threshold",
+            "known_items_total": compare_total,
             "skip_threshold": skip_threshold,
             "original_price": int(final_price),
         }

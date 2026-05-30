@@ -15,9 +15,9 @@
     {
       "path": "automation.bid_cap_skip_when_total_above",
       "type": "int",
-      "label": "估价超限跳过封顶",
-      "description": "本局估价总额超过此值时不再应用封顶（高估值局保留策略出价）。0 表示始终封顶。",
-      "scope": "config",
+      "label": "保险价",
+      "description": "本局估价总额超过此值时不再应用封顶（高估值局保留策略出价）。0 表示按同封顶价，和地图保险价一致",
+      "scope": "map",
       "group": "自动化",
       "hide": false
     },
@@ -230,24 +230,15 @@
       "type": "bool",
       "label": "第4回合空格自动填充",
       "description": "第4回合及之后：空置区近似实心矩形自动 phantom_vac；随后对已知品质未知轮廓做迭代合并扩充。二者共用此开关。",
-      "scope": "config",
-      "group": "出价",
-      "hide": false
-    },
-    {
-      "path": "pricing.phantom_unknown_tier.quality_prob_threshold",
-      "type": "float",
-      "label": "幽灵金格推断阈值",
-      "description": "艾莎第四回合：金品质权重超过该阈值（0–1）的幽灵格优先分配金格。默认 0.6。",
-      "scope": "config",
+      "scope": "both",
       "group": "出价",
       "hide": false
     },
     {
       "path": "pricing.phantom_unknown_tier.post_gold_quality_threshold_q5",
       "type": "float",
-      "label": "幽灵金满后定金阈值",
-      "description": "金格预算用尽后：金品质权重超过该阈值（0–1）则余格记金，否则进入红判定或 Q5/Q6 分拆。默认 0.7。",
+      "label": "幽灵金满后定金阈值（不知道金总格时）",
+      "description": "金格预算用尽后：金品质权重超过该阈值（0–1）则余格记金。默认 0.7。",
       "scope": "config",
       "group": "出价",
       "hide": false
@@ -255,8 +246,8 @@
     {
       "path": "pricing.phantom_unknown_tier.post_gold_quality_threshold_q6",
       "type": "float",
-      "label": "幽灵金满后定红阈值",
-      "description": "金格预算用尽后：红品质权重超过该阈值（0–1）则余格记红，否则保留 Q5/Q6 候选分拆。默认 0.7。",
+      "label": "幽灵金满后定红阈值（不知道金总格时）",
+      "description": "金格预算用尽后：红品质权重超过该阈值（0–1）则余格记红。默认 0.7。",
       "scope": "config",
       "group": "出价",
       "hide": false

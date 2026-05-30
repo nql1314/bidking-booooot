@@ -121,7 +121,7 @@ def load_runtime(path: Optional[Path | str] = None) -> RuntimeConfig:
     return RuntimeConfig(raw=merged, source_path=src.resolve() if src.is_file() else cp.resolve())
 
 
-from ..analysis.grid_overlay_infer_vacant_rects import vacant_rect_phantom_infer_round_active
+from ..analysis.grid_overlay_dims import vacant_rect_phantom_infer_round_active
 
 
 def _infer_vacant_rect_phantoms_config_flag(raw: Mapping[str, Any]) -> bool:

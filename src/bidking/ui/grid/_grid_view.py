@@ -91,6 +91,7 @@ from ...analysis.raw_pricing import (
     resolve_price_avg_infer_max_item_count,
 )
 from ...analysis.snapshot import game_state_to_json, item_knowledge_to_json
+from ...config.map_runtime_overlay import merged_runtime_with_map_pricing
 from ...config.runtime import (
     infer_fraud_empty_cells_algorithm_and_trim,
     infer_vacant_rect_phantoms_enabled,
@@ -1024,10 +1025,20 @@ class GridWindow:
             item_origin=self._effective_display_origin,
         )
 
+    def _merged_runtime_raw(self) -> dict[str, Any]:
+        """``config.json`` + 当前地图 ``pricing.maps`` 覆盖（与出价计算同源）。"""
+        mid = int(self.state.map_id or 0)
+        if mid > 0:
+            return merged_runtime_with_map_pricing(
+                self._runtime_raw,
+                map_bundle_key=map_bundle_key_for_automation(mid),
+            )
+        return merged_runtime_with_map_pricing(self._runtime_raw)
+
     def _infer_round4_auto_fill_active(self) -> bool:
         """第 4 回合起：空置区近似矩形 → 自动 ``phantom_vac_*``。"""
         return infer_vacant_rect_phantoms_enabled(
-            self._runtime_raw,
+            self._merged_runtime_raw(),
             current_round=int(self.state.current_round or 1),
         )
 

@@ -8,7 +8,13 @@ from typing import Any, Dict, List, Mapping, NamedTuple, Optional, Set, Tuple
 from ..parsing import item_db
 from ..parsing.state import GameState, ItemKnowledge
 from ._shape_wh import shape_wh_from_snapshot
-from .grid_overlay_dims import GRID_COLS, GRID_ROWS, AISHA_VACANT_RECT_INFER_ROUND, rect_cells_wh
+from .grid_overlay_dims import (
+    GRID_COLS,
+    GRID_ROWS,
+    AISHA_VACANT_RECT_INFER_ROUND,
+    rect_cells_wh,
+    vacant_rect_phantom_infer_round_active,
+)
 from .grid_overlay_item_merge import _load_item_prices_db
 from .grid_overlay_vacant_zone import _live_shape_wh
 from .phantom_pricing_ui_sync import PHANTOM_Q_INFER, phantom_quality_pref_explicit_quality
@@ -20,11 +26,6 @@ DEFAULT_VACANT_RECT_MAX_HOLE_CELLS = 2
 DEFAULT_VACANT_RECT_MIN_BBOX_AREA = 1
 
 _ORTHO_DELTAS = ((-1, 0), (1, 0), (0, -1), (0, 1))
-
-
-def vacant_rect_phantom_infer_round_active(current_round: int) -> bool:
-    """第 4 回合及之后才做空置矩形自动幽灵推断。"""
-    return int(current_round) >= AISHA_VACANT_RECT_INFER_ROUND
 
 
 def _vacant_infer_q1234_scan_and_q14_contours_ready(

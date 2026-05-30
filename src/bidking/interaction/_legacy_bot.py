@@ -1940,7 +1940,8 @@ def try_resolve_express_emoji_signal_price(
     from ..analysis.strategy.ahmad import map_bundle_is_express_station_series
     from ..config.map_runtime_overlay import merged_runtime_with_map_pricing
     from ..parsing.item_db import map_bundle_key_for_automation
-    from ..pricing.postprocess import apply_bid_cap
+    from ..analysis._board_pricing import compute_known_items_total
+    from ..pricing.postprocess import apply_bid_cap, known_items_total_from_pricing
     from ..pricing.snapshot_io import resolve_effective_round
     from ..pricing.snapshot_players import board_snapshot_self_identity
 
@@ -1998,15 +1999,16 @@ def try_resolve_express_emoji_signal_price(
             "source_value": float(price),
             "express_emoji_signal": signal_detail,
         }
-        pricing_total = None
         pricing = board_snapshot.get("pricing")
-        if isinstance(pricing, dict) and pricing.get("total") is not None:
-            try:
-                pricing_total = float(pricing["total"])
-            except (TypeError, ValueError):
-                pricing_total = None
+        known_total = (
+            known_items_total_from_pricing(pricing)
+            if isinstance(pricing, dict)
+            else None
+        )
+        if known_total is None:
+            known_total = float(compute_known_items_total(board_snapshot))
         fin, payload = apply_bid_cap(
-            effective_config, price, payload, pricing_total=pricing_total
+            effective_config, price, payload, known_items_total=known_total
         )
         payload["final_round_used"] = effective_round
         log(
@@ -2082,15 +2084,16 @@ def try_resolve_express_emoji_signal_price(
         "source_value": float(price),
         "express_emoji_signal": signal_detail,
     }
-    pricing_total = None
     pricing = board_snapshot.get("pricing")
-    if isinstance(pricing, dict) and pricing.get("total") is not None:
-        try:
-            pricing_total = float(pricing["total"])
-        except (TypeError, ValueError):
-            pricing_total = None
+    known_total = (
+        known_items_total_from_pricing(pricing)
+        if isinstance(pricing, dict)
+        else None
+    )
+    if known_total is None:
+        known_total = float(compute_known_items_total(board_snapshot))
     fin, payload = apply_bid_cap(
-        effective_config, price, payload, pricing_total=pricing_total
+        effective_config, price, payload, known_items_total=known_total
     )
     payload["final_round_used"] = effective_round
     if effective_round >= 2:

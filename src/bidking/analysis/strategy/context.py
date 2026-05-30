@@ -21,6 +21,7 @@ class SnapshotPricingContext:
     self_uid_infer_detail: Dict[str, Any] = field(default_factory=dict)
 
     total_f: float = 0.0
+    known_items_total_f: float = 0.0
     vacant_num: int = 0
     vacant_src: str = ""
     vacant_adj: int = 0
