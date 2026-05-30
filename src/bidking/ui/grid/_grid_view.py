@@ -104,10 +104,12 @@ from ._grid_overlay_payload import (
     max_anchor_box_id_from_overlay_ui,
 )
 from ._overlay_reconcile import (
+    apply_auto_vacant_phantom_manual_confirm,
     apply_scan_history_to_phantom_items,
     apply_vacant_rect_phantom_quality_pref,
     reconcile_overlay_after_refresh,
-    snapshot_auto_vacant_phantom_quality_prefs,
+    restore_auto_vacant_phantom_user_locked,
+    snapshot_auto_vacant_phantom_user_state,
 )
 
 # ─── 布局常量 ──────────────────────────────────────────────────────────────
@@ -922,6 +924,7 @@ class GridWindow:
         #   start_row/col, cur_row/col, button(1|3), default_quality(None=金默认Q5, 6=红)
         #   phantom_infer: 左键空格=普通(推断)；Ctrl+左键空格=金；Ctrl+右键空格=红（button 3）
         self._phantom_draw_state: Optional[dict] = None
+        self._keys_ctrl_held: bool = False
         self._topmost_pinned: bool = False
         self._topmost_pin_photo: Optional[Any] = None
 
@@ -1100,8 +1103,10 @@ class GridWindow:
         if not self._infer_round4_auto_fill_active():
             self._purge_auto_vacant_rect_phantoms()
             return
-        saved_auto_q = snapshot_auto_vacant_phantom_quality_prefs(
-            self._phantom_items, self._phantom_quality_pref
+        saved_auto = snapshot_auto_vacant_phantom_user_state(
+            self._phantom_items,
+            self._phantom_quality_pref,
+            self._phantom_quality_user_locked,
         )
         self._purge_auto_vacant_rect_phantoms()
         occ = self._occupied_cells_for_vacant_rect_infer()
@@ -1137,8 +1142,9 @@ class GridWindow:
             pk = ItemKnowledge(uid=spec.uid)
             pk.box_id = int(spec.dr) * GRID_COLS + int(spec.dc)
             pk.box_id_confirmed = True
-            if spec.manual_confirm_item_id is not None:
-                pk.manual_confirm_item_id = int(spec.manual_confirm_item_id)
+            apply_auto_vacant_phantom_manual_confirm(
+                spec.uid, pk, spec, saved_auto
+            )
             self._phantom_items[spec.uid] = pk
             self._manual_shapes[spec.uid] = (
                 int(spec.w),
@@ -1147,7 +1153,10 @@ class GridWindow:
                 int(spec.dr),
             )
             apply_vacant_rect_phantom_quality_pref(
-                spec.uid, spec, self._phantom_quality_pref, saved_auto_q
+                spec.uid, spec, self._phantom_quality_pref, saved_auto
+            )
+            restore_auto_vacant_phantom_user_locked(
+                spec.uid, saved_auto, self._phantom_quality_user_locked
             )
         if specs:
             apply_scan_history_to_phantom_items(self._phantom_items, self.state)
@@ -1215,6 +1224,24 @@ class GridWindow:
         self._validate_manual_confirmations()
         self._refresh()
         return True
+
+    def _set_phantom_gold_quality_quick(self, uid: str) -> bool:
+        """空置/手画幽灵：Ctrl+左键 → 金笔（Q5 缺省），与自动 ``phantom_vac_*`` 快捷改金一致。"""
+        if uid not in self._phantom_items:
+            return False
+        if _grid_overlay.is_auto_vacant_rect_phantom_uid(uid):
+            return self._set_auto_vacant_phantom_quality_quick(uid, gold=True)
+        self._phantom_quality_pref.pop(uid, None)
+        self._apply_phantom_manual_quality_override(uid)
+        self._validate_manual_confirmations()
+        self._refresh()
+        return True
+
+    @staticmethod
+    def _event_has_ctrl(event: tk.Event) -> bool:
+        """Windows 下 ``Button`` 事件的 ``state`` 常不含 Control 位，辅以按键跟踪。"""
+        st = int(getattr(event, "state", 0) or 0)
+        return bool(st & 0x0004)
 
     def _phantom_effective_quality(self, uid: str) -> Optional[int]:
         """幽灵用于筛选的品质：原推断为 None；显式 int；缺省为金 Q5（若扫描已排除 Q5 则不再强套金）。"""
@@ -1574,10 +1601,27 @@ class GridWindow:
         return estimate_snapshot_item_price_for_uid(snap, uid)
 
     @staticmethod
+    def _counts_as_unknown_quality_stat(uid: str, row: Dict[str, Any]) -> bool:
+        """
+        顶栏「未知 N 格」：仅品质仍为空、且仍为 1×1 锚格的日志占位。
+
+        不计入：自动 ``phantom_vac_*``、已写入推断/手动画框外形的格子、
+        以及 ``quality`` 已定的已知档位（含品质已知、轮廓未知的 1×1）。
+        几何空置见「空置 / 未知空置格」，与本品统计无关。
+        """
+        if row.get("quality") is not None:
+            return False
+        if str(uid).startswith(_grid_overlay.AUTO_VACANT_RECT_PHANTOM_PREFIX):
+            return False
+        if row.get("shape") is not None:
+            return False
+        return True
+
+    @staticmethod
     def _stats_from_merged_items(board_snapshot: Dict[str, Any]) -> Tuple[int, int, int, int, int, int, int]:
         """
         与 ``analysis.grid_overlay.merged_items_dict`` 一致：有 ``box_id`` 的占位行总格数及 Q5/Q6/
-        品质未知（``quality`` 为空）格。
+        品质未知锚格（``quality`` 为空且 ``shape`` 为空，见 :meth:`_counts_as_unknown_quality_stat`）。
 
         形状取合并表中的 ``shape``（已含手动画框、推断外形、手动确认投影）。
         """
@@ -1589,7 +1633,7 @@ class GridWindow:
         q5_cells = 0
         q6_cells = 0
         unknown_cells = 0
-        for row in merged.values():
+        for uid, row in merged.items():
             if not isinstance(row, dict):
                 continue
             if row.get("box_id") is None:
@@ -1613,7 +1657,7 @@ class GridWindow:
             elif qi == 6:
                 q6_count += 1
                 q6_cells += cells
-            elif qi is None:
+            elif GridWindow._counts_as_unknown_quality_stat(str(uid), row):
                 unknown_cells += cells
         return (
             total_cells,
@@ -1629,7 +1673,8 @@ class GridWindow:
         return (
             "画板金（Q5）/ 红（Q6）件数与格数\n"
             "与 ``merged_items_dict`` 一致（日志 + 幽灵、手动画框、推断外形、偏好与手动确认投影）。\n\n"
-            "「未知」：合并表中 ``quality`` 仍为空的占位物品总格数（品质未定）。"
+            "「未知」：合并表中 ``quality`` 与 ``shape`` 均为空的日志锚格（1×1，品质未定）。\n"
+            "不含自动 ``phantom_vac_*``、推断/手画外形占位，也不含几何空置（见「空置」「未知空置格」）。"
         )
 
     def _tooltip_text_vacant_geometric(self) -> str:
@@ -2018,15 +2063,17 @@ class GridWindow:
         self._manual_shapes[phid] = (w, h, col, row)
         if use_infer_quality:
             self._phantom_quality_pref[phid] = PHANTOM_Q_INFER
-            self._phantom_quality_user_locked.add(phid)
+            self._apply_phantom_manual_quality_override(phid)
         elif default_phantom_quality == 6:
             self._phantom_quality_pref[phid] = 6
-            self._phantom_quality_user_locked.add(phid)
-        elif default_phantom_quality is not None and 1 <= default_phantom_quality <= 5:
+            self._apply_phantom_manual_quality_override(phid)
+        elif isinstance(default_phantom_quality, int) and 1 <= default_phantom_quality <= 5:
             self._phantom_quality_pref[phid] = default_phantom_quality
-            self._phantom_quality_user_locked.add(phid)
+            self._apply_phantom_manual_quality_override(phid)
         else:
-            self._phantom_quality_user_locked.add(phid)
+            # Ctrl+左键空格拖：金笔缺省（无 pref 键 = Q5），勿落入手锁但仍是推断笔
+            self._phantom_quality_pref.pop(phid, None)
+            self._apply_phantom_manual_quality_override(phid)
         apply_scan_history_to_phantom_items(self._phantom_items, self.state)
         return True
 
@@ -3926,6 +3973,10 @@ class GridWindow:
         self.canvas.bind("<Button-1>", self._on_click)
         self.canvas.bind("<B1-Motion>", self._on_drag)
         self.canvas.bind("<ButtonRelease-1>", self._on_drag_end)
+        for _seq in ("<Control_L>", "<Control_R>"):
+            self.root.bind(_seq, self._on_ctrl_key_down, add="+")
+        for _seq in ("<KeyRelease-Control_L>", "<KeyRelease-Control_R>"):
+            self.root.bind(_seq, self._on_ctrl_key_up, add="+")
         self.canvas.bind(
             "<Button-2>", self._on_middle_press
         )  # 中键占位（角缩放已改 Ctrl+左键）
@@ -4431,10 +4482,19 @@ class GridWindow:
 
     # ── 点击事件 ──────────────────────────────────────────────────────────
 
+    def _on_ctrl_key_down(self, _event: tk.Event) -> None:
+        self._keys_ctrl_held = True
+
+    def _on_ctrl_key_up(self, _event: tk.Event) -> None:
+        self._keys_ctrl_held = False
+
+    def _click_ctrl_active(self, event: tk.Event) -> bool:
+        return bool(getattr(self, "_keys_ctrl_held", False)) or self._event_has_ctrl(event)
+
     def _on_click(self, event: tk.Event) -> None:
         cx = int(self.canvas.canvasx(event.x))
         cy = int(self.canvas.canvasy(event.y))
-        ctrl = (event.state & 0x0004) != 0
+        ctrl = self._click_ctrl_active(event)
 
         # 1. 四边缩放把手（左键，无需 Ctrl）
         rh = self._find_resize_handle_at(cx, cy)
@@ -4458,9 +4518,9 @@ class GridWindow:
 
         uid = self._find_item_at(row, col)
 
-        # 3. 自动填充幽灵：Ctrl+左键直接改金（Q5）
+        # 3. 已有幽灵：Ctrl+左键 → 金笔（含自动 ``phantom_vac_*`` 与手画幽灵）
         if uid is not None and ctrl:
-            if self._set_auto_vacant_phantom_quality_quick(uid, gold=True):
+            if self._set_phantom_gold_quality_quick(uid):
                 return
 
         # 4. 有物品 → 弹窗
@@ -4477,7 +4537,7 @@ class GridWindow:
             "cur_row": row,
             "cur_col": col,
             "button": 1,
-            "default_quality": None,
+            "default_quality": 5 if ctrl else None,
             "phantom_infer": not ctrl,
         }
 
@@ -4494,7 +4554,7 @@ class GridWindow:
         空格无 Ctrl → 切换手动剔除空置；Ctrl+右键 + 空格 → 拖动画红幽灵（Q6）。"""
         cx = int(self.canvas.canvasx(event.x))
         cy = int(self.canvas.canvasy(event.y))
-        ctrl = (event.state & 0x0004) != 0
+        ctrl = self._click_ctrl_active(event)
         col = cx // CELL_W
         row = cy // CELL_H
         if not (0 <= col < GRID_COLS and 0 <= row < self.vis_rows):
@@ -4865,7 +4925,7 @@ class GridWindow:
             min_c, max_c = min(sc, cc), max(sc, cc)
             dq = pds.get("default_quality")
             use_infer = bool(pds.get("phantom_infer"))
-            self._create_phantom(
+            created = self._create_phantom(
                 min_r,
                 min_c,
                 max_c - min_c + 1,
@@ -4874,7 +4934,10 @@ class GridWindow:
                 use_infer_quality=use_infer,
             )
             self._phantom_draw_state = None
-            self._refresh()
+            if created:
+                self._refresh()
+            else:
+                self._draw()
         elif self._drag_state:
             if self._drag_state.get("button", 1) != btn:
                 return
@@ -5355,10 +5418,10 @@ class GridWindow:
             item = iid_to_item.get(sel[0])
             if item is None:
                 return
-            k.manual_confirm_item_id = item.item_id
             if uid in self._phantom_items:
                 clear_phantom_auto_resolution_on_item(k)
                 self._phantom_quality_user_locked.add(uid)
+            k.manual_confirm_item_id = item.item_id
             self._refresh()
             popup.destroy()
 

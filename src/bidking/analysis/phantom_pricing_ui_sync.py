@@ -26,10 +26,15 @@ def phantom_quality_pref_explicit_quality(raw: Any) -> Union[int, None]:
     return None
 
 
-def clear_phantom_auto_resolution_on_item(pk: ItemKnowledge) -> None:
+def clear_phantom_auto_resolution_on_item(
+    pk: ItemKnowledge,
+    *,
+    keep_manual_confirm: bool = False,
+) -> None:
     """用户手改幽灵品质/偏好时，清掉定价分摊写回的锁定字段。"""
     pk.quality = None
-    pk.manual_confirm_item_id = None
+    if not keep_manual_confirm:
+        pk.manual_confirm_item_id = None
     pk.item_cid = None
     pk.price = None
 
