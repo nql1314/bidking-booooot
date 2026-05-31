@@ -25,45 +25,50 @@
       "path": "automation.bid_ratio_by_round.1",
       "type": "float",
       "label": "第1回合系数",
-      "description": "第1回合最终出价 ≈ 基础估价 × 系数；可 >1 以抬高靠近天花板时的出价。",
+      "description": "第1回合最终出价 ≈ 基础估价 × 系数；可 >1 以抬高靠近天花板时的出价；不得超过 1.5。",
       "scope": "map",
       "group": "自动化",
+      "max": 1.5,
       "hide": false
     },
     {
       "path": "automation.bid_ratio_by_round.2",
       "type": "float",
       "label": "第2回合系数",
-      "description": "第2回合最终出价 ≈ 基础估价 × 系数。",
+      "description": "第2回合最终出价 ≈ 基础估价 × 系数；不得超过 1.5。",
       "scope": "map",
       "group": "自动化",
+      "max": 1.5,
       "hide": false
     },
     {
       "path": "automation.bid_ratio_by_round.3",
       "type": "float",
       "label": "第3回合系数",
-      "description": "第3回合最终出价 ≈ 基础估价 × 系数。",
+      "description": "第3回合最终出价 ≈ 基础估价 × 系数；不得超过 1.5。",
       "scope": "map",
       "group": "自动化",
+      "max": 1.5,
       "hide": false
     },
     {
       "path": "automation.bid_ratio_by_round.4",
       "type": "float",
       "label": "第4回合系数",
-      "description": "第4回合最终出价 ≈ 基础估价 × 系数。",
+      "description": "第4回合最终出价 ≈ 基础估价 × 系数；不得超过 1.5。",
       "scope": "map",
       "group": "自动化",
+      "max": 1.5,
       "hide": false
     },
     {
       "path": "automation.bid_ratio_by_round.5",
       "type": "float",
       "label": "第5回合系数",
-      "description": "第5回合最终出价 ≈ 基础估价 × 系数。",
+      "description": "第5回合最终出价 ≈ 基础估价 × 系数；不得超过 1.5。",
       "scope": "map",
       "group": "自动化",
+      "max": 1.5,
       "hide": false
     },
     {

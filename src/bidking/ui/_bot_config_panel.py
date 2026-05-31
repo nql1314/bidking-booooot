@@ -38,6 +38,7 @@ from ..config.paths import (
 )
 from ..config.pricing import deep_merge
 from ..config.runtime import apply_board_snapshot_env_overrides
+from ..pricing._multipliers import validate_bid_ratio_value
 
 
 CONFIG_OVERLAY_PATH = config_overlay_path()
@@ -384,9 +385,11 @@ class BotConfigPanel:
             raw = self.bid_ratio_vars[round_no].get().strip()
             key = str(round_no)
             try:
-                bid_ratio[key] = float(raw) if raw else DEFAULT_BID_RATIO_BY_ROUND[key]
+                val = float(raw) if raw else DEFAULT_BID_RATIO_BY_ROUND[key]
             except ValueError:
-                bid_ratio[key] = DEFAULT_BID_RATIO_BY_ROUND[key]
+                val = DEFAULT_BID_RATIO_BY_ROUND[key]
+            validate_bid_ratio_value(val, label=f"第{round_no}回合系数")
+            bid_ratio[key] = val
         return {
             "pricing": {"fallback_bid_price": fb},
             "automation": {

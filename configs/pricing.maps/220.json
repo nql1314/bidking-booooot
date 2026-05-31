@@ -24,7 +24,8 @@
       "bid": 0.0,
       "opponent": 0.0
     },
-    "infer_vacant_rect_phantoms": false
+    "infer_vacant_rect_phantoms": false,
+    "auto_vacant_phantom_price": ""
   },
   "automation": {
     "bid_cap_price": 400000,

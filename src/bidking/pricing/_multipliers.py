@@ -1,6 +1,35 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Mapping
+
+BID_RATIO_BY_ROUND_MAX = 1.5
+
+
+def validate_bid_ratio_value(value: float, *, label: str | None = None) -> None:
+    """``automation.bid_ratio_by_round`` 单回合系数须为正且不超过上限。"""
+    who = label or "回合系数"
+    try:
+        r = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{who}: 无效数字") from exc
+    if r <= 0:
+        raise ValueError(f"{who}须为正数")
+    if r > BID_RATIO_BY_ROUND_MAX:
+        raise ValueError(f"{who}不能大于 {BID_RATIO_BY_ROUND_MAX:g}")
+
+
+def validate_bid_ratio_by_round(raw: Any) -> None:
+    """校验 ``bid_ratio_by_round`` 字典中各回合系数。"""
+    if raw is None:
+        return
+    if not isinstance(raw, Mapping):
+        raise ValueError("bid_ratio_by_round 须为对象")
+    for key, val in raw.items():
+        if val is None:
+            continue
+        label = f"第{key}回合系数"
+        validate_bid_ratio_value(val, label=label)
+
 
 ROUND_RULES = {
     1: {"multiplier": 2.0, "pace": 0.42, "label": "两倍出价第二直接获得"},
@@ -41,4 +70,6 @@ def resolve_automation_bid_ratio(
         r = float(v)
     except (TypeError, ValueError):
         return 1.0
-    return r if r > 0 else 1.0
+    if r <= 0:
+        return 1.0
+    return min(r, BID_RATIO_BY_ROUND_MAX)

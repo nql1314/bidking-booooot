@@ -1421,6 +1421,72 @@ class BoardPricingTests(unittest.TestCase):
         self.assertGreater(w * h, 1)
         self.assertTrue(res.absorbed_phantom_uids)
 
+    def test_two_1x1_unknown_contour_logs_get_disjoint_inferred_rects(self) -> None:
+        """同块空置里两枚 1×1 锚格须分到不同 phantom/轮廓，步骤 6 扩形不得重叠。"""
+        from bidking.parsing.state import GameState, ItemKnowledge
+
+        def _footprint(shape: tuple[int, int, int, int]) -> set[tuple[int, int]]:
+            w, h, dc, dr = shape
+            return {
+                (dr + ddr, dc + ddc)
+                for ddr in range(int(h))
+                for ddc in range(int(w))
+            }
+
+        st = GameState()
+        st.current_round = 4
+        st.map_id = 4509
+        for q in (1, 2, 3, 4):
+            st._scan_history.append(("quality", q, frozenset({f"log_q{q}"})))
+        corners = [(0, 0), (0, 9), (9, 0), (9, 9)]
+        for q, (r, c) in zip((1, 2, 3, 4), corners):
+            st.items[f"log_q{q}"] = ItemKnowledge(
+                uid=f"log_q{q}",
+                box_id=r * 10 + c,
+                box_id_confirmed=True,
+                shape=11,
+                quality=q,
+            )
+        st.items["log_g5a"] = ItemKnowledge(
+            uid="log_g5a",
+            box_id=48,
+            box_id_confirmed=False,
+            shape=None,
+            quality=5,
+            excluded_qualities={1, 2, 3, 4},
+            excluded_categories={101},
+        )
+        st.items["log_g5b"] = ItemKnowledge(
+            uid="log_g5b",
+            box_id=49,
+            box_id_confirmed=False,
+            shape=None,
+            quality=5,
+            excluded_qualities={1, 2, 3, 4},
+            excluded_categories={101},
+        )
+        occ = set(corners)
+        occ.update([(3, 7), (4, 7), (5, 7), (3, 8), (5, 8), (3, 9), (5, 9)])
+        res = grid_overlay_mod.compute_vacant_rect_phantom_specs(
+            game_state=st,
+            manual_shapes={},
+            phantom_items={},
+            phantom_quality_pref={},
+            occupied_cells=set(occ),
+            vacant_manual_suppress=set(),
+            max_box_id=55,
+            raw_pricing={"event_stats": {"q5_count": 99, "q6_count": 99}},
+            current_round=4,
+            enabled=True,
+        )
+        self.assertIn("log_g5a", res.inferred_log_shapes)
+        self.assertIn("log_g5b", res.inferred_log_shapes)
+        fp_a = _footprint(res.inferred_log_shapes["log_g5a"])
+        fp_b = _footprint(res.inferred_log_shapes["log_g5b"])
+        self.assertFalse(fp_a & fp_b)
+        self.assertIn((4, 8), fp_a)
+        self.assertIn((4, 9), fp_b)
+
     def test_vacant_rect_phantom_skipped_until_q1234_ready(self) -> None:
         """扫描史未覆盖 Q1–Q4 时不推断 phantom_vac（与回合数无关）。"""
         from bidking.parsing.state import GameState
