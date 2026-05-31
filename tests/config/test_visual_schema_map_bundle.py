@@ -22,6 +22,7 @@ def test_express_emoji_fields_only_on_map_210() -> None:
         if str(f.get("path", "")).startswith("automation.express_station_round1_emoji")
     }
     assert "automation.express_station_round1_emoji.enabled" in paths_210
+    assert "automation.express_station_round1_emoji.emoji_by_weekday" not in paths_210
     assert "automation.express_station_round1_emoji.character_name" not in paths_210
     assert "automation.express_station_round1_emoji.character_title" not in paths_210
     assert paths_230 == set()

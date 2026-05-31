@@ -123,7 +123,7 @@
       "path": "automation.express_station_round1_emoji.emoji",
       "type": "enum",
       "label": "快递站开局表情",
-      "description": "第1回合发表情时点击的表情项（如果发现点不到 调长首回合等待时间）。",
+      "description": "仅显示并设置今天实际使用的表情；改选后当天有效，次日凌晨按 configs/pricing.maps 内 emoji_by_weekday 恢复。星期表不在界面编辑，请直接改地图 JSON。",
       "scope": "map",
       "group": "自动化",
       "map_bundle_keys": ["210"],

@@ -18,6 +18,7 @@ import sys
 import threading
 import time
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any, Callable, Literal
 
@@ -1604,7 +1605,164 @@ AISHA_HERO_CID = 103
 AISHA_ROUND4_TOOL_ROUND = 4
 AISHA_ROUND5_TOOL_ROUND = 5
 
-_EXPRESS_STATION_EMOJI_DEFAULT = "问候"
+_EXPRESS_STATION_EMOJI_DEFAULT = "惊讶"
+_WEEKDAY_EMOJI_KEYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+_WEEKDAY_EMOJI_KEYS_ZH = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
+
+
+def _default_express_station_emoji_by_weekday() -> dict[str, str]:
+    """快递站开局表情：周一～周日默认均为「问候」（可在 ``emoji_by_weekday`` 覆盖）。"""
+    return {k: _EXPRESS_STATION_EMOJI_DEFAULT for k in _WEEKDAY_EMOJI_KEYS}
+
+
+def _weekday_lookup_keys(on: date) -> tuple[str, ...]:
+    """按本地日历日解析星期：``weekday()`` 0=周一 … 6=周日。"""
+    wd = int(on.weekday())
+    if wd < 0 or wd > 6:
+        wd = 0
+    return (
+        _WEEKDAY_EMOJI_KEYS[wd],
+        _WEEKDAY_EMOJI_KEYS_ZH[wd],
+        str(wd + 1),
+        str(wd),
+    )
+
+
+def _express_station_weekday_emoji_schedule(
+    raw: dict[str, Any] | None,
+) -> dict[str, str] | None:
+    """若配置了非空 ``emoji_by_weekday``，返回与默认合并后的整周表；否则 ``None``（走旧版单 ``emoji``）。"""
+    if not isinstance(raw, dict):
+        return None
+    raw_map = raw.get("emoji_by_weekday")
+    if not isinstance(raw_map, dict) or not raw_map:
+        return None
+    out = _default_express_station_emoji_by_weekday()
+    for key, val in raw_map.items():
+        name = str(val or "").strip()
+        if not name:
+            continue
+        k = str(key).strip()
+        if not k:
+            continue
+        kl = k.lower()
+        if kl in _WEEKDAY_EMOJI_KEYS:
+            out[kl] = name
+            continue
+        if k in _WEEKDAY_EMOJI_KEYS_ZH:
+            out[_WEEKDAY_EMOJI_KEYS[_WEEKDAY_EMOJI_KEYS_ZH.index(k)]] = name
+            continue
+        if kl.isdigit():
+            try:
+                n = int(kl)
+            except ValueError:
+                continue
+            if 1 <= n <= 7:
+                out[_WEEKDAY_EMOJI_KEYS[n - 1]] = name
+            elif 0 <= n <= 6:
+                out[_WEEKDAY_EMOJI_KEYS[n]] = name
+    return out
+
+
+def _emoji_from_weekday_schedule(
+    schedule: dict[str, str],
+    *,
+    known_names: set[str] | None,
+    on: date | None = None,
+) -> str:
+    on = on or date.today()
+    for key in _weekday_lookup_keys(on):
+        if key in schedule:
+            emoji = str(schedule[key]).strip()
+            if emoji and (not known_names or emoji in known_names):
+                return emoji
+    return _EXPRESS_STATION_EMOJI_DEFAULT
+
+
+def _resolve_express_station_effective_emoji(
+    raw: dict[str, Any],
+    known_names: set[str] | None,
+    *,
+    on: date | None = None,
+) -> tuple[str, Literal["weekday", "force", "legacy"]]:
+    """
+    解析快递站第 1 回合实际使用的表情名。
+
+    - 配置了 ``emoji_by_weekday``：默认取当天星期；``emoji`` + ``emoji_force_date`` 为当天
+      的强制覆盖，次日凌晨（本地日期变更）后失效。
+    - 未配置星期表：沿用 ``emoji`` 单字段（兼容旧配置）。
+    """
+    on = on or date.today()
+    schedule = _express_station_weekday_emoji_schedule(raw)
+    if schedule is not None:
+        scheduled = _emoji_from_weekday_schedule(
+            schedule, known_names=known_names, on=on
+        )
+        force_date = str(raw.get("emoji_force_date") or "").strip()
+        if force_date == on.isoformat():
+            forced = str(raw.get("emoji") or "").strip()
+            if forced and (not known_names or forced in known_names):
+                return forced, "force"
+        return scheduled, "weekday"
+    emoji = str(raw.get("emoji") or _EXPRESS_STATION_EMOJI_DEFAULT).strip()
+    if known_names and emoji not in known_names:
+        emoji = _EXPRESS_STATION_EMOJI_DEFAULT
+    return emoji, "legacy"
+
+
+def express_station_effective_emoji(
+    raw: dict[str, Any] | None,
+    config: dict[str, Any] | None = None,
+    *,
+    on: date | None = None,
+) -> str:
+    """供 UI / 配置保存使用的当日有效表情（含强制覆盖）。"""
+    if not isinstance(raw, dict):
+        return _EXPRESS_STATION_EMOJI_DEFAULT
+    known_targets = (
+        merge_express_station_round1_emoji_clicks(config or {}).get("targets") or {}
+    )
+    known_names = (
+        set(known_targets.keys()) if isinstance(known_targets, dict) else set()
+    )
+    emoji, _src = _resolve_express_station_effective_emoji(
+        raw, known_names, on=on
+    )
+    return emoji
+
+
+def sync_express_station_emoji_force_after_manual_edit(
+    doc: dict[str, Any],
+    *,
+    on: date | None = None,
+) -> None:
+    """
+    可视化面板保存地图档后调用：手动改 ``emoji`` 且与当日星期表不一致时写入
+    ``emoji_force_date``（仅当天有效）；与星期表一致则清除强制标记。
+    """
+    on = on or date.today()
+    au = doc.get("automation")
+    if not isinstance(au, dict):
+        return
+    block = au.get("express_station_round1_emoji")
+    if not isinstance(block, dict):
+        return
+    schedule = _express_station_weekday_emoji_schedule(block)
+    if schedule is None:
+        block.pop("emoji_force_date", None)
+        return
+    known_names = set(_default_express_station_round1_emoji_clicks()["targets"].keys())
+    chosen = str(block.get("emoji") or "").strip()
+    if not chosen:
+        block.pop("emoji_force_date", None)
+        return
+    if known_names and chosen not in known_names:
+        return
+    scheduled = _emoji_from_weekday_schedule(schedule, known_names=known_names, on=on)
+    if chosen == scheduled:
+        block.pop("emoji_force_date", None)
+        return
+    block["emoji_force_date"] = on.isoformat()
 
 
 def _default_express_station_round1_emoji_clicks() -> dict[str, Any]:
@@ -1712,15 +1870,16 @@ def _express_station_round1_emoji_settings(
         return {
             "enabled": False,
             "emoji": _EXPRESS_STATION_EMOJI_DEFAULT,
+            "emoji_source": "legacy",
             "seat_1_price": 250,
             "seat_2_price": 886,
             "wait_after_send_seconds": 3.0,
             "self_emoji_cid": 0,
             "round2_plus_high_random_max": _EXPRESS_ROUND2_PLUS_HIGH_RANDOM_MAX_DEFAULT,
         }
-    emoji = str(raw.get("emoji") or _EXPRESS_STATION_EMOJI_DEFAULT).strip()
-    if known_names and emoji not in known_names:
-        emoji = _EXPRESS_STATION_EMOJI_DEFAULT
+    emoji, emoji_source = _resolve_express_station_effective_emoji(
+        raw, known_names if known_names else None
+    )
 
     def _seat_price(key: str, default: int) -> int:
         try:
@@ -1749,10 +1908,11 @@ def _express_station_round1_emoji_settings(
     return {
         "enabled": bool(raw.get("enabled", False)),
         "emoji": emoji,
-        "self_emoji_cid": self_emoji_cid,
+        "emoji_source": emoji_source,
         "seat_1_price": _seat_price("seat_1_price", 250),
         "seat_2_price": _seat_price("seat_2_price", 886),
         "wait_after_send_seconds": wait_after,
+        "self_emoji_cid": self_emoji_cid,
         "round2_plus_high_random_max": max(1, round2_high_max),
     }
 

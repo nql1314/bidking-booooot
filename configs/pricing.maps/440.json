@@ -15,7 +15,7 @@
     "late_round_low_bid_surrender_after_round": 4,
     "late_round_low_bid_surrender_below": 235555,
     "late_round_low_bid_surrender_bid": 88888,
-    "vacant_red_floor_ceiling_pick_mode": "normal",
+    "vacant_red_floor_ceiling_pick_mode": "aggressive",
     "opponent_bid_blend_weights": {
       "bid": 0.0,
       "opponent": 0.0
