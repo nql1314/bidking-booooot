@@ -28,6 +28,7 @@ from PIL import Image, ImageOps
 ROOT = Path(__file__).resolve().parent
 
 from ..pricing.compute import compute_price as pricing_compute_price  # noqa: E402
+from ..pricing.snapshot_io import resolve_effective_round  # noqa: E402
 from .board_snapshot_util import (  # noqa: E402
     clear_board_snapshot_file,
     current_round_from_snapshot,
@@ -190,7 +191,16 @@ CHINESE_ROUND_NUMBERS = {
     "Ⅳ": 4,
     "V": 5,
     "Ⅴ": 5,
+    "六": 6,
+    "陆": 6,
+    "VI": 6,
+    "Ⅵ": 6,
 }
+
+# OCR / 主循环识别的最大回合（第五回合同价可加赛第六轮）
+MAX_PARSED_ROUND_NO = 6
+# 第 6 轮及以后（含加赛）一律不使用道具，与 ``automation.tool_rounds`` 无关
+NO_TOOL_FROM_ROUND = 6
 
 
 @dataclass
@@ -656,18 +666,23 @@ def round_token_to_int(token: str) -> int | None:
     token = normalize_text(token).strip()
     if token.isdigit():
         value = int(token)
-        return value if 1 <= value <= 5 else None
+        return value if 1 <= value <= MAX_PARSED_ROUND_NO else None
     value = CHINESE_ROUND_NUMBERS.get(token)
-    if value is not None and 1 <= value <= 5:
+    if value is not None and 1 <= value <= MAX_PARSED_ROUND_NO:
         return value
     return None
+
+
+_ROUND_TOKEN_CLASS = (
+    r"[1-6一二两三四五六壹贰叁肆伍陆IⅤVⅡⅢⅣⅥVI]+"
+)
 
 
 def parse_round_number(text: str) -> int | None:
     raw = normalize_text(text)
     patterns = [
-        r"第\s*([1-5一二两三四五壹贰叁肆伍IⅤVⅡⅢⅣ]+)\s*(?:轮|回合)",
-        r"(?:当前|现在)?(?:轮次|回合)\s*[:：]?\s*第?\s*([1-5一二两三四五壹贰叁肆伍IⅤVⅡⅢⅣ]+)",
+        rf"第\s*({_ROUND_TOKEN_CLASS})\s*(?:轮|回合)",
+        rf"(?:当前|现在)?(?:轮次|回合)\s*[:：]?\s*第?\s*({_ROUND_TOKEN_CLASS})",
     ]
     for pattern in patterns:
         for match in re.finditer(pattern, raw, flags=re.IGNORECASE):
@@ -677,14 +692,31 @@ def parse_round_number(text: str) -> int | None:
 
     tight = compact_text(raw)
     for pattern in (
-        r"第([1-5一二两三四五壹贰叁肆伍IⅤVⅡⅢⅣ]+)(?:轮|回合)",
-        r"(?:轮次|回合)[:：]?第?([1-5一二两三四五壹贰叁肆伍IⅤVⅡⅢⅣ]+)",
+        rf"第({_ROUND_TOKEN_CLASS})(?:轮|回合)",
+        rf"(?:轮次|回合)[:：]?第?({_ROUND_TOKEN_CLASS})",
     ):
         match = re.search(pattern, tight, flags=re.IGNORECASE)
         if match:
             value = round_token_to_int(match.group(1).upper())
             if value is not None:
                 return value
+    return None
+
+
+def resolve_loop_round_no(
+    poll_round: int | None,
+    board_snapshot: dict[str, Any] | None,
+) -> int | None:
+    """主循环有效回合：OCR 与画板 ``current_round`` 取较大值；OCR 缺失时用快照。"""
+    snap_r = (
+        current_round_from_snapshot(board_snapshot)
+        if isinstance(board_snapshot, dict)
+        else None
+    )
+    if poll_round is not None:
+        return resolve_effective_round(int(poll_round), board_snapshot)
+    if snap_r is not None:
+        return int(snap_r)
     return None
 
 
@@ -2550,7 +2582,15 @@ def handle_round(
                 bs_data = waited
     sleep_interruptible(float(timing_cfg.get("round_detect_wait_seconds", 0.0) or 0.0))
     tool_rounds = {int(item) for item in config.get("automation", {}).get("tool_rounds", [1, 2])}
-    ran_tool_this_round = int(round_no) in tool_rounds
+    rn = int(round_no)
+    ran_tool_this_round = rn in tool_rounds
+    if rn >= NO_TOOL_FROM_ROUND:
+        if ran_tool_this_round:
+            log(
+                f"round {rn}: tool disabled (round>={NO_TOOL_FROM_ROUND})",
+                gui_verbose_only=True,
+            )
+        ran_tool_this_round = False
     skip_tool, skip_reason = should_skip_tool_for_aisha_vacant_gate(
         config=config,
         round_no=int(round_no),
@@ -2757,7 +2797,8 @@ def run_loop(
             bs_cfg = config.get("board_snapshot") or {}
             bs_data = load_board_snapshot_for_loop(config)
             snap_round = current_round_from_snapshot(bs_data) if bs_data else None
-            round_no = observation.round_no
+            poll_round = observation.round_no
+            round_no = resolve_loop_round_no(poll_round, bs_data)
 
             if await_non_lobby_after_preflight_esc and not observation.auction_lobby:
                 await_non_lobby_after_preflight_esc = False
@@ -2818,7 +2859,7 @@ def run_loop(
                 _express_after_snapshot_hooks(config, bs_data)
 
             log(
-                f"loop {loop_index}: snap_round={snap_round} poll_round={observation.round_no} "
+                f"loop {loop_index}: snap_round={snap_round} poll_round={poll_round} "
                 f"effective_round={round_no} "
                 f"end={observation.end_prompt} lobby={observation.auction_lobby} "
                 f"reward_continue={observation.reward_continue} "
@@ -3018,7 +3059,10 @@ def run_loop(
             handled_rounds.add(round_no)
 
             if round_no >= 5:
-                log("round 5 handled; waiting for end prompt or a new OCR state", gui_verbose_only=True)
+                log(
+                    f"round {round_no} handled; waiting for end prompt or a new OCR state",
+                    gui_verbose_only=True,
+                )
 
             sleep_interruptible(poll_seconds)
         except KeyboardInterrupt:

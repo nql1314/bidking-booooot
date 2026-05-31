@@ -20,11 +20,12 @@
       "bid": 0.0,
       "opponent": 0.0
     },
-    "infer_vacant_rect_phantoms": false
+    "infer_vacant_rect_phantoms": false,
+    "auto_vacant_phantom_price": ""
   },
   "automation": {
     "express_station_round1_emoji": {
-      "enabled": true,
+      "enabled": false,
       "emoji": "赞赏",
       "seat_1_price": 520,
       "seat_2_price": 144,
