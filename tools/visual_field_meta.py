@@ -78,6 +78,10 @@ FIELD_META: dict[str, dict[str, str]] = {
         "label": "快递站开局发表情",
         "description": "快递站系列地图第1回合：先点表情入口 (57,1015)（客户端 left_top），等待 1 秒后再点所选表情。",
     },
+    "automation.express_station_round1_emoji.anti_routine_enabled": {
+        "label": "快递站表情反套路",
+        "description": "仍发表情、对暗号，出价走后端估价，暗号对上不写黑名单。",
+    },
     "automation.express_station_round1_emoji.emoji": {
         "label": "快递站开局表情",
         "description": "仅显示/设置今天使用的表情；星期表请在 pricing.maps JSON 中维护 emoji_by_weekday。",

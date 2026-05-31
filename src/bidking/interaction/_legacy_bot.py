@@ -1875,6 +1875,7 @@ def _express_station_round1_emoji_settings(
             "seat_2_price": 886,
             "wait_after_send_seconds": 3.0,
             "self_emoji_cid": 0,
+            "anti_routine_enabled": False,
             "round2_plus_high_random_max": _EXPRESS_ROUND2_PLUS_HIGH_RANDOM_MAX_DEFAULT,
         }
     emoji, emoji_source = _resolve_express_station_effective_emoji(
@@ -1909,6 +1910,7 @@ def _express_station_round1_emoji_settings(
         "enabled": bool(raw.get("enabled", False)),
         "emoji": emoji,
         "emoji_source": emoji_source,
+        "anti_routine_enabled": bool(raw.get("anti_routine_enabled", False)),
         "seat_1_price": _seat_price("seat_1_price", 250),
         "seat_2_price": _seat_price("seat_2_price", 886),
         "wait_after_send_seconds": wait_after,
@@ -2108,6 +2110,8 @@ def _express_after_snapshot_hooks(
         board_snapshot, config, expected_emoji_cid=self_emoji_cid
     ):
         return
+    if emoji_cfg.get("anti_routine_enabled"):
+        return
     from .emoji_signal_blacklist import maybe_update_steal_express_blacklist
 
     maybe_update_steal_express_blacklist(config, board_snapshot)
@@ -2151,6 +2155,13 @@ def try_resolve_express_emoji_signal_price(
     if not _opponent_matched_emoji_signal(
         board_snapshot, config, expected_emoji_cid=self_emoji_cid
     ):
+        return None
+
+    if emoji_cfg.get("anti_routine_enabled"):
+        log(
+            "快递站反套路：暗号已对上，发表情流程不变，出价走后端估价（不写黑名单）",
+            gui_verbose_only=True,
+        )
         return None
 
     from .emoji_signal_blacklist import (
