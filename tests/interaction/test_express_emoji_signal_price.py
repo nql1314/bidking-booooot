@@ -415,6 +415,35 @@ def test_sync_force_stamp_and_clear() -> None:
         assert "emoji_force_date" not in block
 
 
+def test_anti_routine_skips_signal_price_and_blacklist(monkeypatch) -> None:
+    snap = _express_snapshot(
+        players_order=["uid_a", "uid_b"], self_uid="uid_a", opp_emoji_cid=101
+    )
+    cfg = _base_config(emoji="问候")
+    cfg["automation"]["express_station_round1_emoji"]["anti_routine_enabled"] = True
+    blacklist_calls = {"n": 0}
+
+    def _track_blacklist(_c, _s):
+        blacklist_calls["n"] += 1
+        return None
+
+    monkeypatch.setattr(
+        "bidking.interaction._legacy_bot._automation_with_map_overlay",
+        lambda c, _bs=None: c.get("automation") or {},
+    )
+    monkeypatch.setattr(
+        "bidking.interaction.emoji_signal_blacklist.maybe_update_steal_express_blacklist",
+        _track_blacklist,
+    )
+    assert try_resolve_express_emoji_signal_price(cfg, snap, round_no=1) is None
+    assert blacklist_calls["n"] == 0
+
+    from bidking.interaction._legacy_bot import _express_after_snapshot_hooks
+
+    _express_after_snapshot_hooks(cfg, snap)
+    assert blacklist_calls["n"] == 0
+
+
 def test_legacy_single_emoji_without_weekday_map() -> None:
     block = {"enabled": True, "emoji": "感谢"}
     settings = _express_station_round1_emoji_settings(

@@ -26,6 +26,7 @@
   "automation": {
     "express_station_round1_emoji": {
       "enabled": false,
+      "anti_routine_enabled": false,
       "emoji": "赞赏",
       "emoji_by_weekday": {
         "mon": "生气",

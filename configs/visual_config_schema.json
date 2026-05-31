@@ -120,6 +120,16 @@
       "hide": false
     },
     {
+      "path": "automation.express_station_round1_emoji.anti_routine_enabled",
+      "type": "bool",
+      "label": "快递站表情反套路",
+      "description": "开启后仍正常发表情、对暗号，但出价走后端估价（不用暗号座次价），且不因暗号对上将对手写入黑名单。",
+      "scope": "map",
+      "group": "自动化",
+      "map_bundle_keys": ["210"],
+      "hide": false
+    },
+    {
       "path": "automation.express_station_round1_emoji.emoji",
       "type": "enum",
       "label": "快递站开局表情",
