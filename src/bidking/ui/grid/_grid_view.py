@@ -60,7 +60,7 @@ from ...parsing.constants import (
     fmt_categories_any,
     fmt_shape,
 )
-from ...parsing.handlers import handle_s2c33, handle_s2c37, handle_s2c39, handle_s2c45, handle_s2c265
+from ...parsing.handlers import handle_s2c33, handle_s2c37, handle_s2c39, handle_s2c45, handle_s2c265, handle_c2s34
 from ...parsing.item_db import (
     candidate_probabilities,
     map_bundle_key_for_automation,
@@ -72,6 +72,7 @@ from ...parsing.skill_bindings import VIKTOR_COMBINED_HIGH_TIER_ITEM_COUNT_KEY
 from ...parsing.log_source import (
     emoji_signal_log_entry,
     extract_event,
+    game_bid_log_entry,
     skill_log_game_data_subset,
 )
 from ...parsing.state import CsvItem, GameState, ItemKnowledge
@@ -2473,6 +2474,15 @@ class GridWindow:
         if event_type == "S2C_265_game_use_emoji_notify":
             self._skill_logs.append(emoji_signal_log_entry(event_type, data))
             return
+        if event_type == "C2S_34_game_bid":
+            self._skill_logs.append(
+                game_bid_log_entry(
+                    event_type,
+                    data,
+                    round_no=int(self.state.current_round or 1),
+                )
+            )
+            return
         self._skill_logs.append(
             {
                 "event_type": event_type,
@@ -2757,6 +2767,16 @@ class GridWindow:
                         and self._live_game_active
                     ):
                         handle_s2c265(
+                            data, self.state, self.csv_index, self.csv_items, silent
+                        )
+                        self._append_skill_log_entry(event_type, data)
+                        self._queue.put("update")
+
+                    elif (
+                        event_type == "C2S_34_game_bid"
+                        and self._live_game_active
+                    ):
+                        handle_c2s34(
                             data, self.state, self.csv_index, self.csv_items, silent
                         )
                         self._append_skill_log_entry(event_type, data)
@@ -4476,6 +4496,11 @@ class GridWindow:
         def _short(name: str, max_len: int = 5) -> str:
             return name[:max_len] + "…" if len(name) > max_len else name
 
+        # 幽灵格内价与 ``pricing.total`` / ``estimate_snapshot_item_price_*`` 同源（含自动 phantom_vac_* 计价分位）
+        phantom_snap_price: Optional[float] = None
+        if uid in self._phantom_items:
+            phantom_snap_price = self._display_price_value(uid, k)
+
         if k.price is not None and k.item_cid:
             # 精确已知（200021 或游戏结束揭晓）
             name = (
@@ -4486,6 +4511,15 @@ class GridWindow:
             lines.append(_short(name))
             mark = "★" if k.price >= HIGH_VALUE_THRESHOLD else ""
             lines.append(f"{mark}¥{k.price:,}")
+        elif phantom_snap_price is not None:
+            if unique and best is not None:
+                lines.append(_short(best.name))
+            elif count > 0:
+                lines.append(f"{count}个候选")
+            else:
+                lines.append("幽灵")
+            mark = "★" if phantom_snap_price >= HIGH_VALUE_THRESHOLD else ""
+            lines.append(f"{mark}¥{phantom_snap_price:,.0f}")
         elif best:
             if unique:
                 lines.append(_short(best.name))

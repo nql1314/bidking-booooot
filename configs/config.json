@@ -51,6 +51,10 @@
     "enable_map_entry_money_check": false,
     "enable_aisha_round4_tool_vacant_gate": false,
     "aisha_round4_tool_min_vacant": 30,
+    "aisha_bid_ratio_by_round_when_q5_known": {
+      "5": 1.0,
+      "default": 1.0
+    },
     "bid_cap_skip_when_total_above": 0,
     "game_start_timeout_seconds": 0.0,
     "scheduled_start_enabled": false,
@@ -61,8 +65,8 @@
   },
   "timing": {
     "poll_seconds": 1,
-    "round_detect_wait_seconds": 7.0,
-    "round1_extra_wait_seconds": 2.0,
+    "round_detect_wait_seconds": 8.0,
+    "round1_extra_wait_seconds": 4.0,
     "tool_after_snapshot_poll_seconds": 8.0,
     "tool_after_wait_seconds": 5.0,
     "click_pause_seconds": 0.12,

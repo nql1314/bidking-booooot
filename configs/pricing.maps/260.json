@@ -20,7 +20,8 @@
     "opponent_bid_blend_weights": {
       "bid": 0.0,
       "opponent": 0.0
-    }
+    },
+    "auto_vacant_phantom_price": ""
   },
   "automation": {
     "bid_cap_price": 5000000,
@@ -33,6 +34,10 @@
     },
     "aisha_round4_tool_min_vacant": 0,
     "enable_aisha_round4_tool_vacant_gate": false,
-    "bid_cap_skip_when_total_above": 0
+    "bid_cap_skip_when_total_above": 0,
+    "aisha_bid_ratio_by_round_when_q5_known": {
+      "5": 0.0,
+      "default": 0.0
+    }
   }
 }

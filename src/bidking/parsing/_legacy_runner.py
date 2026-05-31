@@ -51,9 +51,9 @@ class _TimestampPrefixedTextStream:
             self._buf = ""
         self._dest.flush()
 
-from .handlers import handle_s2c33, handle_s2c37, handle_s2c39, handle_s2c45, handle_s2c265
+from .handlers import handle_s2c33, handle_s2c37, handle_s2c39, handle_s2c45, handle_s2c265, handle_c2s34
 from .item_db import load_csv
-from .log_source import emoji_signal_log_entry, extract_event, iter_log_lines
+from .log_source import emoji_signal_log_entry, extract_event, game_bid_log_entry, iter_log_lines
 from .state import CsvItem, GameState
 from ._renderer import print_catchup_summary
 
@@ -126,6 +126,9 @@ def run(
         elif event_type == 'S2C_265_game_use_emoji_notify' and game_active:
             handle_s2c265(data, state, csv_index, csv_items, cur_out)
 
+        elif event_type == 'C2S_34_game_bid' and game_active:
+            handle_c2s34(data, state, csv_index, csv_items, cur_out)
+
         elif event_type == 'S2C_45_game_over_notify' and game_active:
             handle_s2c45(data, state, csv_index, csv_items, cur_out)
             game_active = False
@@ -175,6 +178,9 @@ def parse_last_game(
         elif event_type == 'S2C_265_game_use_emoji_notify' and game_active:
             handle_s2c265(data, cur_state, csv_index, csv_items, silent)
 
+        elif event_type == 'C2S_34_game_bid' and game_active:
+            handle_c2s34(data, cur_state, csv_index, csv_items, silent)
+
         elif event_type == 'S2C_45_game_over_notify' and game_active:
             handle_s2c45(data, cur_state, csv_index, csv_items, silent)
             state = cur_state
@@ -194,6 +200,8 @@ def skill_log_entry_for_raw_pricing(event_type: str, data: dict) -> dict:
     """
     if event_type == "S2C_265_game_use_emoji_notify":
         return emoji_signal_log_entry(event_type, data, received_at_unix=0.0)
+    if event_type == "C2S_34_game_bid":
+        return game_bid_log_entry(event_type, data, received_at_unix=0.0)
     from .log_source import skill_log_game_data_subset
 
     return {
@@ -269,6 +277,12 @@ def parse_last_game_rounds(
         elif event_type == 'S2C_265_game_use_emoji_notify' and game_active:
             handle_s2c265(data, cur_state, csv_index, csv_items, silent)
             skill_logs.append(skill_log_entry_for_raw_pricing(event_type, data))
+
+        elif event_type == 'C2S_34_game_bid' and game_active:
+            handle_c2s34(data, cur_state, csv_index, csv_items, silent)
+            skill_logs.append(
+                game_bid_log_entry(event_type, data, round_no=int(cur_state.current_round or 1))
+            )
 
         elif event_type == 'S2C_45_game_over_notify' and game_active:
             handle_s2c45(data, cur_state, csv_index, csv_items, silent)

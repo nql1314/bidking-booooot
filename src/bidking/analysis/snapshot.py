@@ -99,6 +99,7 @@ def game_state_to_json(state: GameState) -> Dict[str, Any]:
         "displayed_event_uids": sorted(state.displayed_event_uids),
         "scan_history": scan_history,
         "emoji_events": list(getattr(state, "emoji_events", None) or []),
+        "self_bid_events": list(getattr(state, "self_bid_events", None) or []),
     }
 
 
@@ -132,6 +133,11 @@ def game_state_from_json(d: Dict[str, Any]) -> GameState:
     st.emoji_events = [
         dict(row)
         for row in (d.get("emoji_events") or [])
+        if isinstance(row, dict)
+    ]
+    st.self_bid_events = [
+        dict(row)
+        for row in (d.get("self_bid_events") or [])
         if isinstance(row, dict)
     ]
     return st

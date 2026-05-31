@@ -33,12 +33,16 @@
     "bid_ratio_by_round": {
       "1": 0.65,
       "2": 0.65,
-      "3": 0.65,
-      "4": 0.8,
-      "5": 0.9
+      "3": 0.75,
+      "4": 0.85,
+      "5": 0.95
     },
     "aisha_round4_tool_min_vacant": 35,
     "enable_aisha_round4_tool_vacant_gate": true,
-    "bid_cap_skip_when_total_above": 0
+    "bid_cap_skip_when_total_above": 0,
+    "aisha_bid_ratio_by_round_when_q5_known": {
+      "5": 0.0,
+      "default": 0.0
+    }
   }
 }

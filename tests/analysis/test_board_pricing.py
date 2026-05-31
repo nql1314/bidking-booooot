@@ -922,6 +922,54 @@ class BoardPricingTests(unittest.TestCase):
         }
         self.assertEqual(bottom_uids, set())
 
+    def test_vacant_rect_pass2_6x1_corridor_strip(self) -> None:
+        """上下夹住的 6×1 横条：第 1 步不得拆掉两端，第 2 步应整段推断为 phantom_vac。"""
+        from bidking.parsing.state import GameState, ItemKnowledge
+
+        st = GameState()
+        st.current_round = 4
+        st.map_id = 2101
+        for q in (1, 2, 3, 4):
+            st._scan_history.append(("quality", q, frozenset({"log_q%d" % q})))
+        anchors = [(0, 0), (0, 9), (9, 0), (9, 9)]
+        for q, (r, c) in zip((1, 2, 3, 4), anchors):
+            st.items[f"log_q{q}"] = ItemKnowledge(
+                uid=f"log_q{q}",
+                box_id=r * 10 + c,
+                box_id_confirmed=True,
+                shape=11,
+                quality=q,
+            )
+        w, h, dc, dr = 6, 1, 2, 5
+        occ = {(r, c) for r, c in anchors}
+        for c in range(dc, dc + w):
+            occ.add((dr - 1, c))
+            occ.add((dr + 1, c))
+        max_box_id = (dr + 1) * 10 + (dc + w - 1)
+        for bid in range(max_box_id + 1):
+            r, c = bid // 10, bid % 10
+            if dr <= r < dr + h and dc <= c < dc + w:
+                continue
+            occ.add((r, c))
+        specs = grid_overlay_mod.compute_vacant_rect_phantom_specs(
+            game_state=st,
+            manual_shapes={},
+            phantom_items={},
+            phantom_quality_pref={},
+            occupied_cells=occ,
+            vacant_manual_suppress=set(),
+            max_box_id=max_box_id,
+            raw_pricing={"event_stats": {"q5_count": 99, "q6_count": 99}},
+            current_round=4,
+            fraud_cells=set(),
+            enabled=True,
+        ).specs
+        six_by_one = [s for s in specs if (s.w, s.h) == (w, h)]
+        self.assertEqual(len(six_by_one), 1)
+        sp = six_by_one[0]
+        self.assertEqual((sp.w, sp.h, sp.dc, sp.dr), (w, h, dc, dr))
+        self.assertTrue(sp.uid.startswith(grid_overlay_mod.AUTO_VACANT_RECT_PHANTOM_PREFIX))
+
     def test_vacant_rect_pass1_enclosed_1x1_deferred_emit(self) -> None:
         """四面围住的孤立 1×1 先作临时占格，2/3 步后再输出幽灵。"""
         from bidking.parsing.state import GameState, ItemKnowledge
@@ -2381,6 +2429,17 @@ class BoardPricingTests(unittest.TestCase):
         self.assertAlmostEqual(total_p25, 100.0)
         self.assertGreater(total_avg, total_p25)
         self.assertGreater(hand_avg, total_p25)
+        with patch.object(bp, "_load_item_prices_db", return_value=(idx, fake)):
+            est_p25 = bp.estimate_snapshot_item_price_for_uid(
+                {**snap, "raw_pricing": {"auto_vacant_phantom_price": "p25"}},
+                uid,
+            )
+            est_avg = bp.estimate_snapshot_item_price_for_uid(
+                {**snap, "raw_pricing": {"auto_vacant_phantom_price": "avg"}},
+                uid,
+            )
+        self.assertAlmostEqual(est_p25 or 0.0, 100.0)
+        self.assertGreater(est_avg or 0.0, est_p25 or 0.0)
 
     def _phantom_only_snapshot(
         self,

@@ -13,9 +13,10 @@
 仅做"日志 → 事件 + 数据"，不做后续加工。
 """
 
-from .log_source import emoji_signal_log_entry, extract_event, iter_log_lines
+from .log_source import emoji_signal_log_entry, extract_event, game_bid_log_entry, iter_log_lines
 from .state import CsvItem, GameState, ItemKnowledge
 from .events import (
+    GameBidEvent,
     GameOverEvent,
     GameStartEvent,
     GameUseEmojiEvent,
@@ -37,6 +38,7 @@ from .handlers import (
     handle_s2c39,
     handle_s2c45,
     handle_s2c265,
+    handle_c2s34,
 )
 from .processors import (
     process_hero_skill_log,
@@ -46,11 +48,13 @@ from .processors import (
 
 __all__ = [
     "emoji_signal_log_entry",
+    "game_bid_log_entry",
     "extract_event",
     "iter_log_lines",
     "CsvItem",
     "GameState",
     "ItemKnowledge",
+    "GameBidEvent",
     "GameOverEvent",
     "GameStartEvent",
     "GameUseEmojiEvent",
@@ -68,6 +72,7 @@ __all__ = [
     "handle_s2c39",
     "handle_s2c45",
     "handle_s2c265",
+    "handle_c2s34",
     "process_hero_skill_log",
     "process_item_skill_log",
     "process_map_skill_log",

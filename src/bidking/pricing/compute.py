@@ -12,7 +12,10 @@ from ..config.map_runtime_overlay import merged_runtime_with_map_pricing
 from ..parsing.item_db import map_bundle_key_for_automation
 from .snapshot_io import load_board_snapshot_if_enabled, resolve_effective_round
 from .snapshot_players import board_snapshot_self_identity
-from ._multipliers import resolve_automation_bid_ratio
+from ._multipliers import (
+    board_snapshot_q5_grid_count_known,
+    resolve_automation_bid_ratio,
+)
 from ._numeric import parse_int_config
 from .opponent_adjust import apply_opponent_bid_adjustment
 from .postprocess import (
@@ -149,7 +152,12 @@ def compute_price(
         f"{meta.get('bid_points_source')}: base={fin}"
     )
 
-    ratio = resolve_automation_bid_ratio(effective_config, effective_round)
+    ratio = resolve_automation_bid_ratio(
+        effective_config,
+        effective_round,
+        role=role,
+        board_snapshot=bs,
+    )
     fin_before_ratio = fin
     fin = int(round(fin * ratio))
     payload["bid_ratio"] = {
@@ -157,6 +165,12 @@ def compute_price(
         "ratio": ratio,
         "before": fin_before_ratio,
         "after": fin,
+        "q5_grid_count_known": board_snapshot_q5_grid_count_known(bs),
+        "aisha_q5_known_ratio": (
+            str(role).strip().lower() == "aisha"
+            and int(effective_round) >= 5
+            and board_snapshot_q5_grid_count_known(bs)
+        ),
     }
 
     fin, payload["opponent_bid"], fin_before_opp = apply_opponent_bid_adjustment(

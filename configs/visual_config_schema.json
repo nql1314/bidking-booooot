@@ -72,6 +72,26 @@
       "hide": false
     },
     {
+      "path": "automation.aisha_bid_ratio_by_round_when_q5_known.5",
+      "type": "float",
+      "label": "艾莎第5回合（已知金总格）系数",
+      "description": "艾莎且 raw_pricing 已公开 q5_grid_count 时，第5回合使用此系数；未配置则回退 bid_ratio_by_round。",
+      "scope": "both",
+      "group": "自动化",
+      "max": 1.5,
+      "hide": false
+    },
+    {
+      "path": "automation.aisha_bid_ratio_by_round_when_q5_known.default",
+      "type": "float",
+      "label": "艾莎第6+回合（已知金总格）默认系数",
+      "description": "艾莎已知金总格且回合≥6 时，未单独配置的回合使用 default；不得超过 1.5。",
+      "scope": "both",
+      "group": "自动化",
+      "max": 1.5,
+      "hide": false
+    },
+    {
       "path": "automation.aisha_round4_tool_min_vacant",
       "type": "int",
       "label": "第4回合金道具空置门槛",
@@ -243,7 +263,7 @@
       "path": "pricing.auto_vacant_phantom_price",
       "type": "string",
       "label": "自动幽灵物品计价分位",
-      "description": "第4回合自动填充的 phantom_vac_* 计入 total 时的权重价：avg=加权平均（默认），p25/p50 等为同权重分位价,不要超过p50。可在 raw_pricing 覆盖。",
+      "description": "第4回合自动填充的 phantom_vac_* 计入 total、画板格内估价与顶栏「估算总价」时的权重价：avg=加权平均（默认），p25/p50 等为同权重分位价，不要超过 p50。可在 raw_pricing 覆盖。",
       "scope": "both",
       "group": "出价",
       "hide": false

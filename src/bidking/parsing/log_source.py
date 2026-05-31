@@ -27,24 +27,33 @@ _SKILL_LOG_GAME_DATA_KEYS = (
 _NOTIFY_RE = re.compile(
     r'\[Network\] OnHanderNotify \S+ : \((\S+)\)(\{.*\})\s*$'
 )
+_SEND_RE = re.compile(
+    r'\[Network\] Send \S+ : \((\S+)\)(\{.*\})\s*$'
+)
 
 
 def extract_event(line: str) -> Optional[Tuple[str, dict]]:
     """
-    从 [Network] OnHanderNotify 格式的日志行中提取事件。
+    从日志行中提取网络事件。
+
+    支持两类格式：
+      - ``[Network] OnHanderNotify … : (S2C_…)`` — 服务端推送
+      - ``[Network] Send C2S… : (C2S_…)`` — 客户端上行（如用户确认出价）
 
     Returns:
         (event_type, data) 元组，如 ('S2C_33_game_start_notify', {...})
         若格式不匹配或 JSON 解析失败则返回 None。
     """
-    m = _NOTIFY_RE.search(line)
-    if not m:
-        return None
-    event_type = m.group(1)
-    try:
-        return event_type, json.loads(m.group(2))
-    except json.JSONDecodeError:
-        return None
+    for pattern in (_NOTIFY_RE, _SEND_RE):
+        m = pattern.search(line)
+        if not m:
+            continue
+        event_type = m.group(1)
+        try:
+            return event_type, json.loads(m.group(2))
+        except json.JSONDecodeError:
+            return None
+    return None
 
 
 def skill_log_game_data_subset(data: dict) -> Dict[str, Any]:
@@ -74,6 +83,35 @@ def skill_log_game_data_subset(data: dict) -> Dict[str, Any]:
         except Exception:
             out[k] = src
     return out
+
+
+def game_bid_log_entry(
+    event_type: str,
+    data: dict,
+    *,
+    round_no: Optional[int] = None,
+    received_at_unix: float = 0.0,
+) -> dict:
+    """
+    写入 ``skill_logs`` 的用户出价条目（与 ``game_data`` 技能子集并列）。
+
+    ``user_bid`` 保留 ``GameUid`` / ``BidPrice`` / ``Token`` 原字段名，便于回放与 Bot 消费。
+    """
+    import time
+
+    payload = data if isinstance(data, dict) else {}
+    entry: Dict[str, Any] = {
+        "event_type": str(event_type),
+        "user_bid": {
+            "GameUid": str(payload.get("GameUid") or ""),
+            "BidPrice": int(payload.get("BidPrice") or 0),
+            "Token": str(payload.get("Token") or ""),
+        },
+        "received_at_unix": float(received_at_unix or time.time()),
+    }
+    if round_no is not None:
+        entry["user_bid"]["Round"] = int(round_no)
+    return entry
 
 
 def emoji_signal_log_entry(event_type: str, data: dict, *, received_at_unix: float = 0.0) -> dict:

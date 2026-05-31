@@ -26,7 +26,7 @@
   "automation": {
     "bid_cap_price": 2222222,
     "bid_ratio_by_round": {
-      "1": 0.8,
+      "1": 0.7,
       "2": 0.75,
       "3": 0.85,
       "4": 0.9,
@@ -34,6 +34,10 @@
     },
     "enable_aisha_round4_tool_vacant_gate": false,
     "aisha_round4_tool_min_vacant": 35,
-    "bid_cap_skip_when_total_above": 0
+    "bid_cap_skip_when_total_above": 0,
+    "aisha_bid_ratio_by_round_when_q5_known": {
+      "5": 0.0,
+      "default": 0.0
+    }
   }
 }

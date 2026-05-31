@@ -13,8 +13,8 @@ S2C 事件处理器
 import datetime
 from typing import Dict, List
 
-from .constants import ITEM_TOOLS, SEP, SKILL_TO_CATEGORY, THIN, fmt_emoji_cid
-from .events import GameUseEmojiEvent
+from .constants import ITEM_TOOLS, SEP, SKILL_TO_CATEGORY, THIN, fmt_emoji_cid, fmt_price
+from .events import GameBidEvent, GameUseEmojiEvent
 from .state import CsvItem, GameState
 from .processors import (
     process_hero_skill_log,
@@ -53,6 +53,7 @@ def handle_s2c33(
     state.match_started_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     state.match_ended_at = ""
     state.emoji_events.clear()
+    state.self_bid_events.clear()
 
     if clear_bid_cache:
         try:
@@ -193,6 +194,65 @@ def handle_s2c39(
 
     if shown_header:
         out.flush()
+
+
+def parse_game_bid(
+    data: dict,
+    state: GameState,
+) -> GameBidEvent:
+    """从 ``C2S_34_game_bid`` JSON 解析并写入 ``state.self_bid_events``。"""
+    ev = GameBidEvent.from_send(data, round_no=int(state.current_round or 1))
+    state.self_bid_events.append(
+        {
+            "game_uid": ev.game_uid,
+            "bid_price": int(ev.bid_price),
+            "token": ev.token,
+            "round": int(ev.round_no or state.current_round or 1),
+        }
+    )
+    game_uid = str(ev.game_uid or "").strip()
+    state_uid = str(state.uid or "").strip()
+    if game_uid and state_uid and game_uid != state_uid:
+        return ev
+    if int(ev.bid_price) <= 0:
+        return ev
+    try:
+        from ..pricing.self_bid_cache import record_self_gold_bid
+
+        record_self_gold_bid(
+            {},
+            round_no=int(ev.round_no or state.current_round or 1),
+            bid_amount=int(ev.bid_price),
+            game_uid=game_uid or state_uid or None,
+        )
+    except Exception:
+        pass
+    return ev
+
+
+def handle_c2s34(
+    data: dict,
+    state: GameState,
+    csv_index: Dict[int, CsvItem],
+    csv_items: List[CsvItem],
+    out,
+) -> GameBidEvent:
+    """
+    C2S_34_game_bid — 用户确认出价（客户端上行）。
+
+    记录出价到 ``state.self_bid_events`` 与 ``self_bid_cache``，并输出一行可读日志。
+    """
+    del csv_index, csv_items
+    ev = parse_game_bid(data, state)
+    round_tag = f"第{ev.round_no}回合" if ev.round_no else "?"
+    print(
+        f"\n  [用户出价] ¥{fmt_price(ev.bid_price)}  ({round_tag})",
+        file=out,
+    )
+    if ev.game_uid:
+        print(f"  对局: {ev.game_uid}", file=out)
+    out.flush()
+    return ev
 
 
 def parse_game_use_emoji_notify(
