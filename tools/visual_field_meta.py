@@ -42,6 +42,14 @@ FIELD_META: dict[str, dict[str, str]] = {
         "label": "第5回合系数",
         "description": "第5回合最终出价 ≈ 基础估价 × 系数；不得超过 1.5。",
     },
+    "automation.aisha_bid_ratio_by_round_when_q5_known.5": {
+        "label": "艾莎第5回合（已知金总格）系数",
+        "description": "艾莎且 event_stats 已公开 q5_grid_count 时第5回合专用系数。",
+    },
+    "automation.aisha_bid_ratio_by_round_when_q5_known.default": {
+        "label": "艾莎第6+回合（已知金总格）默认系数",
+        "description": "艾莎已知金总格且回合≥6 时未单独配置回合所用系数。",
+    },
     "automation.bot_runner": {
         "label": "Bot 实现",
         "description": "启动时加载的 bot 模块名（如 fresh_aisha_bot），决定自动化主循环实现。",

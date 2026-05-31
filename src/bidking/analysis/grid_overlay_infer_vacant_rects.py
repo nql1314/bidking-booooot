@@ -351,11 +351,53 @@ def _vacant_blocked_sides(r: int, c: int, vacant: Set[Tuple[int, int]]) -> int:
     return n
 
 
+def _vacant_ortho_run_length(
+    r: int,
+    c: int,
+    vacant: Set[Tuple[int, int]],
+    *,
+    axis_dr: int,
+    axis_dc: int,
+) -> int:
+    """沿 ``(axis_dr, axis_dc)`` 方向统计含 ``(r,c)`` 的连续空置格数。"""
+    length = 1
+    for sign in (-1, 1):
+        nr, nc = r + axis_dr * sign, c + axis_dc * sign
+        while (nr, nc) in vacant:
+            length += 1
+            nr += axis_dr * sign
+            nc += axis_dc * sign
+    return length
+
+
+def _vacant_cell_on_1xn_strip(
+    r: int,
+    c: int,
+    vacant: Set[Tuple[int, int]],
+    *,
+    min_len: int = 2,
+) -> bool:
+    """该格是否属于长度 ≥ ``min_len`` 的直行空置条（横条 ``h==1`` 或竖条 ``w==1``）。"""
+    if (r, c) not in vacant:
+        return False
+    h_run = _vacant_ortho_run_length(r, c, vacant, axis_dr=0, axis_dc=1)
+    v_run = _vacant_ortho_run_length(r, c, vacant, axis_dr=1, axis_dc=0)
+    return h_run >= int(min_len) or v_run >= int(min_len)
+
+
 def _pass1_collect_temp_ghost_1x1(vacant: Set[Tuple[int, int]]) -> Set[Tuple[int, int]]:
-    """三面或四面被围住的 1×1 空格 → 临时占位（第 4 步再输出幽灵）。"""
+    """
+    三面或四面被围住的孤立 1×1 空格 → 临时占位（第 4 步再输出幽灵）。
+
+    直行 ``1×n`` / ``n×1``（``n≥2``）两端的 1×1 虽常被三面围住，但须留给第 2 步整段实心矩形识别，
+    不得提前从 ``vacant`` 剥离（否则 1×6 走廊会断成中间短条）。
+    """
     out: Set[Tuple[int, int]] = set()
     for cell in vacant:
-        if _vacant_blocked_sides(cell[0], cell[1], vacant) >= 3:
+        r, c = cell
+        if _vacant_blocked_sides(r, c, vacant) >= 3:
+            if _vacant_cell_on_1xn_strip(r, c, vacant):
+                continue
             out.add(cell)
     return out
 
@@ -370,11 +412,12 @@ def _candidates_for_vacant_rect(
     csv_items: List[Any],
     raw_pricing: Dict[str, Any],
     quality_counts: Dict[int, int],
+    anchor_quality: Optional[int] = None,
 ) -> List[Any]:
     virtual_shape = int(w) * 10 + int(h)
     filt = item_db.filter_csv_candidates_for_query(
         virtual_shape,
-        None,
+        int(anchor_quality) if anchor_quality is not None else None,
         set(),
         None,
         csv_index,
@@ -414,6 +457,7 @@ class _VacantRectInferCtx:
     max_hole_cells: int
     min_bbox_area: int
     recorded_cell_source: Mapping[Tuple[int, int], str] = field(default_factory=dict)
+    recorded_cell_quality: Mapping[Tuple[int, int], int] = field(default_factory=dict)
 
 
 def _rect_recorded_anchor_uids(
@@ -430,6 +474,26 @@ def _rect_covers_at_most_one_recorded_anchor(
     cell_source: Mapping[Tuple[int, int], str],
 ) -> bool:
     return len(_rect_recorded_anchor_uids(cells, cell_source)) <= 1
+
+
+def _rect_recorded_anchor_quality(
+    cells: Set[Tuple[int, int]],
+    cell_source: Mapping[Tuple[int, int], str],
+    cell_quality: Mapping[Tuple[int, int], int],
+) -> Optional[int]:
+    """矩形覆盖步骤 0 唯一锚格时，返回该锚格已记录品质（供 CSV 候选过滤）。"""
+    if not cell_source or not cell_quality:
+        return None
+    anchor_uids = _rect_recorded_anchor_uids(cells, cell_source)
+    if len(anchor_uids) != 1:
+        return None
+    qs: Set[int] = set()
+    for c in cells:
+        if c in cell_source and c in cell_quality:
+            qs.add(int(cell_quality[c]))
+    if len(qs) == 1:
+        return next(iter(qs))
+    return None
 
 
 def _try_emit_rect_phantom(
@@ -460,6 +524,9 @@ def _try_emit_rect_phantom(
     ):
         return False
 
+    anchor_q = _rect_recorded_anchor_quality(
+        cells, ctx.recorded_cell_source, ctx.recorded_cell_quality
+    )
     filt = _candidates_for_vacant_rect(
         w,
         h,
@@ -469,6 +536,7 @@ def _try_emit_rect_phantom(
         csv_items=ctx.csv_items,
         raw_pricing=ctx.raw_pricing,
         quality_counts=ctx.quality_counts,
+        anchor_quality=anchor_q,
     )
     if not filt:
         return False
@@ -692,12 +760,17 @@ def _vacant_rect_phantom_spec_from_bbox(
     *,
     ctx: _VacantRectInferCtx,
     quality_counts: Dict[int, int],
+    cells: Optional[Set[Tuple[int, int]]] = None,
 ) -> Optional[VacantRectPhantomSpec]:
     w, h, dc, dr = bbox
     if _skip_bottom_boundary_1xn_vacant_phantom(
         w, h, dr, max_box_id=ctx.max_box_id
     ):
         return None
+    rect_cells = cells if cells is not None else _rect_cells(dr, dc, w, h)
+    anchor_q = _rect_recorded_anchor_quality(
+        rect_cells, ctx.recorded_cell_source, ctx.recorded_cell_quality
+    )
     filt = _candidates_for_vacant_rect(
         w,
         h,
@@ -707,6 +780,7 @@ def _vacant_rect_phantom_spec_from_bbox(
         csv_items=ctx.csv_items,
         raw_pricing=ctx.raw_pricing,
         quality_counts=quality_counts,
+        anchor_quality=anchor_q,
     )
     if not filt:
         return None
@@ -752,7 +826,9 @@ def _try_merge_adjacent_phantom_pair(
         if _phantom_spec_cells(other) & union:
             return None
     qc = _project_quality_counts_without_specs(ctx, [a, b])
-    return _vacant_rect_phantom_spec_from_bbox(bbox, ctx=ctx, quality_counts=qc)
+    return _vacant_rect_phantom_spec_from_bbox(
+        bbox, ctx=ctx, quality_counts=qc, cells=union
+    )
 
 
 def _pass5_merge_adjacent_phantom_rects(ctx: _VacantRectInferCtx) -> None:
@@ -909,8 +985,12 @@ def _pass_post4_trim_specs_for_fraud_cells(
             continue
 
         _vacant_phantom_apply_quality_count_delta(ctx, spec, -1)
+        sw, sh, sdc, sdr = shrunk_bbox
         new_spec = _vacant_rect_phantom_spec_from_bbox(
-            shrunk_bbox, ctx=ctx, quality_counts=ctx.quality_counts
+            shrunk_bbox,
+            ctx=ctx,
+            quality_counts=ctx.quality_counts,
+            cells=_rect_cells(sdr, sdc, sw, sh),
         )
         if new_spec is None:
             ctx.taken -= old_cells
@@ -1443,13 +1523,15 @@ def _release_1x1_unknown_contour_items_to_vacant(
     phantom_items: Mapping[str, ItemKnowledge],
     phantom_quality_pref: Mapping[str, Any],
     base_occupied: Set[Tuple[int, int]],
-) -> Dict[Tuple[int, int], str]:
+) -> Tuple[Dict[Tuple[int, int], str], Dict[Tuple[int, int], int]]:
     """
     将场上 1×1 锚格的轮廓未知日志件、以及 1×1 品质未定手画幽灵，从占位中剥离。
 
-    返回锚格 ``(row, col) → 源物品 uid``，供推断结束后与覆盖该格的 ``phantom_vac_*`` 做替换。
+    返回 ``(row, col) → 源物品 uid`` 与 ``(row, col) → 品质``（仅日志件锚格有品质），
+    供推断与覆盖该格的 ``phantom_vac_*`` 做替换及候选过滤。
     """
     cell_source: Dict[Tuple[int, int], str] = {}
+    cell_quality: Dict[Tuple[int, int], int] = {}
 
     for uid, k in game_state.items.items():
         suid = str(uid)
@@ -1460,6 +1542,12 @@ def _release_1x1_unknown_contour_items_to_vacant(
             continue
         cell = next(iter(cells))
         cell_source[cell] = suid
+        try:
+            q = int(k.quality)
+            if 1 <= q <= 6:
+                cell_quality[cell] = q
+        except (TypeError, ValueError):
+            pass
         base_occupied.discard(cell)
 
     for uid, k in phantom_items.items():
@@ -1477,7 +1565,7 @@ def _release_1x1_unknown_contour_items_to_vacant(
         cell_source[cell] = suid
         base_occupied.discard(cell)
 
-    return cell_source
+    return cell_source, cell_quality
 
 
 def _pick_source_uid_for_phantom_replacement(
@@ -1697,7 +1785,7 @@ def compute_vacant_rect_phantom_specs(
     6. 覆盖步骤 0 记录锚格的 ``phantom_vac_*`` → 源物品扩至该矩形，并删除对应幽灵
        （每个幽灵至多含一枚锚格；多锚格同矩形时保留幽灵不扩形）。
 
-    - 须有 CSV 候选（扫描负向 + ``event_stats`` 件数配额）；
+    - 须有 CSV 候选（扫描负向 + ``event_stats`` 件数配额）；矩形含步骤 0 锚格时另按该锚格已记录品质过滤；
     - 候选品质唯一 → 写入 ``quality``；
     - 候选物品唯一 → 写入 ``manual_confirm_item_id``。
 
@@ -1721,12 +1809,14 @@ def compute_vacant_rect_phantom_specs(
     )
 
     base_occupied = set(occupied_cells)
-    recorded_cell_source = _release_1x1_unknown_contour_items_to_vacant(
-        game_state=game_state,
-        manual_shapes=manual_shapes,
-        phantom_items=phantom_items,
-        phantom_quality_pref=phantom_quality_pref,
-        base_occupied=base_occupied,
+    recorded_cell_source, recorded_cell_quality = (
+        _release_1x1_unknown_contour_items_to_vacant(
+            game_state=game_state,
+            manual_shapes=manual_shapes,
+            phantom_items=phantom_items,
+            phantom_quality_pref=phantom_quality_pref,
+            base_occupied=base_occupied,
+        )
     )
     log_uids = {str(u) for u in game_state.items}
     vacant = _collect_prefix_geometric_vacant_cells(
@@ -1759,6 +1849,7 @@ def compute_vacant_rect_phantom_specs(
             max_hole_cells=int(max_hole_cells),
             min_bbox_area=int(min_bbox_area),
             recorded_cell_source=recorded_cell_source,
+            recorded_cell_quality=recorded_cell_quality,
         )
 
         _pass_emit_recorded_anchor_1x1_phantoms(ctx)

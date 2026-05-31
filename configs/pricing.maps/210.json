@@ -15,7 +15,7 @@
       "4": 0.0,
       "default": 0.0
     },
-    "vacant_red_floor_ceiling_pick_mode": "normal",
+    "vacant_red_floor_ceiling_pick_mode": "aggressive",
     "opponent_bid_blend_weights": {
       "bid": 0.0,
       "opponent": 0.0
@@ -34,14 +34,18 @@
     },
     "bid_cap_price": 250000,
     "bid_ratio_by_round": {
-      "1": 0.8,
-      "2": 0.85,
-      "3": 0.9,
-      "4": 1.0,
-      "5": 1.1
+      "1": 0.7,
+      "2": 0.75,
+      "3": 0.85,
+      "4": 0.95,
+      "5": 1.0
     },
     "aisha_round4_tool_min_vacant": 30,
     "enable_aisha_round4_tool_vacant_gate": false,
-    "bid_cap_skip_when_total_above": 0
+    "bid_cap_skip_when_total_above": 0,
+    "aisha_bid_ratio_by_round_when_q5_known": {
+      "5": 0.0,
+      "default": 0.0
+    }
   }
 }

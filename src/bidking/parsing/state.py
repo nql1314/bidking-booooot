@@ -129,6 +129,9 @@ class GameState:
         # S2C_265 表情信号（按收到顺序追加）
         self.emoji_events: List[dict] = []
 
+        # C2S_34 用户确认出价（按收到顺序追加）
+        self.self_bid_events: List[dict] = []
+
         # 全量扫描历史，用于对后续新发现的物品追溯应用负向约束
         # 每条记录: ('category'|'quality', 值, 命中UID集合)
         self._scan_history: List[Tuple[str, int, FrozenSet[str]]] = []

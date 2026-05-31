@@ -144,6 +144,27 @@ class GameOverEvent:
 
 
 @dataclass
+class GameBidEvent:
+    """对应 ``C2S_34_game_bid``：本地客户端确认出价（用户输入价格）。"""
+
+    game_uid: str
+    bid_price: int
+    token: str = ""
+    round_no: Optional[int] = None
+    raw: Dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_send(cls, data: Mapping[str, Any], *, round_no: Optional[int] = None) -> "GameBidEvent":
+        return cls(
+            game_uid=str(data.get("GameUid") or ""),
+            bid_price=int(data.get("BidPrice") or 0),
+            token=str(data.get("Token") or ""),
+            round_no=round_no,
+            raw=dict(data),
+        )
+
+
+@dataclass
 class GameUseEmojiEvent:
     """对应 ``S2C_265_game_use_emoji_notify``：某玩家在本局使用表情。"""
     game_uid: str
@@ -173,5 +194,6 @@ __all__ = [
     "GameStartEvent",
     "RoundEndEvent",
     "GameOverEvent",
+    "GameBidEvent",
     "GameUseEmojiEvent",
 ]
