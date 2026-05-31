@@ -80,7 +80,7 @@ FIELD_META: dict[str, dict[str, str]] = {
     },
     "automation.express_station_round1_emoji.emoji": {
         "label": "快递站开局表情",
-        "description": "第1回合发表情时点击的表情项。",
+        "description": "仅显示/设置今天使用的表情；星期表请在 pricing.maps JSON 中维护 emoji_by_weekday。",
     },
     "automation.express_station_round1_emoji.wait_after_send_seconds": {
         "label": "发表情后等待（秒）",

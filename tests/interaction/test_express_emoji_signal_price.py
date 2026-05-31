@@ -1,11 +1,15 @@
 # -*- coding: utf-8 -*-
 """快递站表情暗号价：随机座次与对手相同表情检测。"""
 
+from datetime import date
 from unittest.mock import patch
 
 from bidking.interaction._legacy_bot import (
     _express_random_seat_for_signal,
+    _express_station_round1_emoji_settings,
     _opponent_matched_emoji_signal,
+    express_station_effective_emoji,
+    sync_express_station_emoji_force_after_manual_edit,
     try_resolve_express_emoji_signal_price,
     wait_after_express_station_round1_emoji,
 )
@@ -337,3 +341,84 @@ def test_wait_returns_early_when_opponent_same_emoji() -> None:
         out = wait_after_express_station_round1_emoji(cfg, snap_no_opp)
     assert out is not None
     assert _opponent_matched_emoji_signal(out, cfg, expected_emoji_cid=101)
+
+
+def _emoji_block(**kwargs: object) -> dict:
+    base = {
+        "enabled": True,
+        "emoji_by_weekday": {
+            "mon": "自信",
+            "tue": "问候",
+            "wed": "赞赏",
+            "thu": "感谢",
+            "fri": "嘲讽",
+            "sat": "惊讶",
+            "sun": "遗憾",
+        },
+    }
+    base.update(kwargs)
+    return base
+
+
+def test_weekday_schedule_uses_today_without_force() -> None:
+    monday = date(2026, 6, 1)
+    with patch("bidking.interaction._legacy_bot.date") as mock_date:
+        mock_date.side_effect = date
+        mock_date.today.return_value = monday
+        block = _emoji_block()
+        assert express_station_effective_emoji(block) == "自信"
+        settings = _express_station_round1_emoji_settings(
+            {"express_station_round1_emoji": block}, {}
+        )
+        assert settings["emoji"] == "自信"
+        assert settings["emoji_source"] == "weekday"
+        assert settings["self_emoji_cid"] == 102
+
+
+def test_force_emoji_valid_only_on_force_date() -> None:
+    monday = date(2026, 6, 1)
+    tuesday = date(2026, 6, 2)
+    block = _emoji_block(emoji="生气", emoji_force_date="2026-06-01")
+    with patch("bidking.interaction._legacy_bot.date") as mock_date:
+        mock_date.side_effect = date
+        mock_date.today.return_value = monday
+        assert express_station_effective_emoji(block) == "生气"
+        settings = _express_station_round1_emoji_settings(
+            {"express_station_round1_emoji": block}, {}
+        )
+        assert settings["emoji"] == "生气"
+        assert settings["emoji_source"] == "force"
+        mock_date.today.return_value = tuesday
+        assert express_station_effective_emoji(block) == "问候"
+        settings2 = _express_station_round1_emoji_settings(
+            {"express_station_round1_emoji": block}, {}
+        )
+        assert settings2["emoji"] == "问候"
+        assert settings2["emoji_source"] == "weekday"
+
+
+def test_sync_force_stamp_and_clear() -> None:
+    monday = date(2026, 6, 1)
+    doc = {
+        "automation": {
+            "express_station_round1_emoji": _emoji_block(emoji="生气"),
+        }
+    }
+    with patch("bidking.interaction._legacy_bot.date") as mock_date:
+        mock_date.side_effect = date
+        mock_date.today.return_value = monday
+        sync_express_station_emoji_force_after_manual_edit(doc)
+        block = doc["automation"]["express_station_round1_emoji"]
+        assert block["emoji_force_date"] == "2026-06-01"
+        block["emoji"] = "自信"
+        sync_express_station_emoji_force_after_manual_edit(doc)
+        assert "emoji_force_date" not in block
+
+
+def test_legacy_single_emoji_without_weekday_map() -> None:
+    block = {"enabled": True, "emoji": "感谢"}
+    settings = _express_station_round1_emoji_settings(
+        {"express_station_round1_emoji": block}, {}
+    )
+    assert settings["emoji"] == "感谢"
+    assert settings["emoji_source"] == "legacy"
