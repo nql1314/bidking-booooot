@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, NamedTuple, Optional, Set, Tuple
 
 from ..parsing import item_db
@@ -413,6 +413,23 @@ class _VacantRectInferCtx:
     max_box_id: int
     max_hole_cells: int
     min_bbox_area: int
+    recorded_cell_source: Mapping[Tuple[int, int], str] = field(default_factory=dict)
+
+
+def _rect_recorded_anchor_uids(
+    cells: Set[Tuple[int, int]],
+    cell_source: Mapping[Tuple[int, int], str],
+) -> Set[str]:
+    if not cell_source:
+        return set()
+    return {str(cell_source[c]) for c in cells if c in cell_source}
+
+
+def _rect_covers_at_most_one_recorded_anchor(
+    cells: Set[Tuple[int, int]],
+    cell_source: Mapping[Tuple[int, int], str],
+) -> bool:
+    return len(_rect_recorded_anchor_uids(cells, cell_source)) <= 1
 
 
 def _try_emit_rect_phantom(
@@ -437,6 +454,10 @@ def _try_emit_rect_phantom(
     if cells & ctx.base_occupied:
         return False
     if cells & ctx.taken:
+        return False
+    if not _rect_covers_at_most_one_recorded_anchor(
+        cells, ctx.recorded_cell_source
+    ):
         return False
 
     filt = _candidates_for_vacant_rect(
@@ -718,6 +739,10 @@ def _try_merge_adjacent_phantom_pair(
     if not _phantom_specs_orthogonally_adjacent(cells_a, cells_b):
         return None
     union = cells_a | cells_b
+    if not _rect_covers_at_most_one_recorded_anchor(
+        union, ctx.recorded_cell_source
+    ):
+        return None
     bbox = _vacant_infer_solid_rectangle_bbox(union)
     if bbox is None:
         return None
@@ -764,6 +789,19 @@ def _pass5_merge_adjacent_phantom_rects(ctx: _VacantRectInferCtx) -> None:
         specs.pop(j)
         specs.pop(i)
         specs.append(best_merged)
+
+
+def _pass_emit_recorded_anchor_1x1_phantoms(ctx: _VacantRectInferCtx) -> None:
+    """步骤 0 释出的各锚格先占 1×1 幽灵，避免与另一锚格落入同一推断矩形。"""
+    if not ctx.recorded_cell_source:
+        return
+    for r, c in sorted(ctx.recorded_cell_source.keys()):
+        cell = (int(r), int(c))
+        if cell in ctx.taken:
+            continue
+        if cell not in ctx.vacant:
+            continue
+        _try_emit_rect_phantom(ctx, (1, 1, int(c), int(r)))
 
 
 def _pass4_emit_deferred_temp_1x1_phantoms(ctx: _VacantRectInferCtx) -> None:
@@ -1490,6 +1528,10 @@ def _replace_recorded_anchors_with_covering_phantoms(
         if not hit_cells:
             keep.append(spec)
             continue
+        anchor_uids = {cell_source[c] for c in hit_cells}
+        if len(anchor_uids) > 1:
+            keep.append(spec)
+            continue
         src = _pick_source_uid_for_phantom_replacement(
             spec, hit_cells, cell_source, log_uids
         )
@@ -1652,7 +1694,8 @@ def compute_vacant_rect_phantom_specs(
     4. 第 1 步临时占格、仍未被 2/3 步吸收的 1×1 → 输出对应幽灵；
     4b. 若 ``fraud_cells`` 非空：完全落在诈骗格内的幽灵剔除；与诈骗格相交者先裁边条或取非诈骗实心外包矩形缩回（须仍有 CSV 候选），否则剔除；
     5. 相邻幽灵并集为实心矩形时合并，直至稳定；
-    6. 覆盖步骤 0 记录锚格的 ``phantom_vac_*`` → 源物品扩至该矩形，并删除对应幽灵。
+    6. 覆盖步骤 0 记录锚格的 ``phantom_vac_*`` → 源物品扩至该矩形，并删除对应幽灵
+       （每个幽灵至多含一枚锚格；多锚格同矩形时保留幽灵不扩形）。
 
     - 须有 CSV 候选（扫描负向 + ``event_stats`` 件数配额）；
     - 候选品质唯一 → 写入 ``quality``；
@@ -1715,8 +1758,10 @@ def compute_vacant_rect_phantom_specs(
             max_box_id=int(max_box_id),
             max_hole_cells=int(max_hole_cells),
             min_bbox_area=int(min_bbox_area),
+            recorded_cell_source=recorded_cell_source,
         )
 
+        _pass_emit_recorded_anchor_1x1_phantoms(ctx)
         _pass_full_rect_fill(ctx)
         _pass_three_sided_rect_fill(ctx)
         _pass4_emit_deferred_temp_1x1_phantoms(ctx)

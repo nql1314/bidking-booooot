@@ -24,23 +24,23 @@ FIELD_META: dict[str, dict[str, str]] = {
     },
     "automation.bid_ratio_by_round.1": {
         "label": "第1回合系数",
-        "description": "第1回合最终出价 ≈ 基础估价 × 系数；可 >1 以抬高靠近天花板时的出价。",
+        "description": "第1回合最终出价 ≈ 基础估价 × 系数；可 >1 以抬高靠近天花板时的出价；不得超过 1.5。",
     },
     "automation.bid_ratio_by_round.2": {
         "label": "第2回合系数",
-        "description": "第2回合最终出价 ≈ 基础估价 × 系数。",
+        "description": "第2回合最终出价 ≈ 基础估价 × 系数；不得超过 1.5。",
     },
     "automation.bid_ratio_by_round.3": {
         "label": "第3回合系数",
-        "description": "第3回合最终出价 ≈ 基础估价 × 系数。",
+        "description": "第3回合最终出价 ≈ 基础估价 × 系数；不得超过 1.5。",
     },
     "automation.bid_ratio_by_round.4": {
         "label": "第4回合系数",
-        "description": "第4回合最终出价 ≈ 基础估价 × 系数。",
+        "description": "第4回合最终出价 ≈ 基础估价 × 系数；不得超过 1.5。",
     },
     "automation.bid_ratio_by_round.5": {
         "label": "第5回合系数",
-        "description": "第5回合最终出价 ≈ 基础估价 × 系数。",
+        "description": "第5回合最终出价 ≈ 基础估价 × 系数；不得超过 1.5。",
     },
     "automation.bot_runner": {
         "label": "Bot 实现",
