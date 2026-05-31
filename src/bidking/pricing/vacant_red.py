@@ -260,12 +260,10 @@ def apply_early_auto_fill_ceiling_anchor(
     round_no: int,
     fin: int,
 ) -> tuple[int, dict[str, Any]]:
-    """第 1–3 回合：自动填充已开、未启用空置红格价格选取时，锚定价用 ``points_ceiling``。"""
+    """各回合：自动填充已开、未启用空置红格价格选取时，锚定价用 ``points_ceiling``。"""
     from ..config.runtime import infer_vacant_rect_phantoms_enabled
 
     r = int(round_no)
-    if r not in (1, 2, 3):
-        return int(fin), {"applied": False, "reason": "not_round_1_2_or_3"}
     if config.get("pricing", {}).get("enable_vacant_red_floor_ceiling_pick", True):
         return int(fin), {"applied": False, "reason": "vacant_red_floor_ceiling_pick_enabled"}
     if not infer_vacant_rect_phantoms_enabled(config, current_round=None):

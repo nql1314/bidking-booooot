@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import csv
 import datetime
+import io
 import os
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
@@ -32,6 +33,25 @@ _REPORT_HEADER = [
 ]
 
 _INIT_DONE = False
+
+# Windows/Excel 导出的对局报表常为 GBK；本模块写入统一为 UTF-8 BOM
+_READ_CSV_ENCODINGS = ("utf-8-sig", "utf-8", "gb18030", "gbk", "cp936")
+_WRITE_CSV_ENCODING = "utf-8-sig"
+
+
+def _read_csv_rows(path: Path) -> List[List[str]]:
+    """按常见编码尝试解码后解析 CSV 行（兼容历史 GBK 报表）。"""
+    raw = path.read_bytes()
+    if not raw:
+        return []
+    for enc in _READ_CSV_ENCODINGS:
+        try:
+            text = raw.decode(enc)
+        except UnicodeDecodeError:
+            continue
+        return list(csv.reader(io.StringIO(text, newline="")))
+    text = raw.decode("utf-8", errors="replace")
+    return list(csv.reader(io.StringIO(text, newline="")))
 
 
 def game_report_max_matches() -> int:
@@ -64,7 +84,7 @@ def init_game_report_csv_session() -> None:
     if max_n > 0:
         try:
             _trim_game_report_csv(resolve_game_report_csv_path(), max_n)
-        except OSError:
+        except (OSError, UnicodeDecodeError):
             pass
 
 
@@ -77,8 +97,7 @@ def _trim_game_report_csv(path: Path, max_matches: int) -> None:
     """按文件中首次出现的对局顺序保留最近 ``max_matches`` 局。"""
     if max_matches <= 0 or not path.is_file() or path.stat().st_size == 0:
         return
-    with open(path, "r", encoding="utf-8-sig", newline="") as f:
-        rows = list(csv.reader(f))
+    rows = _read_csv_rows(path)
     if len(rows) <= 1:
         return
     header, data_rows = rows[0], rows[1:]
@@ -102,7 +121,7 @@ def _trim_game_report_csv(path: Path, max_matches: int) -> None:
         if uid in keep_uids:
             kept_rows.extend(by_game[uid])
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8-sig", newline="") as f:
+    with open(path, "w", encoding=_WRITE_CSV_ENCODING, newline="") as f:
         w = csv.writer(f)
         w.writerow(header)
         w.writerows(kept_rows)
@@ -461,8 +480,7 @@ def resolve_game_report_csv_path() -> Path:
 def _append_report_rows(path: Path, rows_out: List[List[str]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     new_file = not path.exists() or path.stat().st_size == 0
-    encoding = "utf-8-sig" if new_file else "utf-8"
-    with open(path, "a", encoding=encoding, newline="") as f:
+    with open(path, "a", encoding=_WRITE_CSV_ENCODING, newline="") as f:
         w = csv.writer(f)
         if new_file:
             w.writerow(_REPORT_HEADER)

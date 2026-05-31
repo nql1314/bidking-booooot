@@ -37,18 +37,17 @@
     "tool_rounds": [
       1,
       2,
-      3,
       4
     ],
     "default_map": "1",
     "default_runs": 1,
-    "selected_map": "450",
-    "selected_runs": 10,
+    "selected_map": "440",
+    "selected_runs": 20,
     "warehouse_auto_sort": {
       "enabled": true
     },
-    "run_cycles": 1,
-    "cycle_rest_minutes": 0.0,
+    "run_cycles": 10,
+    "cycle_rest_minutes": 5.0,
     "enable_map_entry_money_check": false,
     "enable_aisha_round4_tool_vacant_gate": false,
     "aisha_round4_tool_min_vacant": 30,

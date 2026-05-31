@@ -265,6 +265,25 @@ def test_trim_game_report_csv_keeps_newest_matches(
     assert uids == ["g2", "g2", "g3", "g3"]
 
 
+def test_trim_game_report_csv_reads_gbk_legacy_file(
+    tmp_path: Path,
+) -> None:
+    csv_path = tmp_path / "legacy_gbk.csv"
+    header_gbk = ",".join(_REPORT_HEADER).encode("gbk")
+    row1 = "g1,,,,103,R1:1,0,0".encode("gbk")
+    row2 = "g2,,,,104,R1:2,0,0".encode("gbk")
+    csv_path.write_bytes(
+        header_gbk + b"\r\n" + row1 + b"\r\n" + row1 + b"\r\n" + row2 + b"\r\n" + row2 + b"\r\n"
+    )
+
+    _trim_game_report_csv(csv_path, 1)
+
+    text = csv_path.read_text(encoding="utf-8-sig")
+    rows = list(csv.reader(text.splitlines()))
+    assert rows[0] == _REPORT_HEADER
+    assert [r[0] for r in rows[1:]] == ["g2", "g2"]
+
+
 def test_map_entry_ticket_lookup() -> None:
     auto = {
         "map_entry_ticket_by_map_id": {

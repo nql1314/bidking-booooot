@@ -234,6 +234,28 @@ class TestVacantRedPickMode(unittest.TestCase):
 
 
 class TestEarlyAutoFillCeilingAnchor(unittest.TestCase):
+    def test_round5_uses_ceiling_when_auto_fill_on_vacant_red_off(self) -> None:
+        cfg = {
+            "pricing": {
+                "infer_vacant_rect_phantoms": True,
+                "enable_vacant_red_floor_ceiling_pick": False,
+            }
+        }
+        pricing = {
+            "total": 1000.0,
+            "points": 50_000,
+            "points_floor": 40_000,
+            "points_ceiling": 90_000,
+            "vacant": 8,
+        }
+        chosen, detail = apply_early_auto_fill_ceiling_anchor(
+            cfg, pricing, round_no=5, fin=50_000
+        )
+        self.assertTrue(detail.get("applied"))
+        self.assertEqual(chosen, 90_000)
+        self.assertEqual(detail.get("decision_rule"), "early_auto_fill_points_ceiling")
+        self.assertEqual(detail.get("round"), 5)
+
     def test_round3_uses_ceiling_when_auto_fill_on_vacant_red_off(self) -> None:
         cfg = {
             "pricing": {
