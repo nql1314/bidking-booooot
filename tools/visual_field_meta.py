@@ -351,9 +351,9 @@ FIELD_META: dict[str, dict[str, str]] = {
         "label": "卡死恢复点击间隔（秒）",
         "description": "卡死恢复两次屏幕点击之间的等待秒数。",
     },
-    "safety.verify_bid_confirm_ocr": {
-        "label": "校验出价确认 OCR",
-        "description": "确认出价后是否 OCR 校验确认区文字，失败则重试。",
+    "safety.verify_bid_confirm_snapshot": {
+        "label": "出价快照确认重试",
+        "description": "开启后轮询画板快照，见到 C2S_34_game_bid 才视为出价完成，否则重试 UI。",
     },
     # ── timing ──────────────────────────────────────────────────────────────
     "timing.after_bid_confirm_wait_seconds": {
@@ -364,17 +364,17 @@ FIELD_META: dict[str, dict[str, str]] = {
         "label": "选图后等待（秒）",
         "description": "选择地图后等待加载/开局界面的秒数。",
     },
-    "timing.bid_confirm_capture_delay_seconds": {
-        "label": "确认区截图延迟（秒）",
-        "description": "出价确认 OCR 截图前额外等待，避免动画未结束。",
-    },
     "timing.bid_confirm_retry_pause_seconds": {
         "label": "确认重试间隔（秒）",
-        "description": "出价确认 OCR 失败两次尝试之间的停顿。",
+        "description": "每次出价 UI 后等待快照 C2S_34 的窗口；未见事件则按此间隔重试 UI。",
+    },
+    "timing.bid_confirm_snapshot_poll_seconds": {
+        "label": "快照轮询间隔（秒）",
+        "description": "等待 C2S_34 时两次读取 board_snapshot 的间隔。",
     },
     "timing.bid_confirm_verify_max_seconds": {
         "label": "确认校验最长时间（秒）",
-        "description": "反复 OCR 校验出价确认的最长总时长，超时则报错或跳过。",
+        "description": "轮询快照直至见到 C2S_34_game_bid、进入下一回合或 game over 的最长总时长。",
     },
     "timing.click_pause_seconds": {
         "label": "点击间隔（秒）",

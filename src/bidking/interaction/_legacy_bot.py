@@ -2,7 +2,7 @@
 """Fresh BidKing automation loop.
 
 - 整窗 / 区域 OCR 识别大厅、结束、回合等界面状态；
-- 固定流程：每回合先 OCR ``bid_confirm_region`` 见「出价」→ 道具 → 截图 OCR → :func:`compute_price`（读画板快照）→ 输入出价 → 确认；
+- 固定流程：每回合先 OCR ``bid_confirm_region`` 见「出价」→ 道具 → 截图 OCR → :func:`compute_price`（读画板快照）→ 输入出价 → 确认；确认以快照 ``C2S_34_game_bid`` 为准（可配置重试间隔）；
 - 若 OCR 见到「对局结束」等，执行固定的局后点击链。
 """
 
@@ -753,18 +753,6 @@ def has_failed_auction_settlement(text: str) -> bool:
     return False
 
 
-def classify_bid_confirm_status(ocr_text: str) -> str:
-    """根据出价状态区 OCR 文本分类：``bid_ok`` / ``abstain`` / ``unknown``。"""
-    tight = compact_text(ocr_text)
-    if "已出价" in tight:
-        return "bid_ok"
-    if "出价" in tight and ("已" in tight or "巳" in tight):
-        return "bid_ok"
-    if "弃权" in tight:
-        return "abstain"
-    return "unknown"
-
-
 def ensure_output_dir(config: dict[str, Any], config_path: Path) -> Path:
     debug = config.get("debug", {})
     raw = debug.get("runs_dir", "runs")
@@ -1294,78 +1282,234 @@ def _perform_bid_ui_sequence(config: dict[str, Any], price: int) -> None:
         click_point(config, "tool_confirm")
 
 
-BidConfirmOutcome = Literal["bid_ok", "abstain", "verify_timeout", "unverified"]
+def _bid_confirm_snapshot_verify_enabled(config: dict[str, Any]) -> bool:
+    """画板快照中见到 ``C2S_34_game_bid`` 才视为出价完成（见 :class:`~bidking.parsing.events.GameBidEvent`）。"""
+    safety = config.get("safety") or {}
+    explicit = safety.get("verify_bid_confirm_snapshot")
+    if explicit is not None:
+        return bool(explicit)
+    return bool((config.get("board_snapshot") or {}).get("enabled", False))
+
+
+def _iter_c2s34_bids_from_snapshot(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+    """从 ``skill_logs`` / ``game_state.self_bid_events`` 收集 C2S_34 出价记录。"""
+    if not isinstance(snapshot, dict):
+        return []
+    rows: list[dict[str, Any]] = []
+    for entry in snapshot.get("skill_logs") or []:
+        if not isinstance(entry, dict) or entry.get("event_type") != "C2S_34_game_bid":
+            continue
+        ub = entry.get("user_bid")
+        if not isinstance(ub, dict):
+            continue
+        rnd = ub.get("Round")
+        rows.append(
+            {
+                "game_uid": str(ub.get("GameUid") or ""),
+                "bid_price": int(ub.get("BidPrice") or 0),
+                "round": int(rnd) if rnd is not None else None,
+                "token": str(ub.get("Token") or ""),
+            }
+        )
+    gs = snapshot.get("game_state") or {}
+    if isinstance(gs, dict):
+        for entry in gs.get("self_bid_events") or []:
+            if not isinstance(entry, dict):
+                continue
+            rnd = entry.get("round")
+            rows.append(
+                {
+                    "game_uid": str(entry.get("game_uid") or ""),
+                    "bid_price": int(entry.get("bid_price") or 0),
+                    "round": int(rnd) if rnd is not None else None,
+                    "token": str(entry.get("token") or ""),
+                }
+            )
+    return rows
+
+
+def _c2s34_bid_match_keys(snapshot: dict[str, Any] | None) -> frozenset[tuple[str, int, int]]:
+    """去重键：``(game_uid, bid_price, round)``；``round`` 未知记为 ``-1``。"""
+    if not isinstance(snapshot, dict):
+        return frozenset()
+    keys: set[tuple[str, int, int]] = set()
+    for row in _iter_c2s34_bids_from_snapshot(snapshot):
+        rnd = row.get("round")
+        try:
+            rn = int(rnd) if rnd is not None else -1
+        except (TypeError, ValueError):
+            rn = -1
+        keys.add((str(row.get("game_uid") or ""), int(row.get("bid_price") or 0), rn))
+    return frozenset(keys)
+
+
+def _snapshot_has_new_c2s34_for_round(
+    snapshot: dict[str, Any],
+    round_no: int,
+    prior_keys: frozenset[tuple[str, int, int]],
+) -> bool:
+    for row in _iter_c2s34_bids_from_snapshot(snapshot):
+        if int(row.get("bid_price") or 0) <= 0:
+            continue
+        rnd = row.get("round")
+        try:
+            rn = int(rnd) if rnd is not None else None
+        except (TypeError, ValueError):
+            rn = None
+        if rn is not None and rn != int(round_no):
+            continue
+        if rn is None:
+            cr = current_round_from_snapshot(snapshot)
+            if cr is not None and int(cr) != int(round_no):
+                continue
+        key = (
+            str(row.get("game_uid") or ""),
+            int(row.get("bid_price") or 0),
+            int(rn) if rn is not None else -1,
+        )
+        if key in prior_keys:
+            continue
+        return True
+    return False
+
+
+def _snapshot_round_advanced_past(snapshot: dict[str, Any] | None, round_no: int) -> bool:
+    if not isinstance(snapshot, dict):
+        return False
+    cr = current_round_from_snapshot(snapshot)
+    if cr is None:
+        return False
+    return int(cr) > int(round_no)
+
+
+def _snapshot_has_game_over_notify(snapshot: dict[str, Any] | None) -> bool:
+    """快照 ``skill_logs`` 中是否已有 ``S2C_45_game_over_notify``（:class:`~bidking.parsing.events.GameOverEvent`）。"""
+    if not isinstance(snapshot, dict):
+        return False
+    for entry in snapshot.get("skill_logs") or []:
+        if isinstance(entry, dict) and entry.get("event_type") == "S2C_45_game_over_notify":
+            return True
+    return False
+
+
+def _wait_bid_confirm_snapshot(
+    config: dict[str, Any],
+    *,
+    round_no: int,
+    prior_keys: frozenset[tuple[str, int, int]],
+    wait_seconds: float,
+    poll_seconds: float,
+    global_deadline: float,
+) -> Literal["confirmed", "next_round", "game_over", "pending"]:
+    """在 ``wait_seconds`` 内轮询快照，直至 C2S_34、回合推进或 game over。"""
+    wait_until = time.monotonic() + max(0.0, wait_seconds)
+    poll = max(0.08, float(poll_seconds))
+    while time.monotonic() < global_deadline:
+        ensure_not_stopped()
+        fresh = load_board_snapshot_for_loop(config)
+        if isinstance(fresh, dict):
+            if _snapshot_has_new_c2s34_for_round(fresh, round_no, prior_keys):
+                return "confirmed"
+            if _snapshot_has_game_over_notify(fresh):
+                return "game_over"
+            if _snapshot_round_advanced_past(fresh, round_no):
+                return "next_round"
+        if time.monotonic() >= wait_until:
+            return "pending"
+        remain = min(poll, wait_until - time.monotonic(), global_deadline - time.monotonic())
+        if remain <= 0:
+            return "pending"
+        sleep_interruptible(remain)
+    return "pending"
+
+
+BidConfirmOutcome = Literal[
+    "bid_ok", "verify_timeout", "unverified", "next_round", "game_over"
+]
 
 
 def input_bid(
-    config: dict[str, Any], price: int, *, config_path: Path | None = None
+    config: dict[str, Any],
+    price: int,
+    *,
+    round_no: int | None = None,
 ) -> BidConfirmOutcome:
     timing = config.get("timing", {}) or {}
     post_wait = float(timing.get("after_bid_confirm_wait_seconds", 1.0))
+    use_snapshot = _bid_confirm_snapshot_verify_enabled(config)
 
-    if not bool(config.get("safety", {}).get("verify_bid_confirm_ocr", True)):
+    if not use_snapshot:
+        _perform_bid_ui_sequence(config, price)
+        sleep_interruptible(post_wait)
+        return "unverified"
+
+    if round_no is None:
         _perform_bid_ui_sequence(config, price)
         sleep_interruptible(post_wait)
         return "unverified"
 
     max_sec = max(0.0, float(timing.get("bid_confirm_verify_max_seconds", 30.0)))
     retry_pause = max(0.0, float(timing.get("bid_confirm_retry_pause_seconds", 0.35)))
-    capture_delay = max(0.0, float(timing.get("bid_confirm_capture_delay_seconds", 0.0)))
+    snapshot_poll = max(
+        0.08,
+        float(timing.get("bid_confirm_snapshot_poll_seconds", retry_pause) or retry_pause),
+    )
     deadline = time.monotonic() + max_sec
     attempt = 0
+    prior_keys = _c2s34_bid_match_keys(load_board_snapshot_for_loop(config))
+    effective_round = int(round_no)
 
     while True:
         ensure_not_stopped()
         attempt += 1
         _perform_bid_ui_sequence(config, price)
 
-        if capture_delay > 0:
-            sleep_interruptible(capture_delay)
-
-        bring_window_to_front(config)
-        t_cap = time.perf_counter()
-        frame, _info = capture_window_frame(config)
-        perf_log_elapsed(f"bid_confirm_verify capture attempt={attempt}", t_cap)
-
-        text, box = read_bid_confirm_region_text_from_frame(config, frame)
-        status = classify_bid_confirm_status(text)
-
-        if config_path is not None and box != (0, 0, 0, 0):
-            dbg = config.get("debug", {}) or {}
-            if bool(dbg.get("save_crops", True)) or bool(dbg.get("save_ocr_text", True)):
-                runs_dir = ensure_output_dir(config, config_path)
-                ts = time.strftime("%Y%m%d_%H%M%S")
-                stem = f"{ts}_bid_confirm_try{attempt}"
-                if bool(dbg.get("save_crops", True)):
-                    frame.crop(box).save(runs_dir / f"{stem}.png")
-                if bool(dbg.get("save_ocr_text", True)):
-                    (runs_dir / f"{stem}.txt").write_text(text or "", encoding="utf-8")
-
-        tight_preview = compact_text(text)[:160]
-        log(f"bid_confirm OCR attempt {attempt}: status={status} text={tight_preview!r}", gui_verbose_only=True)
-
-        if status == "bid_ok":
+        snap_outcome = _wait_bid_confirm_snapshot(
+            config,
+            round_no=effective_round,
+            prior_keys=prior_keys,
+            wait_seconds=retry_pause,
+            poll_seconds=snapshot_poll,
+            global_deadline=deadline,
+        )
+        if snap_outcome == "confirmed":
+            log(
+                f"bid_confirm: snapshot C2S_34_game_bid confirmed "
+                f"(round {effective_round}, attempt {attempt})",
+                gui_verbose_only=True,
+            )
             sleep_interruptible(post_wait)
             return "bid_ok"
-        if status == "abstain":
-            log("bid_confirm: detected 弃权 (timeout/abstain); stop retrying", gui_verbose_only=True)
+        if snap_outcome == "next_round":
+            log(
+                f"bid_confirm: snapshot advanced past round {effective_round} "
+                f"without new C2S_34 (attempt {attempt})",
+                gui_verbose_only=True,
+            )
             sleep_interruptible(post_wait)
-            return "abstain"
+            return "next_round"
+        if snap_outcome == "game_over":
+            log(
+                f"bid_confirm: snapshot S2C_45_game_over_notify (attempt {attempt}); stop retry",
+                gui_verbose_only=True,
+            )
+            sleep_interruptible(post_wait)
+            return "game_over"
 
         if time.monotonic() >= deadline:
-            log(f"bid_confirm: verify timeout after {attempt} attempt(s); never saw 已出价", gui_verbose_only=True)
+            log(
+                f"bid_confirm: snapshot verify timeout after {attempt} attempt(s); "
+                "never saw C2S_34_game_bid",
+                gui_verbose_only=True,
+            )
             sleep_interruptible(post_wait)
             return "verify_timeout"
 
-        log(f"bid_confirm: no 已出价 yet, retry after {retry_pause}s", gui_verbose_only=True)
+        log(
+            f"bid_confirm: no C2S_34 in snapshot yet, retry UI after {retry_pause}s",
+            gui_verbose_only=True,
+        )
         sleep_interruptible(retry_pause)
-
-
-def exit_round_after_bid_confirm_verify_timeout(config: dict[str, Any]) -> None:
-    """出价确认 OCR 超时（始终未见 已出价）后：ESC 关层并点通用确认，尽量退出本局/出价流程。"""
-    log("bid_confirm: verify_timeout -> ESC + tool_confirm 退出该局", gui_verbose_only=True)
-    press_escape(config)
-    click_point(config, "tool_confirm")
 
 
 def run_post_round_transition(config: dict[str, Any]) -> float:
@@ -2806,23 +2950,36 @@ def handle_round(
         details=details,
         final_price=price,
     )
-    input_bid(config, price, config_path=config_path)
-    try:
-        from ..pricing.self_bid_cache import (
-            record_self_gold_bid,
-            resolve_self_bid_cache_amount,
-        )
+    bid_outcome = input_bid(config, price, round_no=int(round_no))
+    if bid_outcome in ("bid_ok", "unverified"):
+        try:
+            from ..pricing.self_bid_cache import (
+                record_self_gold_bid,
+                resolve_self_bid_cache_amount,
+            )
 
-        bs_rec = load_board_snapshot_for_loop(config)
-        cache_amount = resolve_self_bid_cache_amount(int(price), details)
-        record_self_gold_bid(
-            config,
-            round_no=int(round_no),
-            bid_amount=cache_amount,
-            board_snapshot=bs_rec,
+            bs_rec = load_board_snapshot_for_loop(config)
+            cache_amount = resolve_self_bid_cache_amount(int(price), details)
+            record_self_gold_bid(
+                config,
+                round_no=int(round_no),
+                bid_amount=cache_amount,
+                board_snapshot=bs_rec,
+            )
+        except Exception:
+            pass
+    elif bid_outcome == "verify_timeout":
+        log(f"round {round_no}: bid confirm failed (verify_timeout)", gui_verbose_only=True)
+    elif bid_outcome == "next_round":
+        log(
+            f"round {round_no}: bid confirm stopped (entered next round in snapshot)",
+            gui_verbose_only=True,
         )
-    except Exception:
-        pass
+    elif bid_outcome == "game_over":
+        log(
+            f"round {round_no}: bid confirm stopped (S2C_45_game_over_notify in snapshot)",
+            gui_verbose_only=True,
+        )
     bs_after_bid = load_board_snapshot_for_loop(config)
     _express_after_snapshot_hooks(config, bs_after_bid)
 

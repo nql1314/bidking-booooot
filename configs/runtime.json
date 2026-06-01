@@ -5,7 +5,7 @@
     "bring_window_to_front": true,
     "move_pause_seconds": 0.08,
     "confirm_after_type": true,
-    "verify_bid_confirm_ocr": false,
+    "verify_bid_confirm_snapshot": true,
     "stuck_after_handled_round": {
       "enabled": true,
       "consecutive_poll_threshold": 60,

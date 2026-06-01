@@ -117,6 +117,8 @@ def weighted_cell_equiv_for_unknown_contour_item(
     csv_cells_raw: Optional[Dict[str, float]],
     pricing: Dict[str, Any],
     map_id_normalized: Optional[int],
+    *,
+    uid: Optional[str] = None,
 ) -> Optional[float]:
     """品质已知、快照无外形时：按 CSV 期望价与档内 ``u_cell`` 得加权格数。"""
     _ = board_snapshot
@@ -140,6 +142,16 @@ def weighted_cell_equiv_for_unknown_contour_item(
     categories_any = _int_set_from_snapshot_field(it.get("categories_any"))
     excl_q = _int_set_from_snapshot_field(it.get("excluded_qualities"))
     excl_c = _int_set_from_snapshot_field(it.get("excluded_categories"))
+    from .grid_overlay_item_merge import merged_items_dict_from_snapshot
+    from .grid_overlay_vacant_zone import infer_max_shape_wh_for_unknown_contour_merged_row
+
+    merged = merged_items_dict_from_snapshot(board_snapshot)
+    uid_s = str(uid or it.get("uid") or "")
+    max_wh = None
+    if uid_s and isinstance(merged.get(uid_s), dict):
+        max_wh = infer_max_shape_wh_for_unknown_contour_merged_row(
+            uid_s, merged[uid_s], merged
+        )
     best, count, unique, est, _ql = item_db.query_item(
         shape=None,
         quality=q,
@@ -149,7 +161,7 @@ def weighted_cell_equiv_for_unknown_contour_item(
         csv_items=csv_items,
         excluded_categories=excl_c if excl_c else None,
         excluded_qualities=excl_q if excl_q else None,
-        max_shape_wh=None,
+        max_shape_wh=max_wh,
         map_category_weights=None,
         map_id=map_id_normalized,
         categories_any=categories_any if categories_any else None,
@@ -205,7 +217,12 @@ def unknown_contour_vacant_weighted_excess(
             continue
         n_uc += 1
         w_cells = weighted_cell_equiv_for_unknown_contour_item(
-            it, board_snapshot, csv_cells_raw, pricing, map_id_normalized
+            it,
+            board_snapshot,
+            csv_cells_raw,
+            pricing,
+            map_id_normalized,
+            uid=str(uid),
         )
         if w_cells is None:
             continue

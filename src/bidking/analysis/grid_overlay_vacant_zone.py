@@ -308,6 +308,128 @@ def _occupied_cells_item_board_display(it: Dict[str, Any]) -> set:
     return {(bid // GRID_COLS, bid % GRID_COLS)}
 
 
+def infer_max_shape_wh_from_anchor(
+    brow: int,
+    bcol: int,
+    occupied: Set[Tuple[int, int]],
+) -> Tuple[int, int]:
+    """
+    以锚格为原点向四向扫描空闲格，得保守 (max_w, max_h) 上界。
+
+    与 ``GridWindow._compute_max_size_impl`` 几何规则一致，供定价与画板候选筛选同源。
+    """
+
+    def _scan_right() -> int:
+        n = 0
+        for c in range(bcol, GRID_COLS):
+            if (brow, c) in occupied:
+                break
+            n += 1
+        return n - 1
+
+    def _scan_left() -> int:
+        n = 0
+        for c in range(bcol, -1, -1):
+            if (brow, c) in occupied:
+                break
+            n += 1
+        return n - 1
+
+    def _scan_down() -> int:
+        n = 0
+        for r in range(brow, GRID_ROWS):
+            if (r, bcol) in occupied:
+                break
+            n += 1
+        return n - 1
+
+    def _scan_up() -> int:
+        n = 0
+        for r in range(brow, -1, -1):
+            if (r, bcol) in occupied:
+                break
+            n += 1
+        return n - 1
+
+    right_ext = _scan_right()
+    left_ext = _scan_left()
+    down_ext = _scan_down()
+    up_ext = _scan_up()
+    max_w = max(1, left_ext + 1 + right_ext)
+    max_h = max(1, up_ext + 1 + down_ext)
+    return max_w, max_h
+
+
+def merged_items_occupied_excluding_uid(
+    merged_items: Mapping[str, Any],
+    *,
+    exclude_uid: str,
+) -> Set[Tuple[int, int]]:
+    """画板占位格集合，排除 ``exclude_uid`` 自身占格（供轮廓未知日志推断尺寸上界）。"""
+    occ: Set[Tuple[int, int]] = set()
+    for uid, it in merged_items.items():
+        if str(uid) == str(exclude_uid) or not isinstance(it, dict):
+            continue
+        if it.get("box_id") is None:
+            continue
+        try:
+            int(it["box_id"])
+        except (TypeError, ValueError):
+            continue
+        if it.get("box_id_confirmed"):
+            occ |= _occupied_cells_item_board_display(it)
+    for uid, it in merged_items.items():
+        if str(uid) == str(exclude_uid) or not isinstance(it, dict):
+            continue
+        if it.get("box_id") is None:
+            continue
+        try:
+            bid = int(it["box_id"])
+        except (TypeError, ValueError):
+            continue
+        if it.get("box_id_confirmed"):
+            continue
+        occ.add((bid // GRID_COLS, bid % GRID_COLS))
+    return occ
+
+
+def infer_max_shape_wh_for_unknown_contour_merged_row(
+    uid: str,
+    row: Dict[str, Any],
+    merged_items: Mapping[str, Any],
+) -> Optional[Tuple[int, int]]:
+    """
+    品质已知、合并表无 ``shape`` 的日志行：按场上占位推断 ``max_shape_wh``。
+
+    与画板 ``_query_item_for_grid`` 在 ``shape is None`` 且 ``max_w < GRID_COLS`` 时一致；
+    满格上界时返回 ``None``（不按尺寸过滤，与 UI 关闭 max 分支一致）。
+    """
+    uid_s = str(uid)
+    if uid_s.startswith("phantom_"):
+        return None
+    if row.get("shape") is not None:
+        return None
+    if row.get("quality") is None:
+        return None
+    cid_raw = row.get("item_cid")
+    price_raw = row.get("price")
+    if cid_raw is not None and price_raw is not None:
+        return None
+    bid_raw = row.get("box_id")
+    if bid_raw is None:
+        return None
+    try:
+        bid = int(bid_raw)
+    except (TypeError, ValueError):
+        return None
+    brow, bcol = bid // GRID_COLS, bid % GRID_COLS
+    occupied = merged_items_occupied_excluding_uid(merged_items, exclude_uid=uid_s)
+    max_w, max_h = infer_max_shape_wh_from_anchor(brow, bcol, occupied)
+    if max_w >= GRID_COLS and max_h >= GRID_ROWS:
+        return None
+    return max_w, max_h
+
+
 def board_display_occupied_cells_merged(board_snapshot: Dict[str, Any]) -> set:
     """
     画板几何占位（与空置区计数一致）：基于 ``merged_items_dict``，

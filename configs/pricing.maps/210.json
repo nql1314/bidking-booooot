@@ -1,6 +1,6 @@
 {
   "pricing": {
-    "fallback_bid_price": 22222,
+    "fallback_bid_price": 23344,
     "enable_big_gold_adjustment": false,
     "enable_opponent_bid_adjustment": true,
     "enable_vacant_red_floor_ceiling_pick": false,
@@ -15,7 +15,7 @@
       "4": 0.0,
       "default": 0.0
     },
-    "vacant_red_floor_ceiling_pick_mode": "aggressive",
+    "vacant_red_floor_ceiling_pick_mode": "force_gold_red",
     "opponent_bid_blend_weights": {
       "bid": 0.0,
       "opponent": 0.0
@@ -26,17 +26,7 @@
   "automation": {
     "express_station_round1_emoji": {
       "enabled": false,
-      "anti_routine_enabled": false,
-      "emoji": "赞赏",
-      "emoji_by_weekday": {
-        "mon": "生气",
-        "tue": "自信",
-        "wed": "赞赏",
-        "thu": "惊讶",
-        "fri": "嘲讽",
-        "sat": "遗憾",
-        "sun": "惊讶"
-      },
+      "emoji": "感谢",
       "seat_1_price": 520,
       "seat_2_price": 144,
       "round2_plus_high_random_max": 888,

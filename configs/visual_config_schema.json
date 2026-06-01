@@ -419,6 +419,15 @@
       ]
     },
     {
+      "path": "safety.verify_bid_confirm_snapshot",
+      "type": "bool",
+      "label": "出价快照确认重试",
+      "description": "开启后：每次出价 UI 后轮询画板快照，见到 C2S_34_game_bid 才视为完成，否则重试直至超时、下一回合或 game over。关闭则只点一次出价不校验。重试间隔等见 config.json 的 timing。",
+      "scope": "config",
+      "group": "出价",
+      "hide": false
+    },
+    {
       "path": "timing.after_map_select_wait_seconds",
       "type": "float",
       "label": "选图后等待（秒）",

@@ -1788,6 +1788,131 @@ class BoardPricingTests(unittest.TestCase):
         )
         self.assertAlmostEqual(rem5_cap, 0.0)
 
+    def test_unknown_contour_log_pricing_uses_inferred_max_shape_wh(self) -> None:
+        """轮廓未知日志：``compute_items_total`` 与画板一致，按锚格四向扫描 ``max_shape_wh`` 筛候选。"""
+        from bidking.analysis.grid_overlay_vacant_zone import (
+            infer_max_shape_wh_for_unknown_contour_merged_row,
+        )
+
+        gs = {
+            "uid": "u1",
+            "map_id": 4501,
+            "current_round": 4,
+            "players": {},
+            "items": {
+                "log_red": {
+                    "uid": "log_red",
+                    "box_id": 49,
+                    "box_id_confirmed": False,
+                    "shape": None,
+                    "quality": 6,
+                    "categories": [],
+                    "categories_any": [],
+                    "item_cid": None,
+                    "price": None,
+                    "manual_confirm_item_id": None,
+                    "excluded_categories": [],
+                    "excluded_qualities": [1, 2, 3, 4],
+                },
+                "blk_l": {
+                    "uid": "blk_l",
+                    "box_id": 48,
+                    "box_id_confirmed": True,
+                    "shape": 11,
+                    "quality": 1,
+                    "categories": [],
+                    "categories_any": [],
+                    "item_cid": None,
+                    "price": None,
+                    "manual_confirm_item_id": None,
+                    "excluded_categories": [],
+                    "excluded_qualities": [],
+                },
+                "blk_r": {
+                    "uid": "blk_r",
+                    "box_id": 50,
+                    "box_id_confirmed": True,
+                    "shape": 11,
+                    "quality": 1,
+                    "categories": [],
+                    "categories_any": [],
+                    "item_cid": None,
+                    "price": None,
+                    "manual_confirm_item_id": None,
+                    "excluded_categories": [],
+                    "excluded_qualities": [],
+                },
+                "blk_u": {
+                    "uid": "blk_u",
+                    "box_id": 39,
+                    "box_id_confirmed": True,
+                    "shape": 11,
+                    "quality": 1,
+                    "categories": [],
+                    "categories_any": [],
+                    "item_cid": None,
+                    "price": None,
+                    "manual_confirm_item_id": None,
+                    "excluded_categories": [],
+                    "excluded_qualities": [],
+                },
+                "blk_d": {
+                    "uid": "blk_d",
+                    "box_id": 59,
+                    "box_id_confirmed": True,
+                    "shape": 11,
+                    "quality": 1,
+                    "categories": [],
+                    "categories_any": [],
+                    "item_cid": None,
+                    "price": None,
+                    "manual_confirm_item_id": None,
+                    "excluded_categories": [],
+                    "excluded_qualities": [],
+                },
+            },
+            "displayed_event_uids": [],
+            "scan_history": [],
+        }
+        snap = {"game_state": gs, "skill_logs": [], "map_id": 4501, "current_round": 4}
+        merged = grid_overlay_mod.merged_items_dict_from_snapshot(snap)
+        max_wh = infer_max_shape_wh_for_unknown_contour_merged_row(
+            "log_red", merged["log_red"], merged
+        )
+        self.assertEqual(max_wh, (1, 1))
+        v = bp.estimate_snapshot_item_price_for_uid(snap, "log_red")
+        self.assertIsNotNone(v)
+        assert v is not None
+        _, csv_items = bp._load_item_prices_db()
+        from bidking.parsing import item_db
+
+        csv_index, _ = bp._load_item_prices_db()
+        _b, c_wide, _, e_wide, _ = item_db.query_item(
+            None,
+            6,
+            set(),
+            None,
+            csv_index,
+            csv_items,
+            excluded_qualities={1, 2, 3, 4},
+            max_shape_wh=None,
+            map_id=4501,
+        )
+        _b2, c_narrow, _, e_narrow, _ = item_db.query_item(
+            None,
+            6,
+            set(),
+            None,
+            csv_index,
+            csv_items,
+            excluded_qualities={1, 2, 3, 4},
+            max_shape_wh=(1, 1),
+            map_id=4501,
+        )
+        self.assertGreater(c_wide, c_narrow)
+        self.assertAlmostEqual(float(v), float(e_narrow), delta=1.0)
+        self.assertLess(float(v), float(e_wide) * 0.6)
+
     def test_unknown_contour_q6_reduces_tier_extra_by_one_cell(self) -> None:
         """无 shape 的红档占位：confirmed 计 1 格后 ``q6_grid_min`` 少补 1 格 tier_extra。"""
         gs = {
