@@ -59,6 +59,20 @@ class AutoVacantPhantomManualConfirmTests(unittest.TestCase):
         apply_auto_vacant_phantom_manual_confirm(uid, pk, spec, saved)
         self.assertEqual(pk.manual_confirm_item_id, 42)
 
+    def test_pricing_manual_confirm_restored_after_purge_without_user_lock(self) -> None:
+        """定价写回的 ``manual_confirm_item_id`` 在 purge 重算后应保留（回放翻页）。"""
+        uid = "phantom_vac_0001_3x1"
+        pk = ItemKnowledge(uid=uid)
+        pk.manual_confirm_item_id = 1046007
+        ph = {uid: pk}
+        saved = snapshot_auto_vacant_phantom_user_state(ph, {}, set())
+        self.assertFalse(saved[uid].user_locked)
+
+        pk2 = ItemKnowledge(uid=uid)
+        spec = VacantRectPhantomSpec(uid=uid, w=3, h=1, dc=1, dr=0)
+        apply_auto_vacant_phantom_manual_confirm(uid, pk2, spec, saved)
+        self.assertEqual(pk2.manual_confirm_item_id, 1046007)
+
 
 if __name__ == "__main__":
     unittest.main()

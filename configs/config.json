@@ -24,6 +24,9 @@
     "unknown_bg": "#1a7394",
     "fraud_empty_cells_algorithm": "tiling_strict"
   },
+  "safety": {
+    "verify_bid_confirm_snapshot": false
+  },
   "board_snapshot": {
     "enabled": true,
     "path": "data/board_snapshot.json",
@@ -73,8 +76,8 @@
     "after_map_select_wait_seconds": 8.0,
     "after_bid_confirm_wait_seconds": 1.0,
     "bid_confirm_verify_max_seconds": 30,
-    "bid_confirm_retry_pause_seconds": 0.35,
-    "bid_confirm_capture_delay_seconds": 0,
+    "bid_confirm_retry_pause_seconds": 3,
+    "bid_confirm_snapshot_poll_seconds": 3,
     "transition_debounce_seconds": 5.0,
     "reward_continue_debounce_seconds": 1.0
   },

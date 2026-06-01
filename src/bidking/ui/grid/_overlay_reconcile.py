@@ -117,7 +117,7 @@ def apply_scan_history_to_phantom_items(
 
 @dataclass(frozen=True)
 class AutoVacantPhantomSavedState:
-    """purge 自动 ``phantom_vac_*`` 前保存的用户态，供重算后恢复。"""
+    """purge 自动 ``phantom_vac_*`` 前保存的用户态与定价写回确认，供重算后恢复。"""
 
     quality_pref: object
     manual_confirm_item_id: Optional[int] = None
@@ -169,9 +169,9 @@ def apply_auto_vacant_phantom_manual_confirm(
     spec: VacantRectPhantomSpec,
     saved: Dict[str, AutoVacantPhantomSavedState],
 ) -> None:
-    """重算后写入 ``manual_confirm_item_id``：用户锁定优先于推断自动补齐。"""
+    """重算后写入 ``manual_confirm_item_id``：purge 前已有确认（含定价写回/用户锁定）优先于推断唯一补齐。"""
     prev = saved.get(uid)
-    if prev is not None and prev.user_locked and prev.manual_confirm_item_id is not None:
+    if prev is not None and prev.manual_confirm_item_id is not None:
         pk.manual_confirm_item_id = int(prev.manual_confirm_item_id)
         return
     if spec.manual_confirm_item_id is not None:

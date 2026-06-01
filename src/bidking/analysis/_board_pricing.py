@@ -58,7 +58,9 @@ from ..parsing.item_db import (
     weighted_est_max_item_base_value,
 )
 from . import grid_overlay as _grid_overlay
+from ._shape_wh import shape_wh_from_snapshot
 from .grid_overlay import is_auto_vacant_rect_phantom_uid
+from .grid_overlay_vacant_zone import infer_max_shape_wh_for_unknown_contour_merged_row
 from . import strategy as _strategy
 from ..logsys.perf_log import perf_log_elapsed
 
@@ -180,6 +182,7 @@ def _item_value(
     map_id_normalized: Optional[int],
     map_category_weights: Dict[int, float],
     price_quantile: Optional[float] = None,
+    max_shape_wh: Optional[Tuple[int, int]] = None,
 ) -> float:
     t0 = time.perf_counter()
     bid_raw = it.get("box_id")
@@ -214,6 +217,7 @@ def _item_value(
     excl_q = _int_set_from_field(it.get("excluded_qualities"))
     excl_c = _int_set_from_field(it.get("excluded_categories"))
 
+    max_wh = max_shape_wh if sh is None else None
     best, count, unique, est, _label = query_item(
         sh,
         q,
@@ -223,7 +227,7 @@ def _item_value(
         csv_items,
         excluded_categories=excl_c if excl_c else None,
         excluded_qualities=excl_q if excl_q else None,
-        max_shape_wh=None,
+        max_shape_wh=max_wh,
         map_category_weights=map_category_weights if map_category_weights else None,
         map_id=map_id_normalized,
         categories_any=cats_any if cats_any else None,
@@ -241,6 +245,14 @@ def _item_value(
         cand = list(csv_items)
         if sh is not None:
             cand = [i for i in cand if i.shape == sh]
+        elif max_wh is not None:
+            mw, mh = max_wh
+
+            def _fits_shape(shape: Any) -> bool:
+                w, h = shape_wh_from_snapshot(shape)
+                return w <= mw and h <= mh
+
+            cand = [i for i in cand if _fits_shape(i.shape)]
         if q is not None:
             cand = [i for i in cand if i.quality == q]
         if excl_q:
@@ -284,6 +296,12 @@ def estimate_snapshot_item_price(
     q_override: Optional[float] = None
     if uid is not None and is_auto_vacant_rect_phantom_uid(str(uid)):
         q_override = _resolve_auto_vacant_phantom_price_quantile_for_snapshot(board_snapshot)
+    max_wh: Optional[Tuple[int, int]] = None
+    if uid is not None:
+        items_all = _grid_overlay.merged_items_dict_from_snapshot(board_snapshot)
+        max_wh = infer_max_shape_wh_for_unknown_contour_merged_row(
+            str(uid), it, items_all
+        )
     v = _item_value(
         it,
         csv_index=csv_index,
@@ -291,6 +309,7 @@ def estimate_snapshot_item_price(
         map_id_normalized=mid_n,
         map_category_weights=weights,
         price_quantile=q_override,
+        max_shape_wh=max_wh,
     )
     return v if v > 0 else None
 
@@ -323,7 +342,9 @@ def compute_items_total(board_snapshot: Dict[str, Any]) -> float:
     for uid, it in items.items():
         if not isinstance(it, dict):
             continue
-        q = auto_vac_q if is_auto_vacant_rect_phantom_uid(str(uid)) else None
+        uid_s = str(uid)
+        q = auto_vac_q if is_auto_vacant_rect_phantom_uid(uid_s) else None
+        max_wh = infer_max_shape_wh_for_unknown_contour_merged_row(uid_s, it, items)
         total += _item_value(
             it,
             csv_index=csv_index,
@@ -331,6 +352,7 @@ def compute_items_total(board_snapshot: Dict[str, Any]) -> float:
             map_id_normalized=mid_n,
             map_category_weights=weights,
             price_quantile=q,
+            max_shape_wh=max_wh,
         )
     perf_log_elapsed(f"compute_items_total (items={len(items)})", t0)
     return total
