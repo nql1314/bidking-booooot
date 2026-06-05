@@ -159,17 +159,36 @@ def _geo_footprint_cells_from_shape_field(shape_val: Any) -> Optional[float]:
     return float(max(1, w * h))
 
 
-def _confirmed_tier_item_footprint_cells(it: Dict[str, Any]) -> Optional[float]:
+def _confirmed_tier_item_footprint_cells(
+    it: Dict[str, Any],
+    *,
+    board_snapshot: Optional[Dict[str, Any]] = None,
+    csv_cells_raw: Optional[Dict[str, float]] = None,
+    map_id_normalized: Optional[int] = None,
+    uid: Optional[str] = None,
+) -> Optional[float]:
     """Q4–Q6 档位 ``confirmed_q*`` 单行占位格数。
 
-    有几何 ``shape`` 时用 w×h；品质已知、轮廓未知（``shape is None``）按占位
-    1×1 计 1 格，与 ``unknown_contour`` 基数一致（不要求 ``box_id_confirmed``）。
+    有几何 ``shape`` 时用 w×h；品质已知、轮廓未知（``shape is None``）按 CSV
+    权重等效格数占位（与 ``unknown_value.weighted_cell_equiv_for_unknown_contour_item``
+    同源），无法估算时回退 1×1（不要求 ``box_id_confirmed``）。
     """
     fp = _geo_footprint_cells_from_shape_field(it.get("shape"))
     if fp is not None:
         return fp
     if it.get("shape") is not None:
         return None
+    if board_snapshot is not None and csv_cells_raw is not None:
+        wcells = _unknown_value.weighted_cell_equiv_for_unknown_contour_item(
+            it,
+            board_snapshot,
+            csv_cells_raw,
+            {},
+            map_id_normalized,
+            uid=uid,
+        )
+        if wcells is not None and wcells > 0:
+            return float(wcells)
     return 1.0
 
 
@@ -1329,10 +1348,21 @@ def phantom_unknown_tier_credit_q456(
 
 def confirmed_tier_footprint_q456(
     board_snapshot: Dict[str, Any],
+    *,
+    csv_cells_raw: Optional[Dict[str, float]] = None,
 ) -> Tuple[int, int, int]:
-    """合并表 Q4/Q5/Q6 已确认档位占位格数（几何 shape + 未知轮廓 1×1）。"""
+    """合并表 Q4/Q5/Q6 已确认档位占位格数（几何 shape + 未知轮廓权重占位）。"""
     t0 = time.perf_counter()
     items = _grid_overlay.merged_items_dict_from_snapshot(board_snapshot)
+    mid = board_snapshot.get("map_id")
+    if mid is None:
+        gs = board_snapshot.get("game_state")
+        if isinstance(gs, dict):
+            mid = gs.get("map_id")
+    try:
+        mid_n = item_db.normalize_map_id(int(mid) if mid is not None else None)
+    except (TypeError, ValueError):
+        mid_n = item_db.normalize_map_id(None)
     s4 = s5 = s6 = 0.0
     for _uid, it in items.items():
         if not isinstance(it, dict):
@@ -1351,7 +1381,13 @@ def confirmed_tier_footprint_q456(
             continue
         if q not in (4, 5, 6):
             continue
-        fp = _confirmed_tier_item_footprint_cells(it)
+        fp = _confirmed_tier_item_footprint_cells(
+            it,
+            board_snapshot=board_snapshot,
+            csv_cells_raw=csv_cells_raw,
+            map_id_normalized=mid_n,
+            uid=str(_uid),
+        )
         if fp is None:
             continue
         if q == 4:
@@ -1363,6 +1399,38 @@ def confirmed_tier_footprint_q456(
     result = int(round(s4)), int(round(s5)), int(round(s6))
     perf_log_elapsed(f"confirmed_tier_footprint_q456 (items={len(items)})", t0)
     return result
+
+
+def unknown_contour_vacant_cell_excess_subtract(
+    uc_excess_detail: Any,
+    event_stats: Any,
+) -> int:
+    """未知轮廓 ``max(0, 加权等效格 − 1)`` 中应从 ``vacant_adj`` 扣减的部分。
+
+    当 ``q*_grid_min`` 已参与 ``tier_extra`` 时，该档权重占位已由
+    ``confirmed_tier_footprint_q456`` 吸收，不再重复扣减；其余品质（含无
+    ``grid_min`` 的金/红/白绿）仍按超额格从有效空置乘数中扣除。
+    """
+    if not isinstance(uc_excess_detail, dict):
+        return 0
+    per_item = uc_excess_detail.get("detail_per_item")
+    if not isinstance(per_item, list):
+        return 0
+    total = 0.0
+    for row in per_item:
+        if not isinstance(row, dict):
+            continue
+        try:
+            q = int(row.get("quality"))
+            ex = float(row.get("excess_over_one_cell") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if ex <= 0:
+            continue
+        if q in (4, 5, 6) and event_stat_grid_min_optional(event_stats, f"q{q}_grid_min") is not None:
+            continue
+        total += ex
+    return max(0, int(round(total)))
 
 
 def tier_min_extra_value_and_cells(

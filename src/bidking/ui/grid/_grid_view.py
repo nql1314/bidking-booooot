@@ -36,7 +36,7 @@
   - 诈骗格规则**仅用于**上述自动空置区（计数与初始橘红），**不限制**右键手动剔除/恢复空置标记。由 ``grid_view.fraud_empty_cells_algorithm`` 指定：字符串 ``tiling_strict`` / ``none`` 等，或列表 ``["tiling", n]`` / 对象 ``{"tiling": n}`` 将铺板与 trim 写在一起。
   - 空置候选格：普通右键可手动剔除该格（不计空置、不铺橘红），再右键同一格可恢复。
   - 日志物品仍为「推算轮廓」（CSV 自动扩框、非手动画框）时：在该物品当前占格内右键可取消本次推算扩框（按锚格 1×1 显示），直至日志锁定形状或新对局。
-  - 第 4 回合起自动填充的 ``phantom_vac_*``：图例栏「自动填充」切换钮（「还原轮廓」右侧）在开/关模式间切换并重绘；占格上 **Ctrl+左键** 直接改为金（Q5 默认），**Ctrl+右键** 直接改为红（Q6）；普通 **右键** 与手画幽灵相同可删除，本局内不再自动补回（新对局清空抑制表）。
+  - 第 4 回合起自动填充的 ``phantom_vac_*``：图例栏「自动填充」切换钮在开/关间切换并重绘；占格上 **Ctrl+左键** 直接改为金（Q5 默认），**Ctrl+右键** 直接改为红（Q6）；普通 **右键** 与手画幽灵相同可删除，本局内不再自动补回（新对局清空抑制表）。
 """
 
 import io
@@ -94,6 +94,7 @@ from ...analysis.raw_pricing import (
 from ...analysis.snapshot import game_state_to_json, item_knowledge_to_json
 from ...config.map_runtime_overlay import merged_runtime_with_map_pricing
 from ...config.runtime import (
+    auto_expand_log_contour_enabled,
     infer_fraud_empty_cells_algorithm_and_trim,
     infer_vacant_rect_phantoms_config_enabled,
     infer_vacant_rect_phantoms_enabled,
@@ -868,6 +869,7 @@ class GridWindow:
         )
         self._runtime_raw = _rt_cfg.raw
         self._auto_fill_ui_enabled = False
+        self._auto_expanded_log_uids: Set[str] = set()
 
         # 实时 tail：关闭画板或返回主页时置位，供后台线程退出
         self._monitor_stop = threading.Event()
@@ -1056,10 +1058,9 @@ class GridWindow:
         return merged_runtime_with_map_pricing(self._runtime_raw)
 
     def _apply_auto_fill_ui_from_config(self) -> None:
-        """图例栏「自动填充」初始模式 = 当前对局地图合并后的 ``infer_vacant_rect_phantoms``。"""
-        self._auto_fill_ui_enabled = infer_vacant_rect_phantoms_config_enabled(
-            self._merged_runtime_for_config()
-        )
+        """图例栏「自动填充」初始模式 = 当前对局地图合并后的配置。"""
+        merged = self._merged_runtime_for_config()
+        self._auto_fill_ui_enabled = infer_vacant_rect_phantoms_config_enabled(merged)
         self._refresh_auto_fill_toggle_button()
 
     def _refresh_auto_fill_toggle_button(self) -> None:
@@ -1121,6 +1122,7 @@ class GridWindow:
         self._unknown_cell_quality_pref.clear()
         self._manual_shapes_restore_backup = None
         self._vacant_manual_suppress.clear()
+        self._auto_expanded_log_uids.clear()
 
     def _apply_auto_fill_board_after_mode_change(self) -> None:
         """切换自动填充模式后：清空本地覆盖、重绘画板，必要时写回空 overlay 快照。"""
@@ -1140,7 +1142,7 @@ class GridWindow:
         self._apply_auto_fill_board_after_mode_change()
 
     def _sync_round4_overlay_from_analysis(self) -> None:
-        """第 4 回合起刷新 raw_pricing 与空置矩形自动幽灵（``phantom_vac_*``）。"""
+        """刷新 raw_pricing；自动填充（第 4 回合）后按配置接续日志轮廓扩展。"""
         rp = build_raw_pricing_dict(
             map_id=int(self.state.map_id or 0),
             skill_logs=list(self._skill_logs),
@@ -1150,10 +1152,22 @@ class GridWindow:
             grid_avg_infer_max_grid_count=self._grid_avg_infer_max_grid_count,
         )
         self._last_raw_pricing = rp
-        if not self._infer_round4_auto_fill_active():
+
+        recorded_cell_source: Dict[Tuple[int, int], str] = {}
+        phantom_specs: List[_grid_overlay.VacantRectPhantomSpec] = []
+        if self._infer_round4_auto_fill_active():
+            recorded_cell_source, phantom_specs = self._sync_vacant_rect_phantoms_fill(
+                rp
+            )
+        else:
             self._purge_auto_vacant_rect_phantoms()
-            return
-        self._sync_vacant_rect_phantoms_from_analysis(rp)
+
+        if auto_expand_log_contour_enabled(self._merged_runtime_raw()):
+            self._sync_unknown_contour_log_shapes_expand(
+                rp,
+                phantom_specs=phantom_specs,
+                recorded_cell_source=recorded_cell_source,
+            )
 
     def _purge_auto_vacant_rect_phantoms(self) -> None:
         """移除上一轮自动推断的 ``phantom_vac_*``，保留用户手画幽灵。"""
@@ -1187,25 +1201,19 @@ class GridWindow:
             fraud_empty_cells_tiling_n=self._fraud_empty_cells_tiling_n,
         )
 
-    def _sync_vacant_rect_phantoms_from_analysis(
+    def _sync_vacant_rect_phantoms_fill(
         self, raw_pricing: Dict[str, Any]
-    ) -> None:
-        """
-        艾莎第 4 回合及之后：空置闭合矩形 → 自动幽灵 + 手动画框；
-        候选唯一品质/唯一物品时自动补齐。
-        """
-        if not self._infer_round4_auto_fill_active():
-            self._purge_auto_vacant_rect_phantoms()
-            return
+    ) -> Tuple[Dict[Tuple[int, int], str], List[_grid_overlay.VacantRectPhantomSpec]]:
+        """第 4 回合起：``phantom_vac_*`` 自动填充；返回锚格映射与规格供配置项接续扩形。"""
+        self._purge_auto_vacant_rect_phantoms()
         saved_auto = snapshot_auto_vacant_phantom_user_state(
             self._phantom_items,
             self._phantom_quality_pref,
             self._phantom_quality_user_locked,
         )
-        self._purge_auto_vacant_rect_phantoms()
         occ = self._occupied_cells_for_vacant_rect_infer()
         fraud_for_infer = self._fraud_cells_for_vacant_rect_infer(occ)
-        infer_result = _grid_overlay.compute_vacant_rect_phantom_specs(
+        fill_result = _grid_overlay.compute_vacant_rect_phantom_specs(
             game_state=self.state,
             manual_shapes=self._manual_shapes,
             phantom_items=self._phantom_items,
@@ -1218,20 +1226,9 @@ class GridWindow:
             raw_pricing=raw_pricing,
             current_round=int(self.state.current_round or 1),
             fraud_cells=fraud_for_infer,
-            enabled=self._infer_round4_auto_fill_active(),
+            enabled=True,
         )
-        for uid, shape in infer_result.inferred_log_shapes.items():
-            w, h, dc, dr = shape
-            if int(w) * int(h) <= 1:
-                self._manual_shapes.pop(uid, None)
-                continue
-            self._manual_shapes[uid] = (int(w), int(h), int(dc), int(dr))
-        for uid in infer_result.absorbed_phantom_uids:
-            self._phantom_items.pop(uid, None)
-            self._manual_shapes.pop(uid, None)
-            self._phantom_quality_pref.pop(uid, None)
-        specs = infer_result.specs
-        for spec in specs:
+        for spec in fill_result.specs:
             if spec.uid in self._auto_vacant_rect_phantom_suppress_uids:
                 continue
             pk = ItemKnowledge(uid=spec.uid)
@@ -1253,8 +1250,57 @@ class GridWindow:
             restore_auto_vacant_phantom_user_locked(
                 spec.uid, saved_auto, self._phantom_quality_user_locked
             )
-        if specs:
+        if fill_result.specs:
             apply_scan_history_to_phantom_items(self._phantom_items, self.state)
+        return dict(fill_result.recorded_cell_source), list(fill_result.specs)
+
+    def _clear_auto_expanded_log_manual_shapes(self) -> None:
+        """移除上一轮配置自动扩展写入的日志轮廓，便于本轮重新推断占位。"""
+        for uid in list(self._auto_expanded_log_uids):
+            self._manual_shapes.pop(uid, None)
+
+    def _sync_unknown_contour_log_shapes_expand(
+        self,
+        raw_pricing: Dict[str, Any],
+        *,
+        phantom_specs: List[_grid_overlay.VacantRectPhantomSpec],
+        recorded_cell_source: Dict[Tuple[int, int], str],
+    ) -> None:
+        """``grid_view.auto_expand_log_contour`` 为真时：填充之后接续日志轮廓推断。"""
+        self._clear_auto_expanded_log_manual_shapes()
+        occ = self._occupied_cells_for_vacant_rect_infer()
+        expand_result = _grid_overlay.compute_unknown_contour_log_shapes(
+            game_state=self.state,
+            manual_shapes=self._manual_shapes,
+            phantom_items=self._phantom_items,
+            phantom_quality_pref=self._phantom_quality_pref,
+            occupied_cells=set(occ),
+            vacant_manual_suppress=set(self._vacant_manual_suppress),
+            max_box_id=max_anchor_box_id_from_overlay_ui(
+                self.state.items, self._phantom_items
+            ),
+            raw_pricing=raw_pricing,
+            phantom_specs=phantom_specs,
+            recorded_cell_source=recorded_cell_source,
+            exclude_manual_shape_uids=set(),
+            enabled=True,
+        )
+        new_auto: Set[str] = set()
+        for uid in sorted(expand_result.inferred_log_shapes.keys()):
+            w, h, dc, dr = expand_result.inferred_log_shapes[uid]
+            if int(w) * int(h) <= 1:
+                continue
+            if self._rect_overlaps_occupied(
+                int(dr), int(dc), int(w), int(h), exclude_uid=str(uid)
+            ):
+                continue
+            self._manual_shapes[uid] = (int(w), int(h), int(dc), int(dr))
+            new_auto.add(str(uid))
+        self._auto_expanded_log_uids = new_auto
+        for uid in expand_result.absorbed_phantom_uids:
+            self._phantom_items.pop(uid, None)
+            self._manual_shapes.pop(uid, None)
+            self._phantom_quality_pref.pop(uid, None)
 
     def _build_occupied(self, exclude_uid: str = "") -> set:
         """
@@ -1695,52 +1741,12 @@ class GridWindow:
             snap = self._make_board_snapshot()
         return estimate_snapshot_item_price_for_uid(snap, uid)
 
-    @staticmethod
-    def _counts_as_phantom_unknown_stat(uid: str) -> bool:
-        """顶栏「未知」之一：手画 ``phantom_*`` 与自动 ``phantom_vac_*``，与是否确认品质/物品无关。"""
-        return str(uid).startswith("phantom_")
-
-    @staticmethod
-    def _counts_as_unknown_quality_known_shape_stat(
-        uid: str, row: Dict[str, Any], board_snapshot: Dict[str, Any]
-    ) -> bool:
+    def _stats_for_top_bar(self) -> Tuple[int, int, int, int, int, int, int]:
         """
-        顶栏「未知」之一：日志物品外形已锁定（合并表 ``shape`` 非空）、日志 ``quality`` 仍为空。
+        顶栏金/红/未知格统计：品质与格数与画板绘制一致（``_display_quality`` / ``_effective_shape_wh``）。
 
-        已精确价锁定 CID、已手动确认物品 id 的不计入。
+        「未知」仅计品质仍无法确定的占位格；顶栏展示时再叠加几何空置格数。
         """
-        if GridWindow._counts_as_phantom_unknown_stat(uid):
-            return False
-        if row.get("box_id") is None:
-            return False
-        if row.get("shape") is None:
-            return False
-        w, h = GridWindow._shape_wh(row.get("shape"))
-        if w * h <= 0:
-            return False
-        if row.get("item_cid") is not None and row.get("price") is not None:
-            return False
-        if row.get("manual_confirm_item_id") is not None:
-            return False
-        gs = board_snapshot.get("game_state")
-        if isinstance(gs, dict):
-            raw_items = gs.get("items")
-            if isinstance(raw_items, dict):
-                raw = raw_items.get(uid) or raw_items.get(str(uid))
-                if isinstance(raw, dict) and raw.get("quality") is not None:
-                    return False
-        return True
-
-    @staticmethod
-    def _stats_from_merged_items(board_snapshot: Dict[str, Any]) -> Tuple[int, int, int, int, int, int, int]:
-        """
-        与 ``analysis.grid_overlay.merged_items_dict`` 一致：有 ``box_id`` 的占位行总格数及 Q5/Q6/
-        幽灵占格、已知轮廓未知品质日志占格（见 :meth:`_counts_as_phantom_unknown_stat`、
-        :meth:`_counts_as_unknown_quality_known_shape_stat`）。顶栏展示时另加几何空置格数。
-
-        形状取合并表中的 ``shape``（已含手动画框、推断外形、手动确认投影）。
-        """
-        merged = _grid_overlay.merged_items_dict(board_snapshot)
         total_cells = 0
         item_count = 0
         q5_count = 0
@@ -1748,36 +1754,30 @@ class GridWindow:
         q5_cells = 0
         q6_cells = 0
         unknown_cells = 0
-        for uid, row in merged.items():
-            if not isinstance(row, dict):
-                continue
-            if row.get("box_id") is None:
-                continue
-            w, h = GridWindow._shape_wh(row.get("shape"))
+
+        def _accum(uid: str, k: ItemKnowledge) -> None:
+            nonlocal total_cells, item_count, q5_count, q6_count, q5_cells, q6_cells, unknown_cells
+            if k.box_id is None:
+                return
+            w, h = self._effective_shape_wh(uid, k)
             cells = w * h
             total_cells += cells
             item_count += 1
-            q = row.get("quality")
-            qi: Optional[int]
-            if q is None:
-                qi = None
-            else:
-                try:
-                    qi = int(q)
-                except (TypeError, ValueError):
-                    qi = None
-            if GridWindow._counts_as_phantom_unknown_stat(str(uid)):
-                unknown_cells += cells
-            elif qi == 5:
+            q = self._display_quality(uid, k)
+            if q == 5:
                 q5_count += 1
                 q5_cells += cells
-            elif qi == 6:
+            elif q == 6:
                 q6_count += 1
                 q6_cells += cells
-            elif GridWindow._counts_as_unknown_quality_known_shape_stat(
-                str(uid), row, board_snapshot
-            ):
+            elif q is None:
                 unknown_cells += cells
+
+        for uid, k in self.state.items.items():
+            _accum(uid, k)
+        for uid, k in self._phantom_items.items():
+            _accum(uid, k)
+
         return (
             total_cells,
             item_count,
@@ -1791,9 +1791,9 @@ class GridWindow:
     def _tooltip_text_map_merged_stats(self) -> str:
         return (
             "画板金（Q5）/ 红（Q6）件数与格数\n"
-            "与 ``merged_items_dict`` 一致（日志 + 幽灵、手动画框、推断外形、偏好与手动确认投影）。\n\n"
-            "「未知」= 几何空置格 + 全部幽灵占格（``phantom_*``，含手画与 ``phantom_vac_*``，\n"
-            "不论是否已确认品质或物品）+ 已知轮廓且日志品质仍空的占格。\n"
+            "与画板格子着色一致：日志品质、手选候选品质、唯一候选推断、\n"
+            "手画幽灵金/红笔（含缺省金笔）与手动确认物品。\n\n"
+            "「未知」= 几何空置格 + 品质仍无法确定的占位格（含推断笔幽灵）。\n"
             "几何空置与右侧「空置」同源；有效空置乘数见「未知空置格」。"
         )
 
@@ -2041,12 +2041,7 @@ class GridWindow:
     def _info_summary_text(self) -> str:
         """第 2 行摘要：画板总格、已知物品件数、总格数、平均格数。"""
         try:
-            snap = self._make_board_snapshot(raw_pricing=self._last_raw_pricing)
-            (
-                total_cells,
-                item_count,
-                *_rest,
-            ) = self._stats_from_merged_items(snap)
+            total_cells, item_count, *_rest = self._stats_for_top_bar()
 
             avg_cells = total_cells / item_count if item_count else 0.0
             board_cells = getattr(self, "_last_board_cells", None)
@@ -2404,20 +2399,24 @@ class GridWindow:
         uid, k, dc, dr, w, h, extra = best_payload
         return (uid, k, dc, dr, w, h, extra)
 
-    def _expand_log_items_into_vacant(self) -> Tuple[int, int]:
+    def _expand_log_items_into_vacant(self, *, silent: bool = False) -> Tuple[int, int]:
         """
         仅用已有日志物品的「手动轮廓」向空置区扩展，不新增幽灵、不新增物品。
         艾莎：非金红（含未知）→ 金 → 红。
         拉文：绿/蓝 → 金 → 普通（灰、紫、未知）→ 红；同增益按候选形状边际概率优先。
+        ``silent=True`` 时不弹窗、不覆盖「还原轮廓」备份（供自动扩展使用）。
         返回 (成功扩展步数, 仍空余格数)。
         """
-        self._manual_shapes_restore_backup = dict(self._manual_shapes)
+        if not silent:
+            self._manual_shapes_restore_backup = dict(self._manual_shapes)
         remaining, err = self._vacant_remaining_for_expand()
         if remaining is None:
-            messagebox.showinfo("扩展日志物品", err)
+            if not silent:
+                messagebox.showinfo("扩展日志物品", err)
             return 0, 0
         if not remaining:
-            messagebox.showinfo("扩展日志物品", "空置区域内已无空格。")
+            if not silent:
+                messagebox.showinfo("扩展日志物品", "空置区域内已无空格。")
             return 0, 0
 
         use_sp = self._board_mode == BOARD_MODE_RAVEN
@@ -2430,10 +2429,11 @@ class GridWindow:
             has_any = bool(p1 or p2 or p3)
 
         if not has_any:
-            messagebox.showinfo(
-                "扩展日志物品",
-                "没有可调物品：需要日志中轮廓未锁定（无 ItemSlotType）且未手动确认唯一候选的物品。",
-            )
+            if not silent:
+                messagebox.showinfo(
+                    "扩展日志物品",
+                    "没有可调物品：需要日志中轮廓未锁定（无 ItemSlotType）且未手动确认唯一候选的物品。",
+                )
             return 0, len(remaining)
 
         steps = 0
@@ -2456,21 +2456,22 @@ class GridWindow:
                 steps += 1
 
         leftover = len(remaining)
-        if steps == 0 and leftover > 0:
-            messagebox.showinfo(
-                "扩展日志物品",
-                f"未能扩展任何物品（候选为空或与占位冲突）。仍剩 {leftover} 格。",
-            )
-        elif leftover > 0:
-            messagebox.showinfo(
-                "扩展日志物品",
-                f"已扩展 {steps} 步；仍有 {leftover} 格空置（可调物品无法再合法变大）。",
-            )
-        else:
-            messagebox.showinfo(
-                "扩展日志物品",
-                f"已扩展 {steps} 步，空置区域已由日志物品轮廓铺满。",
-            )
+        if not silent:
+            if steps == 0 and leftover > 0:
+                messagebox.showinfo(
+                    "扩展日志物品",
+                    f"未能扩展任何物品（候选为空或与占位冲突）。仍剩 {leftover} 格。",
+                )
+            elif leftover > 0:
+                messagebox.showinfo(
+                    "扩展日志物品",
+                    f"已扩展 {steps} 步；仍有 {leftover} 格空置（可调物品无法再合法变大）。",
+                )
+            else:
+                messagebox.showinfo(
+                    "扩展日志物品",
+                    f"已扩展 {steps} 步，空置区域已由日志物品轮廓铺满。",
+                )
         return steps, leftover
 
     def _on_expand_log_items_into_vacant(self) -> None:
@@ -3347,10 +3348,7 @@ class GridWindow:
             rnd = int(self.state.current_round or 1)
             self._map_round_label.config(text=f"地图 {mid}   第 {rnd} 回合")
         if hasattr(self, "_map_quality_stats_label"):
-            stats_snap = self._make_board_snapshot(self._last_raw_pricing)
-            _tc, _ic, q5c, q5g, q6c, q6g, unk_item_cells = self._stats_from_merged_items(
-                stats_snap
-            )
+            _tc, _ic, q5c, q5g, q6c, q6g, unk_item_cells = self._stats_for_top_bar()
             unk_cells = int(vac_n) + int(unk_item_cells)
             board_cells = int(_tc) + int(vac_n)
             self._last_board_cells = board_cells
@@ -4734,6 +4732,7 @@ class GridWindow:
             k = self.state.items[uid]
             if k.shape is None and uid in self._manual_shapes:
                 self._manual_shapes.pop(uid, None)
+                self._auto_expanded_log_uids.discard(str(uid))
                 self._refresh()
                 return
         if uid is not None:

@@ -25,6 +25,52 @@ from bidking.analysis.scan_inference import (
     possible_qualities_from_scan_history,
     vacant_early_unit_from_exclusions,
 )
+
+
+def _fill_phantoms_then_expand_log_shapes(
+    grid_overlay_mod,
+    *,
+    game_state,
+    manual_shapes,
+    phantom_items,
+    phantom_quality_pref,
+    occupied_cells,
+    vacant_manual_suppress,
+    max_box_id,
+    raw_pricing,
+    current_round,
+    fraud_cells=None,
+):
+    """与画板一致：先 ``phantom_vac`` 填充，再日志轮廓扩展。"""
+    fill = grid_overlay_mod.compute_vacant_rect_phantom_specs(
+        game_state=game_state,
+        manual_shapes=manual_shapes,
+        phantom_items=phantom_items,
+        phantom_quality_pref=phantom_quality_pref,
+        occupied_cells=set(occupied_cells),
+        vacant_manual_suppress=set(vacant_manual_suppress),
+        max_box_id=max_box_id,
+        raw_pricing=raw_pricing,
+        current_round=current_round,
+        fraud_cells=fraud_cells,
+        enabled=True,
+    )
+    log = grid_overlay_mod.compute_unknown_contour_log_shapes(
+        game_state=game_state,
+        manual_shapes=manual_shapes,
+        phantom_items=phantom_items,
+        phantom_quality_pref=phantom_quality_pref,
+        occupied_cells=set(occupied_cells),
+        vacant_manual_suppress=set(vacant_manual_suppress),
+        max_box_id=max_box_id,
+        raw_pricing=raw_pricing,
+        phantom_specs=fill.specs,
+        recorded_cell_source=fill.recorded_cell_source,
+        enabled=True,
+    )
+    return fill, log
+
+
 class BoardPricingTests(unittest.TestCase):
     def setUp(self) -> None:
         import os
@@ -775,6 +821,137 @@ class BoardPricingTests(unittest.TestCase):
             infer_unknown_contour_shapes_enabled(legacy_off, current_round=4)
         )
 
+    def test_log_contour_expand_early_round_without_phantom_fill(self) -> None:
+        """第 2 回合：不跑 phantom 填充，仅权重价日志扩形。"""
+        from bidking.parsing.state import GameState, ItemKnowledge
+
+        st = GameState()
+        st.current_round = 2
+        st.map_id = 4509
+        st.items["log_q3"] = ItemKnowledge(
+            uid="log_q3",
+            box_id=15,
+            box_id_confirmed=False,
+            shape=None,
+            quality=3,
+            excluded_qualities=set(),
+            excluded_categories=set(),
+        )
+        occ = {(1, 5)}
+        fill = grid_overlay_mod.compute_vacant_rect_phantom_specs(
+            game_state=st,
+            manual_shapes={},
+            phantom_items={},
+            phantom_quality_pref={},
+            occupied_cells=set(occ),
+            vacant_manual_suppress=set(),
+            max_box_id=20,
+            raw_pricing={"event_stats": {}},
+            current_round=2,
+            enabled=True,
+        )
+        self.assertEqual(fill.specs, [])
+        log = grid_overlay_mod.compute_unknown_contour_log_shapes(
+            game_state=st,
+            manual_shapes={},
+            phantom_items={},
+            phantom_quality_pref={},
+            occupied_cells=set(occ),
+            vacant_manual_suppress=set(),
+            max_box_id=20,
+            raw_pricing={"event_stats": {}},
+            phantom_specs=[],
+            recorded_cell_source={},
+            enabled=True,
+        )
+        self.assertIsInstance(log.inferred_log_shapes, dict)
+
+    def test_log_contour_expand_anchor_not_self_overlap(self) -> None:
+        """扩形矩形含锚格时，exclude_uid 下不应因自身锚格被判重叠。"""
+        from bidking.analysis.grid_overlay_vacant_zone import build_occupied_cells
+        from bidking.parsing.state import ItemKnowledge
+
+        log = ItemKnowledge(
+            uid="log_x",
+            box_id=15,
+            box_id_confirmed=False,
+            shape=None,
+            quality=3,
+        )
+        items = {"log_x": log}
+        occ_full = build_occupied_cells(
+            items=items, phantom_items={}, manual_shapes={}
+        )
+        self.assertIn((1, 5), occ_full)
+        occ_other = build_occupied_cells(
+            items=items,
+            phantom_items={},
+            manual_shapes={},
+            exclude_uid="log_x",
+        )
+        expand_cells = {(1, 5), (1, 6), (2, 5), (2, 6)}
+        self.assertFalse(expand_cells & occ_other)
+
+    def test_log_contour_expand_excludes_stale_auto_manual_shapes(self) -> None:
+        """排除上轮自动写入的 manual_shapes 后，日志物品仍可重新参与推断。"""
+        from bidking.parsing.state import GameState, ItemKnowledge
+
+        st = GameState()
+        st.current_round = 2
+        st.map_id = 4509
+        st.items["log_a"] = ItemKnowledge(
+            uid="log_a",
+            box_id=15,
+            box_id_confirmed=False,
+            shape=None,
+            quality=3,
+            excluded_qualities=set(),
+            excluded_categories=set(),
+        )
+        stale = {"log_a": (4, 3, 2, 1)}
+        occ = {(1, 5)}
+        kwargs = dict(
+            game_state=st,
+            manual_shapes=stale,
+            phantom_items={},
+            phantom_quality_pref={},
+            occupied_cells=set(occ),
+            vacant_manual_suppress=set(),
+            max_box_id=20,
+            raw_pricing={"event_stats": {}},
+            phantom_specs=[],
+            recorded_cell_source={},
+            enabled=True,
+        )
+        blocked = grid_overlay_mod.compute_unknown_contour_log_shapes(**kwargs)
+        refreshed = grid_overlay_mod.compute_unknown_contour_log_shapes(
+            **kwargs,
+            exclude_manual_shape_uids={"log_a"},
+        )
+        self.assertNotIn("log_a", blocked.inferred_log_shapes)
+        self.assertIn("log_a", refreshed.inferred_log_shapes)
+
+    def test_auto_expand_log_contour_switch_independent(self) -> None:
+        from bidking.config.runtime import (
+            auto_expand_log_contour_config_enabled,
+            auto_expand_log_contour_enabled,
+            infer_vacant_rect_phantoms_config_enabled,
+        )
+
+        cfg = {
+            "pricing": {"infer_vacant_rect_phantoms": False},
+            "grid_view": {"auto_expand_log_contour": True},
+        }
+        self.assertFalse(infer_vacant_rect_phantoms_config_enabled(cfg))
+        self.assertTrue(auto_expand_log_contour_config_enabled(cfg))
+        self.assertTrue(auto_expand_log_contour_enabled(cfg, current_round=4))
+        self.assertTrue(auto_expand_log_contour_enabled(cfg, current_round=3))
+        self.assertTrue(
+            auto_expand_log_contour_config_enabled(
+                {"grid_view": {"auto_expand_log_items_on_discovery": True}}
+            )
+        )
+
     def test_infer_vacant_rect_phantoms_enabled_from_raw(self) -> None:
         from bidking.config.runtime import infer_vacant_rect_phantoms_enabled
 
@@ -1395,24 +1572,24 @@ class BoardPricingTests(unittest.TestCase):
         )
         occ = set(anchors)
         occ.update([(3, 8), (4, 7), (5, 8), (4, 9)])
-        res = grid_overlay_mod.compute_vacant_rect_phantom_specs(
+        fill, log = _fill_phantoms_then_expand_log_shapes(
+            grid_overlay_mod,
             game_state=st,
             manual_shapes={},
             phantom_items={},
             phantom_quality_pref={},
-            occupied_cells=set(occ),
+            occupied_cells=occ,
             vacant_manual_suppress=set(),
             max_box_id=55,
             raw_pricing={"event_stats": {"q5_count": 99}},
             current_round=4,
-            enabled=True,
         )
-        self.assertIn("log_g5", res.inferred_log_shapes)
-        w, h, dc, dr = res.inferred_log_shapes["log_g5"]
+        self.assertIn("log_g5", log.inferred_log_shapes)
+        w, h, dc, dr = log.inferred_log_shapes["log_g5"]
         self.assertGreater(w * h, 1)
-        self.assertTrue(res.absorbed_phantom_uids)
-        for sp in res.specs:
-            self.assertNotIn(sp.uid, res.absorbed_phantom_uids)
+        self.assertTrue(log.absorbed_phantom_uids)
+        for sp in log.phantom_specs:
+            self.assertNotIn(sp.uid, log.absorbed_phantom_uids)
         anchor = (4, 9)
         self.assertIn(
             anchor,
@@ -1452,22 +1629,22 @@ class BoardPricingTests(unittest.TestCase):
         )
         occ = set(anchors)
         occ.update([(3, 7), (4, 7), (5, 8), (4, 9), (3, 8)])
-        res = grid_overlay_mod.compute_vacant_rect_phantom_specs(
+        _fill, log = _fill_phantoms_then_expand_log_shapes(
+            grid_overlay_mod,
             game_state=st,
             manual_shapes={},
             phantom_items={},
             phantom_quality_pref={},
-            occupied_cells=set(occ),
+            occupied_cells=occ,
             vacant_manual_suppress=set(),
             max_box_id=55,
             raw_pricing={"event_stats": {"q5_count": 99, "q6_count": 99}},
             current_round=4,
-            enabled=True,
         )
-        self.assertIn("log_g5", res.inferred_log_shapes)
-        w, h, dc, dr = res.inferred_log_shapes["log_g5"]
+        self.assertIn("log_g5", log.inferred_log_shapes)
+        w, h, dc, dr = log.inferred_log_shapes["log_g5"]
         self.assertGreater(w * h, 1)
-        self.assertTrue(res.absorbed_phantom_uids)
+        self.assertTrue(log.absorbed_phantom_uids)
 
     def test_two_1x1_unknown_contour_logs_get_disjoint_inferred_rects(self) -> None:
         """同块空置里两枚 1×1 锚格须分到不同 phantom/轮廓，步骤 6 扩形不得重叠。"""
@@ -1515,22 +1692,22 @@ class BoardPricingTests(unittest.TestCase):
         )
         occ = set(corners)
         occ.update([(3, 7), (4, 7), (5, 7), (3, 8), (5, 8), (3, 9), (5, 9)])
-        res = grid_overlay_mod.compute_vacant_rect_phantom_specs(
+        _fill, log = _fill_phantoms_then_expand_log_shapes(
+            grid_overlay_mod,
             game_state=st,
             manual_shapes={},
             phantom_items={},
             phantom_quality_pref={},
-            occupied_cells=set(occ),
+            occupied_cells=occ,
             vacant_manual_suppress=set(),
             max_box_id=55,
             raw_pricing={"event_stats": {"q5_count": 99, "q6_count": 99}},
             current_round=4,
-            enabled=True,
         )
-        self.assertIn("log_g5a", res.inferred_log_shapes)
-        self.assertIn("log_g5b", res.inferred_log_shapes)
-        fp_a = _footprint(res.inferred_log_shapes["log_g5a"])
-        fp_b = _footprint(res.inferred_log_shapes["log_g5b"])
+        self.assertIn("log_g5a", log.inferred_log_shapes)
+        self.assertIn("log_g5b", log.inferred_log_shapes)
+        fp_a = _footprint(log.inferred_log_shapes["log_g5a"])
+        fp_b = _footprint(log.inferred_log_shapes["log_g5b"])
         self.assertFalse(fp_a & fp_b)
         self.assertIn((4, 8), fp_a)
         self.assertIn((4, 9), fp_b)
@@ -1968,8 +2145,8 @@ class BoardPricingTests(unittest.TestCase):
         self.assertAlmostEqual(float(v), float(e_narrow), delta=1.0)
         self.assertLess(float(v), float(e_wide) * 0.6)
 
-    def test_unknown_contour_q6_reduces_tier_extra_by_one_cell(self) -> None:
-        """无 shape 的红档占位：confirmed 计 1 格后 ``q6_grid_min`` 少补 1 格 tier_extra。"""
+    def test_unknown_contour_q6_reduces_tier_extra_by_weighted_footprint(self) -> None:
+        """无 shape 的红档占位：``confirmed_q6`` 按权重等效格计，再扣减 ``q6_grid_min`` tier_extra。"""
         gs = {
             "uid": "u1",
             "map_id": 0,
@@ -2005,8 +2182,35 @@ class BoardPricingTests(unittest.TestCase):
             },
         }
         p = bp.build_snapshot_pricing_dict({**snap, "raw_pricing": raw}, snapshot_path_hint=None)
-        self.assertEqual(int(p.get("tier_extra_cells") or 0), 3)
-        self.assertAlmostEqual(float(p.get("tier_extra_value") or 0.0), 600.0)
+        csv_cells = raw["csv_quality_groups_avg_per_cell"]
+        _cq4, _cq5, cq6 = strategy_common.confirmed_tier_footprint_q456(
+            snap, csv_cells_raw=csv_cells
+        )
+        self.assertGreater(cq6, 1)
+        eff_need = max(0, 4 - int(cq6))
+        self.assertEqual(int(p.get("tier_extra_cells") or 0), eff_need)
+        self.assertAlmostEqual(
+            float(p.get("tier_extra_value") or 0.0),
+            float(eff_need) * 200.0,
+        )
+
+    def test_unknown_contour_excess_subtract_skips_tier_with_grid_min(self) -> None:
+        """有 ``q4_grid_min`` 时紫档超额进 tier_extra；金/红/低档超额仍扣 ``vacant_adj``。"""
+        from bidking.analysis.strategy import common as strat_common
+
+        uc_detail = {
+            "detail_per_item": [
+                {"quality": 4, "excess_over_one_cell": 1.8},
+                {"quality": 5, "excess_over_one_cell": 2.4},
+                {"quality": 6, "excess_over_one_cell": 3.0},
+                {"quality": 2, "excess_over_one_cell": 1.1},
+            ]
+        }
+        st = {"q4_grid_min": 10}
+        self.assertEqual(
+            strat_common.unknown_contour_vacant_cell_excess_subtract(uc_detail, st),
+            6,
+        )
 
     def test_early_round_vacant_dict_uses_geometry(self) -> None:
         """无 200009 时：``vacant_dict_from_board_snapshot`` 按几何前缀区计空置（与定价同源）。"""

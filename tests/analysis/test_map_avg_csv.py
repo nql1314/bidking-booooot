@@ -8,10 +8,12 @@ import unittest
 from pathlib import Path
 
 from bidking.analysis.map_avg_csv import (
+    get_map_quality_cells_for_map,
     load_map_quality_cells_by_map_id,
     load_prefix3_to_min_map_id,
     map_id_prefix3,
     representative_map_id_for_ticket,
+    resolve_map_id_for_quality_csv,
     set_map_quality_csv_override,
 )
 
@@ -26,6 +28,8 @@ class MapAvgCsvTests(unittest.TestCase):
         writer.writerow([2101, "q5", "1234.5"])
         writer.writerow([2101, "q5+q6", "5678.9"])
         writer.writerow([2101, "q6", "9999.0"])
+        writer.writerow([2501, "q5", "100.0"])
+        writer.writerow([2505, "q5", "500.0"])
         tmp.close()
         self.csv_path = Path(tmp.name)
         set_map_quality_csv_override(str(self.csv_path))
@@ -50,6 +54,16 @@ class MapAvgCsvTests(unittest.TestCase):
         rep, pfx = representative_map_id_for_ticket(2109)
         self.assertEqual(pfx, "210")
         self.assertEqual(rep, 2101)
+
+    def test_activity_map_quality_csv_fallback(self) -> None:
+        self.assertEqual(resolve_map_id_for_quality_csv(2521), 2501)
+        self.assertEqual(resolve_map_id_for_quality_csv(4525), 2505)
+        cells = get_map_quality_cells_for_map(2521)
+        self.assertNotIn(2521, load_map_quality_cells_by_map_id())
+        self.assertAlmostEqual(cells["q5"], 100.0)
+        rep, pfx = representative_map_id_for_ticket(4525)
+        self.assertEqual(pfx, "450")
+        self.assertEqual(rep, 2505)
 
 if __name__ == "__main__":
     unittest.main()

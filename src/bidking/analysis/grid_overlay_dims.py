@@ -12,6 +12,9 @@ DEFAULT_GEOMETRIC_PREFIX_ANCHOR_BOX_ID = 30
 # 艾莎第 4 回合起：空置区近似矩形 → 自动 ``phantom_vac_*`` 幽灵（手动画框 + 候选约束）。
 AISHA_VACANT_RECT_INFER_ROUND = 4
 
+# 未知轮廓默认推断：CSV 权重期望价 ± 该比例价带内选外形（见 ``grid_overlay_infer_log_shapes``）。
+INFER_DEFAULT_PRICE_BAND_REL = 0.20
+
 
 def vacant_rect_phantom_infer_round_active(current_round: int) -> bool:
     """第 4 回合及之后才做空置矩形自动幽灵推断。"""

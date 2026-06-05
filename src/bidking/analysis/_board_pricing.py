@@ -35,9 +35,9 @@ UID 推断（``inferred_self_user_uid``，见 :mod:`bidking.pricing._self_uid_in
 对 ``points`` / ``points_floor`` / ``points_ceiling`` 分别做 ``random_avg_price_min + 原值/3``（与早期回合同式）。
 
 合并物品上 **仍无 ``shape``、品质已知且已确认占位** 时，几何占位按锚格计；``pricing.total`` 已为该档
-CSV 权重期望价。``max(0, 加权等效格数 − 1)`` 按品质从对应 ``q*_grid_min`` 的 ``tier_extra`` 格数/价值中
-扣减（见 :func:`unknown_value.unknown_contour_vacant_weighted_excess` 的 ``excess_by_quality``），不再单独从
-``vacant_adj`` 扣减，避免与 ``total`` 重复计价。
+CSV 权重期望价。有 ``q*_grid_min`` 的档位：权重等效格计入 ``confirmed_q*`` 并减少 ``tier_extra``；其余品质
+或尚无 ``grid_min`` 的档位：``max(0, 加权等效格数 − 1)`` 从 ``vacant_adj`` 扣减（见
+:func:`strategy.common.unknown_contour_vacant_cell_excess_subtract`），避免与 ``total`` 重复计价。
 
 已知轮廓且品质未知、CSV 为多候选（权重价）的物品：标价已计入 ``pricing.total``，空置侧不再单独做 kcw 扣减/加回。
 
