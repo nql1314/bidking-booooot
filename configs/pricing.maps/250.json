@@ -17,7 +17,11 @@
       "default": 0.0
     },
     "map_quality_unit_per_cell": {
-      "q56": 24000.0
+      "q56": 22000.0,
+      "q5": 10000.0,
+      "q6": 52000.0,
+      "q456": 10000.0,
+      "q3456": 8000.0
     },
     "infer_vacant_rect_phantoms": true,
     "opponent_bid_blend_weights": {
@@ -29,9 +33,9 @@
   "automation": {
     "bid_cap_price": 3000000,
     "bid_ratio_by_round": {
-      "1": 0.6,
-      "2": 0.7,
-      "3": 0.8,
+      "1": 0.65,
+      "2": 0.75,
+      "3": 0.85,
       "4": 0.9,
       "5": 0.95
     },

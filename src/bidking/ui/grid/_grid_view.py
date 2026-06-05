@@ -36,7 +36,7 @@
   - 诈骗格规则**仅用于**上述自动空置区（计数与初始橘红），**不限制**右键手动剔除/恢复空置标记。由 ``grid_view.fraud_empty_cells_algorithm`` 指定：字符串 ``tiling_strict`` / ``none`` 等，或列表 ``["tiling", n]`` / 对象 ``{"tiling": n}`` 将铺板与 trim 写在一起。
   - 空置候选格：普通右键可手动剔除该格（不计空置、不铺橘红），再右键同一格可恢复。
   - 日志物品仍为「推算轮廓」（CSV 自动扩框、非手动画框）时：在该物品当前占格内右键可取消本次推算扩框（按锚格 1×1 显示），直至日志锁定形状或新对局。
-  - 第 4 回合起自动填充的 ``phantom_vac_*``：占格上 **Ctrl+左键** 直接改为金（Q5 默认），**Ctrl+右键** 直接改为红（Q6）；普通 **右键** 与手画幽灵相同可删除，本局内不再自动补回（新对局清空抑制表）。
+  - 第 4 回合起自动填充的 ``phantom_vac_*``：图例栏「自动填充」切换钮（「还原轮廓」右侧）在开/关模式间切换并重绘；占格上 **Ctrl+左键** 直接改为金（Q5 默认），**Ctrl+右键** 直接改为红（Q6）；普通 **右键** 与手画幽灵相同可删除，本局内不再自动补回（新对局清空抑制表）。
 """
 
 import io
@@ -95,6 +95,7 @@ from ...analysis.snapshot import game_state_to_json, item_knowledge_to_json
 from ...config.map_runtime_overlay import merged_runtime_with_map_pricing
 from ...config.runtime import (
     infer_fraud_empty_cells_algorithm_and_trim,
+    infer_vacant_rect_phantoms_config_enabled,
     infer_vacant_rect_phantoms_enabled,
     load_runtime,
 )
@@ -866,6 +867,7 @@ class GridWindow:
             pricing_dict=_pricing_rt if isinstance(_pricing_rt, dict) else {}
         )
         self._runtime_raw = _rt_cfg.raw
+        self._auto_fill_ui_enabled = False
 
         # 实时 tail：关闭画板或返回主页时置位，供后台线程退出
         self._monitor_stop = threading.Event()
@@ -887,6 +889,8 @@ class GridWindow:
             self._snapshots = norm
             self.state = norm[0][1]
             self._skill_logs = list(norm[0][2])
+
+        self._apply_auto_fill_ui_from_config()
 
         # 手动尺寸覆盖：uid → (w, h, display_col, display_row)
         # display_col/row 是用户设定的显示左上角；BoxId 必须在矩形内
@@ -1029,22 +1033,111 @@ class GridWindow:
             item_origin=self._effective_display_origin,
         )
 
-    def _merged_runtime_raw(self) -> dict[str, Any]:
-        """``config.json`` + 当前地图 ``pricing.maps`` 覆盖（与出价计算同源）。"""
+    def _merged_runtime_for_config(self) -> dict[str, Any]:
+        """
+        与可视化配置 / ``pricing.infer_vacant_rect_phantoms`` 同源。
+
+        有对局 ``map_id`` 时合并对应 ``pricing.maps``；否则仅 ``runtime``+``config``，
+        不套用 ``automation.selected_map`` 默认图（避免画板未开局时勾选与当前对局不一致）。
+        """
         mid = int(self.state.map_id or 0)
         if mid > 0:
             return merged_runtime_with_map_pricing(
                 self._runtime_raw,
                 map_bundle_key=map_bundle_key_for_automation(mid),
             )
+        return dict(self._runtime_raw)
+
+    def _merged_runtime_raw(self) -> dict[str, Any]:
+        """``config.json`` + 地图 ``pricing.maps`` 覆盖（与出价计算同源）。"""
+        mid = int(self.state.map_id or 0)
+        if mid > 0:
+            return self._merged_runtime_for_config()
         return merged_runtime_with_map_pricing(self._runtime_raw)
+
+    def _apply_auto_fill_ui_from_config(self) -> None:
+        """图例栏「自动填充」初始模式 = 当前对局地图合并后的 ``infer_vacant_rect_phantoms``。"""
+        self._auto_fill_ui_enabled = infer_vacant_rect_phantoms_config_enabled(
+            self._merged_runtime_for_config()
+        )
+        self._refresh_auto_fill_toggle_button()
+
+    def _refresh_auto_fill_toggle_button(self) -> None:
+        """更新图例栏自动填充切换钮的文案与高亮（开 / 关）。"""
+        btn = getattr(self, "_btn_auto_fill", None)
+        if btn is None:
+            return
+        legend_bg = "#222233"
+        try:
+            if self._auto_fill_ui_enabled:
+                btn.config(
+                    text="自动填充·开",
+                    fg="#c8ffe0",
+                    bg="#2d5a42",
+                    activebackground="#3a7052",
+                    activeforeground="#e8fff0",
+                    relief="solid",
+                    highlightthickness=1,
+                    highlightbackground="#5cb87a",
+                )
+            else:
+                btn.config(
+                    text="自动填充·关",
+                    fg="#99aabb",
+                    bg="#2a3148",
+                    activebackground="#3a4558",
+                    activeforeground="#dde8ff",
+                    relief="flat",
+                    highlightthickness=0,
+                    highlightbackground=legend_bg,
+                )
+        except tk.TclError:
+            pass
 
     def _infer_round4_auto_fill_active(self) -> bool:
         """第 4 回合起：空置区近似矩形 → 自动 ``phantom_vac_*``。"""
+        if not self._auto_fill_ui_enabled:
+            return False
         return infer_vacant_rect_phantoms_enabled(
             self._merged_runtime_raw(),
             current_round=int(self.state.current_round or 1),
         )
+
+    def _clear_board_overlay_local_state(self) -> None:
+        """清空画板本地覆盖：自动/手画幽灵、手调轮廓与空置标记、候选确认等。"""
+        self._phantom_draw_state = None
+        self._drag_state = None
+        self._occupied_for_draw = None
+        self._board_snapshot_for_item_price_draw = None
+        self._empty_zone_fraud_memo = None
+        self._empty_zone_fraud_cells.clear()
+        for k in self.state.items.values():
+            k.manual_confirm_item_id = None
+        self._phantom_items.clear()
+        self._manual_shapes.clear()
+        self._auto_vacant_rect_phantom_suppress_uids.clear()
+        self._phantom_quality_pref.clear()
+        self._phantom_quality_user_locked.clear()
+        self._unknown_cell_quality_pref.clear()
+        self._manual_shapes_restore_backup = None
+        self._vacant_manual_suppress.clear()
+
+    def _apply_auto_fill_board_after_mode_change(self) -> None:
+        """切换自动填充模式后：清空本地覆盖、重绘画板，必要时写回空 overlay 快照。"""
+        self._clear_board_overlay_local_state()
+        self._last_emitted_pricing_sig = None
+        self._header_compute_sig = None
+        self._refresh(write_snapshot=bool(self._snapshot_path))
+        try:
+            self.root.update_idletasks()
+        except tk.TclError:
+            pass
+
+    def _on_auto_fill_ui_toggle(self) -> None:
+        """图例栏切换钮：在开/关两种模式间切换并重绘。"""
+        self._auto_fill_ui_enabled = not self._auto_fill_ui_enabled
+        self._refresh_auto_fill_toggle_button()
+        self._apply_auto_fill_board_after_mode_change()
 
     def _sync_round4_overlay_from_analysis(self) -> None:
         """第 4 回合起刷新 raw_pricing 与空置矩形自动幽灵（``phantom_vac_*``）。"""
@@ -1125,7 +1218,7 @@ class GridWindow:
             raw_pricing=raw_pricing,
             current_round=int(self.state.current_round or 1),
             fraud_cells=fraud_for_infer,
-            enabled=True,
+            enabled=self._infer_round4_auto_fill_active(),
         )
         for uid, shape in infer_result.inferred_log_shapes.items():
             w, h, dc, dr = shape
@@ -1603,43 +1696,47 @@ class GridWindow:
         return estimate_snapshot_item_price_for_uid(snap, uid)
 
     @staticmethod
-    def _counts_as_unknown_contour_stat(uid: str, row: Dict[str, Any]) -> bool:
-        """
-        顶栏「未知」之一：日志物品品质已定、外形仍未锁定（合并表 ``shape`` 为空）。
+    def _counts_as_phantom_unknown_stat(uid: str) -> bool:
+        """顶栏「未知」之一：手画 ``phantom_*`` 与自动 ``phantom_vac_*``，与是否确认品质/物品无关。"""
+        return str(uid).startswith("phantom_")
 
-        与 ``grid_overlay_infer_vacant_rects._unknown_contour_log_item_eligible`` 一致，
-        按合并投影计格（含手动画框写入的 ``shape``，有外形则不再计入）。
+    @staticmethod
+    def _counts_as_unknown_quality_known_shape_stat(
+        uid: str, row: Dict[str, Any], board_snapshot: Dict[str, Any]
+    ) -> bool:
         """
-        if str(uid).startswith(_grid_overlay.AUTO_VACANT_RECT_PHANTOM_PREFIX):
-            return False
-        if row.get("shape") is not None:
+        顶栏「未知」之一：日志物品外形已锁定（合并表 ``shape`` 非空）、日志 ``quality`` 仍为空。
+
+        已精确价锁定 CID、已手动确认物品 id 的不计入。
+        """
+        if GridWindow._counts_as_phantom_unknown_stat(uid):
             return False
         if row.get("box_id") is None:
             return False
-        q = row.get("quality")
-        if q is None:
+        if row.get("shape") is None:
             return False
-        try:
-            qi = int(q)
-        except (TypeError, ValueError):
-            return False
-        if not (1 <= qi <= 6):
+        w, h = GridWindow._shape_wh(row.get("shape"))
+        if w * h <= 0:
             return False
         if row.get("item_cid") is not None and row.get("price") is not None:
             return False
+        if row.get("manual_confirm_item_id") is not None:
+            return False
+        gs = board_snapshot.get("game_state")
+        if isinstance(gs, dict):
+            raw_items = gs.get("items")
+            if isinstance(raw_items, dict):
+                raw = raw_items.get(uid) or raw_items.get(str(uid))
+                if isinstance(raw, dict) and raw.get("quality") is not None:
+                    return False
         return True
-
-    @staticmethod
-    def _counts_as_auto_vacant_phantom_stat(uid: str) -> bool:
-        """顶栏「未知」之一：第 4 回合起自动填充的 ``phantom_vac_*`` 占格。"""
-        return str(uid).startswith(_grid_overlay.AUTO_VACANT_RECT_PHANTOM_PREFIX)
 
     @staticmethod
     def _stats_from_merged_items(board_snapshot: Dict[str, Any]) -> Tuple[int, int, int, int, int, int, int]:
         """
         与 ``analysis.grid_overlay.merged_items_dict`` 一致：有 ``box_id`` 的占位行总格数及 Q5/Q6/
-        已知品质未知轮廓格、自动 ``phantom_vac_*`` 格（见 :meth:`_counts_as_unknown_contour_stat`、
-        :meth:`_counts_as_auto_vacant_phantom_stat`）。顶栏展示时另加几何空置格数。
+        幽灵占格、已知轮廓未知品质日志占格（见 :meth:`_counts_as_phantom_unknown_stat`、
+        :meth:`_counts_as_unknown_quality_known_shape_stat`）。顶栏展示时另加几何空置格数。
 
         形状取合并表中的 ``shape``（已含手动画框、推断外形、手动确认投影）。
         """
@@ -1669,15 +1766,17 @@ class GridWindow:
                     qi = int(q)
                 except (TypeError, ValueError):
                     qi = None
-            if qi == 5:
+            if GridWindow._counts_as_phantom_unknown_stat(str(uid)):
+                unknown_cells += cells
+            elif qi == 5:
                 q5_count += 1
                 q5_cells += cells
             elif qi == 6:
                 q6_count += 1
                 q6_cells += cells
-            elif GridWindow._counts_as_unknown_contour_stat(str(uid), row):
-                unknown_cells += cells
-            elif GridWindow._counts_as_auto_vacant_phantom_stat(str(uid)):
+            elif GridWindow._counts_as_unknown_quality_known_shape_stat(
+                str(uid), row, board_snapshot
+            ):
                 unknown_cells += cells
         return (
             total_cells,
@@ -1693,9 +1792,9 @@ class GridWindow:
         return (
             "画板金（Q5）/ 红（Q6）件数与格数\n"
             "与 ``merged_items_dict`` 一致（日志 + 幽灵、手动画框、推断外形、偏好与手动确认投影）。\n\n"
-            "「未知」= 几何空置格 + 已知品质未知轮廓占格 + 自动 ``phantom_vac_*`` 占格。\n"
-            "几何空置与右侧「空置」同源；未知轮廓为合并表 ``quality`` 已定且 ``shape`` 仍空；\n"
-            "有效空置乘数见「未知空置格」。"
+            "「未知」= 几何空置格 + 全部幽灵占格（``phantom_*``，含手画与 ``phantom_vac_*``，\n"
+            "不论是否已确认品质或物品）+ 已知轮廓且日志品质仍空的占格。\n"
+            "几何空置与右侧「空置」同源；有效空置乘数见「未知空置格」。"
         )
 
     def _tooltip_text_vacant_geometric(self) -> str:
@@ -2837,16 +2936,7 @@ class GridWindow:
     def _reset_for_new_game(self) -> None:
         """新对局开始：清空幽灵、更新标题、重建 Canvas。"""
         self._express_players_sig = None
-        # 新对局：清空所有手动注释
-        self._phantom_items.clear()
-        self._phantom_draw_state = None
-        self._manual_shapes.clear()
-        self._auto_vacant_rect_phantom_suppress_uids.clear()
-        self._phantom_quality_pref.clear()
-        self._phantom_quality_user_locked.clear()
-        self._unknown_cell_quality_pref.clear()
-        self._manual_shapes_restore_backup = None
-        self._vacant_manual_suppress.clear()
+        self._clear_board_overlay_local_state()
 
         self.root.title(
             f"BidKing 策略可视化助手 v{__version__} "
@@ -3769,6 +3859,20 @@ class GridWindow:
             pady=2,
             cursor="hand2",
         ).pack(side="left", padx=(0, 4))
+
+        self._btn_auto_fill = tk.Button(
+            row1,
+            command=self._on_auto_fill_ui_toggle,
+            font=("微软雅黑", 8),
+            padx=8,
+            pady=2,
+            cursor="hand2",
+            takefocus=0,
+            borderwidth=1,
+            relief="flat",
+        )
+        self._btn_auto_fill.pack(side="left", padx=(0, 4))
+        self._refresh_auto_fill_toggle_button()
 
         tk.Label(
             row1,

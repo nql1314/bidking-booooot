@@ -37,19 +37,15 @@
   "automation": {
     "bot_runner": "fresh_aisha_bot",
     "selected_mode": "aisha_premium",
-    "tool_rounds": [
-      1,
-      2,
-      4
-    ],
+    "tool_rounds": [],
     "default_map": "1",
     "default_runs": 1,
-    "selected_map": "440",
+    "selected_map": "210",
     "selected_runs": 20,
     "warehouse_auto_sort": {
       "enabled": true
     },
-    "run_cycles": 10,
+    "run_cycles": 1,
     "cycle_rest_minutes": 5.0,
     "enable_map_entry_money_check": false,
     "enable_aisha_round4_tool_vacant_gate": false,
@@ -69,7 +65,7 @@
   "timing": {
     "poll_seconds": 1,
     "round_detect_wait_seconds": 8.0,
-    "round1_extra_wait_seconds": 4.0,
+    "round1_extra_wait_seconds": 2.0,
     "tool_after_snapshot_poll_seconds": 8.0,
     "tool_after_wait_seconds": 5.0,
     "click_pause_seconds": 0.12,

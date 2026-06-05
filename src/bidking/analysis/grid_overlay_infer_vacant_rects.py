@@ -16,7 +16,7 @@ from .grid_overlay_dims import (
     vacant_rect_phantom_infer_round_active,
 )
 from .grid_overlay_item_merge import _load_item_prices_db
-from .grid_overlay_vacant_zone import _live_shape_wh
+from .grid_overlay_vacant_zone import _live_shape_wh, total_grid_count_from_raw_pricing
 from .phantom_pricing_ui_sync import PHANTOM_Q_INFER, phantom_quality_pref_explicit_quality
 from .scan_inference import census_absent_qualities_from_board_snapshot
 from .strategy.common import _find_continuous_regions
@@ -208,6 +208,32 @@ def _count_quality_items(
         if q is not None and 1 <= q <= 6:
             out[q] = out.get(q, 0) + 1
     return out
+
+
+def _phantom_cell_budget_from_total_grid(
+    raw_pricing: Dict[str, Any],
+    base_occupied: Set[Tuple[int, int]],
+) -> Optional[int]:
+    """
+    ``event_stats.total_grid_count``（200009）已知时，本趟推断至多还能占用的格数。
+
+    与画板 ``map_skill_hidden_vacant`` 一致：``总数 − len(base_occupied)``，
+    其中 ``base_occupied`` 为步骤 0 释放 1×1 锚格之后的占位（锚格可再被幽灵覆盖）。
+    """
+    total = total_grid_count_from_raw_pricing(raw_pricing)
+    if total is None:
+        return None
+    return max(0, int(total) - len(base_occupied))
+
+
+def _phantom_emit_would_exceed_total_grid(
+    ctx: "_VacantRectInferCtx",
+    area: int,
+) -> bool:
+    cap = ctx.phantom_cell_budget
+    if cap is None:
+        return False
+    return len(ctx.taken) + int(area) > int(cap)
 
 
 def _event_stats_allows_quality(
@@ -458,6 +484,7 @@ class _VacantRectInferCtx:
     min_bbox_area: int
     recorded_cell_source: Mapping[Tuple[int, int], str] = field(default_factory=dict)
     recorded_cell_quality: Mapping[Tuple[int, int], int] = field(default_factory=dict)
+    phantom_cell_budget: Optional[int] = None
 
 
 def _rect_recorded_anchor_uids(
@@ -539,6 +566,8 @@ def _try_emit_rect_phantom(
         anchor_quality=anchor_q,
     )
     if not filt:
+        return False
+    if _phantom_emit_would_exceed_total_grid(ctx, int(w) * int(h)):
         return False
 
     qualities = {int(c.quality) for c in filt}
@@ -1787,7 +1816,8 @@ def compute_vacant_rect_phantom_specs(
 
     - 须有 CSV 候选（扫描负向 + ``event_stats`` 件数配额）；矩形含步骤 0 锚格时另按该锚格已记录品质过滤；
     - 候选品质唯一 → 写入 ``quality``；
-    - 候选物品唯一 → 写入 ``manual_confirm_item_id``。
+    - 候选物品唯一 → 写入 ``manual_confirm_item_id``；
+    - ``event_stats.total_grid_count`` 已知时，``len(base_occupied)+幽灵 footprint`` 不超过该总数（与 200009 空置守恒一致）。
 
     ``max_hole_cells`` 仅写入上下文（第 2 步已不做诈骗空洞容错）。
     """
@@ -1850,6 +1880,9 @@ def compute_vacant_rect_phantom_specs(
             min_bbox_area=int(min_bbox_area),
             recorded_cell_source=recorded_cell_source,
             recorded_cell_quality=recorded_cell_quality,
+            phantom_cell_budget=_phantom_cell_budget_from_total_grid(
+                raw_pricing, base_occupied
+            ),
         )
 
         _pass_emit_recorded_anchor_1x1_phantoms(ctx)

@@ -1,6 +1,6 @@
 {
   "pricing": {
-    "fallback_bid_price": 23344,
+    "fallback_bid_price": 23334,
     "enable_big_gold_adjustment": false,
     "enable_opponent_bid_adjustment": true,
     "enable_vacant_red_floor_ceiling_pick": false,
@@ -25,12 +25,13 @@
   },
   "automation": {
     "express_station_round1_emoji": {
-      "enabled": false,
+      "enabled": true,
       "emoji": "感谢",
       "seat_1_price": 520,
       "seat_2_price": 144,
       "round2_plus_high_random_max": 888,
-      "wait_after_send_seconds": 3.0
+      "wait_after_send_seconds": 3.0,
+      "anti_routine_enabled": true
     },
     "bid_cap_price": 250000,
     "bid_ratio_by_round": {
