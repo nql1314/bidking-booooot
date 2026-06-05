@@ -190,6 +190,40 @@ def infer_unknown_contour_shapes_enabled(
     return infer_vacant_rect_phantoms_enabled(cfg, current_round=current_round)
 
 
+def auto_expand_log_contour_config_enabled(
+    cfg: Optional[Union[RuntimeConfig, Mapping[str, Any]]] = None,
+) -> bool:
+    """
+    画板是否将分析层推断的日志轮廓写入 ``manual_shapes``（与 ``phantom_vac_*`` 自动填充分开）。
+
+    读取 ``grid_view.auto_expand_log_contour``；键缺失时回退已废弃的
+    ``grid_view.auto_expand_log_items_on_discovery``；二者均缺失时为 ``False``。
+    """
+    raw: Mapping[str, Any]
+    if cfg is None:
+        raw = load_runtime().raw
+    elif isinstance(cfg, RuntimeConfig):
+        raw = cfg.raw
+    else:
+        raw = cfg
+    gv = raw.get("grid_view")
+    if not isinstance(gv, dict):
+        return False
+    if "auto_expand_log_contour" in gv:
+        return _truthy_value(gv.get("auto_expand_log_contour", False))
+    return _truthy_value(gv.get("auto_expand_log_items_on_discovery", False))
+
+
+def auto_expand_log_contour_enabled(
+    cfg: Optional[Union[RuntimeConfig, Mapping[str, Any]]] = None,
+    *,
+    current_round: Optional[int] = None,
+) -> bool:
+    """是否启用日志轮廓自动扩展（与回合无关；与 ``phantom_vac`` 自动填充门槛独立）。"""
+    _ = current_round
+    return auto_expand_log_contour_config_enabled(cfg)
+
+
 def parse_auto_vacant_phantom_price_quantile(raw: Any) -> Optional[float]:
     """
     解析 ``pricing.auto_vacant_phantom_price``。

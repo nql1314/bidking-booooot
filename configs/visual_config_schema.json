@@ -216,6 +216,15 @@
       "hide": false
     },
     {
+      "path": "grid_view.auto_expand_log_contour",
+      "type": "bool",
+      "label": "自动扩展轮廓",
+      "description": "与「自动填充」独立、无图例开关：为 true 时画板在自动填充之后接续 compute_unknown_contour_log_shapes 并写入 manual_shapes；无 UI 切换钮，仅改配置。",
+      "scope": "config",
+      "group": "画板 UI",
+      "hide": false
+    },
+    {
       "path": "pricing.enable_big_gold_adjustment",
       "type": "bool",
       "label": "启用大金调整",

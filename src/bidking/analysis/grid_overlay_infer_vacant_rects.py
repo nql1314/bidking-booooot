@@ -105,15 +105,22 @@ class VacantRectPhantomSpec:
 
 class VacantRectInferResult(NamedTuple):
     """
-    空置矩形幽灵推断结果。
+    空置矩形幽灵填充结果（仅 ``phantom_vac_*``，不含日志轮廓扩展）。
 
-    ``inferred_log_shapes``：步骤 0 释放的 1×1 锚格被 ``phantom_vac_*`` 覆盖时，源物品扩至该矩形；
-    ``absorbed_phantom_uids``：被吸收的 ``phantom_vac_*``。
+    ``recorded_cell_source``：填充步骤 0 剥离的 1×1 锚格 → 日志 uid，供后续
+    :func:`compute_unknown_contour_log_shapes` 在自动填充之后接续使用。
     """
 
     specs: List[VacantRectPhantomSpec]
+    recorded_cell_source: Dict[Tuple[int, int], str]
+
+
+class LogContourInferResult(NamedTuple):
+    """未知轮廓日志外形推断（接在自动填充之后或单独运行）。"""
+
     inferred_log_shapes: Dict[str, Tuple[int, int, int, int]]
     absorbed_phantom_uids: frozenset[str]
+    phantom_specs: List[VacantRectPhantomSpec]
 
 
 def is_auto_vacant_rect_phantom_uid(uid: str) -> bool:
@@ -1810,9 +1817,9 @@ def compute_vacant_rect_phantom_specs(
     3. 不规则剩余区：逐点 H/V 双向贪心扩展 → 取最大矩形（方度 tie-break），移除后重复；
     4. 第 1 步临时占格、仍未被 2/3 步吸收的 1×1 → 输出对应幽灵；
     4b. 若 ``fraud_cells`` 非空：完全落在诈骗格内的幽灵剔除；与诈骗格相交者先裁边条或取非诈骗实心外包矩形缩回（须仍有 CSV 候选），否则剔除；
-    5. 相邻幽灵并集为实心矩形时合并，直至稳定；
-    6. 覆盖步骤 0 记录锚格的 ``phantom_vac_*`` → 源物品扩至该矩形，并删除对应幽灵
-       （每个幽灵至多含一枚锚格；多锚格同矩形时保留幽灵不扩形）。
+    5. 相邻幽灵并集为实心矩形时合并，直至稳定。
+
+    日志轮廓自动扩展见 :func:`compute_unknown_contour_log_shapes`（与本轮填充无关，须在填充之后调用）。
 
     - 须有 CSV 候选（扫描负向 + ``event_stats`` 件数配额）；矩形含步骤 0 锚格时另按该锚格已记录品质过滤；
     - 候选品质唯一 → 写入 ``quality``；
@@ -1821,7 +1828,7 @@ def compute_vacant_rect_phantom_specs(
 
     ``max_hole_cells`` 仅写入上下文（第 2 步已不做诈骗空洞容错）。
     """
-    empty = VacantRectInferResult([], {}, frozenset())
+    empty = VacantRectInferResult([], {})
     if not enabled:
         return empty
     if int(current_round) < AISHA_VACANT_RECT_INFER_ROUND:
@@ -1896,12 +1903,112 @@ def compute_vacant_rect_phantom_specs(
             _pass5_merge_adjacent_phantom_rects(ctx)
             specs = ctx.out
 
-    specs, inferred, absorbed = _replace_recorded_anchors_with_covering_phantoms(
-        specs,
-        recorded_cell_source,
-        log_uids=log_uids,
+    return VacantRectInferResult(specs, dict(recorded_cell_source))
+
+
+def _manual_shapes_for_log_contour_infer(
+    manual_shapes: Mapping[str, Tuple[int, int, int, int]],
+    exclude_manual_shape_uids: Optional[Set[str]],
+) -> Dict[str, Tuple[int, int, int, int]]:
+    """推断用 ``manual_shapes``：排除指定 uid 的上轮自动扩形，便于每轮重新占位。"""
+    excl = {str(u) for u in (exclude_manual_shape_uids or set())}
+    if not excl:
+        return dict(manual_shapes)
+    return {str(k): v for k, v in manual_shapes.items() if str(k) not in excl}
+
+
+def compute_unknown_contour_log_shapes(
+    *,
+    game_state: GameState,
+    manual_shapes: Mapping[str, Tuple[int, int, int, int]],
+    phantom_items: Mapping[str, ItemKnowledge],
+    phantom_quality_pref: Mapping[str, Any],
+    occupied_cells: Set[Tuple[int, int]],
+    vacant_manual_suppress: Set[Tuple[int, int]],
+    max_box_id: int,
+    raw_pricing: Dict[str, Any],
+    phantom_specs: Optional[List[VacantRectPhantomSpec]] = None,
+    recorded_cell_source: Optional[Mapping[Tuple[int, int], str]] = None,
+    exclude_manual_shape_uids: Optional[Set[str]] = None,
+    enabled: bool = True,
+) -> LogContourInferResult:
+    """
+    未知轮廓日志物品外形推断（与 :func:`compute_vacant_rect_phantom_specs` 独立）。
+
+    通常在自动填充之后调用；若填充已占满可扩空间，本函数往往返回空 ``inferred_log_shapes``。
+    早期回合（未达第 4 回合填充门槛）也可单独调用，仅走权重价合理轮廓路径。
+
+    - 低档总格已齐且 Q1–Q4 轮廓齐：merge_expand（可吸收 ``phantom_specs``）；
+    - 否则：填充锚格被 ``phantom_vac`` 覆盖时扩形 + 权重价单次选形。
+    """
+    specs_in = list(phantom_specs or [])
+    cell_src = dict(recorded_cell_source or {})
+    empty = LogContourInferResult({}, frozenset(), specs_in)
+    if not enabled:
+        return empty
+
+    from .grid_overlay_infer_log_shapes import (
+        infer_unknown_contour_log_shapes_weighted,
+        use_aggressive_unknown_contour_log_expand,
     )
-    return VacantRectInferResult(specs, inferred, absorbed)
+
+    ms_infer = _manual_shapes_for_log_contour_infer(
+        manual_shapes, exclude_manual_shape_uids
+    )
+    log_uids = {str(u) for u in game_state.items}
+    use_merge = use_aggressive_unknown_contour_log_expand(
+        raw_pricing
+    ) and _vacant_infer_q1234_scan_and_q14_contours_ready(
+        game_state, ms_infer
+    )
+
+    if use_merge:
+        occ_mut = set(occupied_cells)
+        merged, absorbed_set = _unknown_contour_merge_expand_log_shapes(
+            game_state=game_state,
+            manual_shapes=ms_infer,
+            phantom_items=phantom_items,
+            phantom_quality_pref=phantom_quality_pref,
+            occupied_cells=occ_mut,
+            vacant_manual_suppress=vacant_manual_suppress,
+            max_box_id=int(max_box_id),
+            phantom_specs=specs_in,
+        )
+        specs_out = _filter_phantom_specs_absorbed_by_log_merge(
+            specs_in, set(absorbed_set)
+        )
+        return LogContourInferResult(
+            dict(merged), frozenset(absorbed_set), specs_out
+        )
+
+    inferred: Dict[str, Tuple[int, int, int, int]] = {}
+    absorbed: frozenset[str] = frozenset()
+    specs_work = list(specs_in)
+    if cell_src:
+        specs_work, inferred_cover, absorbed_cover = (
+            _replace_recorded_anchors_with_covering_phantoms(
+                specs_work,
+                cell_src,
+                log_uids=log_uids,
+            )
+        )
+        inferred.update(inferred_cover)
+        absorbed = absorbed_cover
+
+    occ_for_log = set(occupied_cells)
+    for spec in specs_work:
+        occ_for_log |= rect_cells_wh(spec.w, spec.h, spec.dc, spec.dr)
+    weighted = infer_unknown_contour_log_shapes_weighted(
+        game_state=game_state,
+        manual_shapes=ms_infer,
+        occupied_cells=occ_for_log,
+        vacant_manual_suppress=vacant_manual_suppress,
+        max_box_id=int(max_box_id),
+        raw_pricing=raw_pricing,
+        skip_uids=set(inferred.keys()),
+    )
+    inferred.update(weighted)
+    return LogContourInferResult(inferred, absorbed, specs_work)
 
 
 __all__ = [
@@ -1909,9 +2016,11 @@ __all__ = [
     "AUTO_VACANT_RECT_PHANTOM_PREFIX",
     "DEFAULT_VACANT_RECT_MAX_HOLE_CELLS",
     "DEFAULT_VACANT_RECT_MIN_BBOX_AREA",
+    "LogContourInferResult",
     "VacantRectInferResult",
     "VacantRectPhantomSpec",
     "auto_vacant_rect_phantom_cell_count_from_snapshot",
+    "compute_unknown_contour_log_shapes",
     "compute_vacant_rect_phantom_specs",
     "is_auto_vacant_rect_phantom_uid",
 ]

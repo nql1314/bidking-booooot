@@ -81,7 +81,7 @@
       "y": 960
     },
     "tool_confirm": {
-      "x": 1133,
+      "x": 1031,
       "y": 655
     },
     "tool_post_confirm": {
@@ -292,7 +292,7 @@
     "print_round_debug": false,
     "save_pricing_context_json": false,
     "pricing_context_json_path": "data/pricing_context.json",
-    "gui_verbose": false,
+    "gui_verbose": true,
     "runs_dir": "runs"
   },
   "viewer": {

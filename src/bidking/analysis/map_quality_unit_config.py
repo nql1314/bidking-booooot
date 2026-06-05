@@ -10,7 +10,11 @@ import math
 import os
 from typing import Any, Dict, Mapping, Optional
 
-from .map_avg_csv import map_quality_csv_path_resolved, representative_map_id_for_ticket
+from .map_avg_csv import (
+    map_quality_csv_path_resolved,
+    representative_map_id_for_ticket,
+    resolve_map_id_for_quality_csv,
+)
 
 # CSV ``quality_group`` 键
 CSV_QUALITY_Q5 = "q5"
@@ -157,6 +161,12 @@ def _load_row_values(
     per_item: bool,
     snapshot_path_hint: Optional[str] = None,
 ) -> Optional[float]:
+    resolved = resolve_map_id_for_quality_csv(
+        map_id,
+        snapshot_path_hint=snapshot_path_hint,
+    )
+    if resolved is None:
+        return None
     path = _resolve_data_csv_path(percentile, snapshot_path_hint)
     if not path or not os.path.isfile(path):
         return None
@@ -169,7 +179,7 @@ def _load_row_values(
                     qg = str(row["quality_group"]).strip()
                 except (KeyError, TypeError, ValueError):
                     continue
-                if mid != int(map_id) or qg != quality_group:
+                if mid != resolved or qg != quality_group:
                     continue
                 raw = row.get(col)
                 if raw is None or str(raw).strip() == "":
@@ -187,7 +197,7 @@ def load_map_quality_unit_price_refs(
     """
     返回 ``q5`` / ``q6`` / ``q56`` / ``q456`` / ``q3456`` 的 CSV 参考价（件价、格价 × 均价/P25/P50）。
 
-    ``map_id`` 会先归一化为代表 ``map_id``（与同档最小图一致）。
+    ``map_id`` 经 ``resolve_map_id_for_quality_csv``（含 252x→250x 等活动图回退）。
     """
     rep_id, _pfx = representative_map_id_for_ticket(int(map_id), snapshot_path_hint)
     out: Dict[str, Dict[str, Optional[float]]] = {}

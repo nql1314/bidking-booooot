@@ -160,6 +160,10 @@ FIELD_META: dict[str, dict[str, str]] = {
         "label": "未知格背景色",
         "description": "画板上未识别/未知格子的填充颜色，十六进制如 #1a7394。",
     },
+    "grid_view.auto_expand_log_contour": {
+        "label": "自动扩展轮廓",
+        "description": "与 phantom_vac 自动填充分开；开启后刷新画板时在填充之后应用分析层轮廓推断（早期回合仅权重价扩形）。",
+    },
     # ── humanize ────────────────────────────────────────────────────────────
     "humanize.enabled": {
         "label": "启用拟人化",
@@ -268,7 +272,7 @@ FIELD_META: dict[str, dict[str, str]] = {
     },
     "pricing.infer_vacant_rect_phantoms": {
         "label": "第4回合空格自动填充",
-        "description": "第4回合及之后：空置区近似实心矩形 → 自动 phantom_vac；随后已知品质未知轮廓迭代合并扩充。",
+        "description": "第4回合及之后：空置区近似实心矩形 → 自动 phantom_vac；低档总格齐备前日志轮廓按 CSV 权重价选形，齐备后迭代 merge_expand。",
     },
     "pricing.late_round_low_bid_surrender_after_round": {
         "label": "认输生效回合",

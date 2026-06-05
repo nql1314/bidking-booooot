@@ -470,7 +470,12 @@ def _finalize_tier_min_bounds(
 
 
 def _load_map_quality_groups_from_csv(map_id: int, snapshot_path_hint: Optional[str]) -> Dict[str, Dict[str, float]]:
+    from .map_avg_csv import resolve_map_id_for_quality_csv
+
     out: Dict[str, Dict[str, float]] = {}
+    resolved = resolve_map_id_for_quality_csv(map_id, snapshot_path_hint=snapshot_path_hint)
+    if resolved is None:
+        return out
     path = map_quality_csv_path_resolved(snapshot_path_hint)
     if not path or not os.path.isfile(path):
         return out
@@ -484,7 +489,7 @@ def _load_map_quality_groups_from_csv(map_id: int, snapshot_path_hint: Optional[
                     item = float(row["avg_price_per_item"])
                 except (KeyError, TypeError, ValueError):
                     continue
-                if mid != map_id or not qg:
+                if mid != resolved or not qg:
                     continue
                 out[qg] = {"avg_price_per_cell": cell, "avg_price_per_item": item}
     except OSError:
@@ -783,10 +788,9 @@ def build_raw_pricing_dict(
 
     skill_merged = merge_latest_skill_entries(list(skill_logs or []))
     normalized_mid = item_db.normalize_map_id(int(map_id or 0))
-    csv_groups_full = (
-        _load_map_quality_groups_from_csv(normalized_mid, snapshot_path_hint)
-        if normalized_mid is not None
-        else {}
+    csv_groups_full = _load_map_quality_groups_from_csv(
+        int(map_id or 0),
+        snapshot_path_hint,
     )
     csv_groups_per_cell = {
         k: float(v.get("avg_price_per_cell", 0.0))
@@ -798,7 +802,13 @@ def build_raw_pricing_dict(
     }
 
     map_quality_unit_override_keys: list[str] = []
-    if normalized_mid is not None:
+    from .map_avg_csv import resolve_map_id_for_quality_csv
+
+    quality_csv_mid = resolve_map_id_for_quality_csv(
+        int(map_id or 0),
+        snapshot_path_hint=snapshot_path_hint,
+    )
+    if quality_csv_mid is not None:
         from .map_quality_unit_config import (
             apply_map_quality_unit_per_cell_overrides,
             merge_config_overrides_into_runtime,
@@ -807,7 +817,9 @@ def build_raw_pricing_dict(
         try:
             from ..config.runtime import load_runtime
 
-            _ov = merge_config_overrides_into_runtime(load_runtime().raw, int(normalized_mid))
+            _ov = merge_config_overrides_into_runtime(
+                load_runtime().raw, int(quality_csv_mid)
+            )
         except Exception:
             _ov = {}
         if _ov:

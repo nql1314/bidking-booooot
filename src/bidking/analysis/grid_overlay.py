@@ -32,9 +32,11 @@ from .grid_overlay_dims import (
 )
 from .grid_overlay_infer_vacant_rects import (
     AUTO_VACANT_RECT_PHANTOM_PREFIX,
+    LogContourInferResult,
     VacantRectInferResult,
     VacantRectPhantomSpec,
     auto_vacant_rect_phantom_cell_count_from_snapshot,
+    compute_unknown_contour_log_shapes,
     compute_vacant_rect_phantom_specs,
     is_auto_vacant_rect_phantom_uid,
 )
@@ -78,8 +80,10 @@ __all__ = [
     "build_occupied_cells",
     "compute_overlay_vacant_dict",
     "auto_vacant_rect_phantom_cell_count_from_snapshot",
+    "compute_unknown_contour_log_shapes",
     "compute_vacant_rect_phantom_specs",
     "AUTO_VACANT_RECT_PHANTOM_PREFIX",
+    "LogContourInferResult",
     "VacantRectInferResult",
     "VacantRectPhantomSpec",
     "is_auto_vacant_rect_phantom_uid",

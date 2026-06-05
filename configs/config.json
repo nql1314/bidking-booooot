@@ -22,7 +22,8 @@
   },
   "grid_view": {
     "unknown_bg": "#1a7394",
-    "fraud_empty_cells_algorithm": "tiling_strict"
+    "fraud_empty_cells_algorithm": "tiling_strict",
+    "auto_expand_log_contour": true
   },
   "safety": {
     "verify_bid_confirm_snapshot": false
@@ -37,10 +38,14 @@
   "automation": {
     "bot_runner": "fresh_aisha_bot",
     "selected_mode": "aisha_premium",
-    "tool_rounds": [],
+    "tool_rounds": [
+      1,
+      2,
+      3
+    ],
     "default_map": "1",
     "default_runs": 1,
-    "selected_map": "210",
+    "selected_map": "240",
     "selected_runs": 20,
     "warehouse_auto_sort": {
       "enabled": true

@@ -61,7 +61,15 @@ MAP_TO_TIER_NEST: Dict[int, Tuple[int, int]] = {
     4511: (105, 2141), 4512: (105, 2142), 4513: (105, 2143), 4514: (105, 2144),
     4515: (105, 2145), 4516: (105, 2146), 4517: (105, 2147), 4518: (105, 2148),
     4519: (105, 2149), 4520: (105, 2150),
+    # RankMap「白色DOWN红色UP」活动子图 2521–2530：与 2501–2510 同巢池（Drop 无 224x 时见 map_id_for_drop_weights）
+    2521: (105, 2041), 2522: (105, 2042), 2523: (105, 2043), 2524: (105, 2044),
+    2525: (105, 2045), 2526: (105, 2046), 2527: (105, 2047), 2528: (105, 2048),
+    2529: (105, 2049), 2530: (105, 2050),
 }
+# 25xx/45xx 沉船活动位（末两位 21–30）无可用 DROP 根时，回退到 −20 对应基础子图（2501–2510 / 4501–4510）
+_SHIP_WEIGHT_FALLBACK_SLOT_MIN = 21
+_SHIP_WEIGHT_FALLBACK_SLOT_MAX = 30
+_SHIP_WEIGHT_FALLBACK_DELTA = 20
 TIER_REF_NEST: Dict[int, int] = {
     101: 2001,
     102: 2011,
@@ -84,6 +92,56 @@ def normalize_map_id(map_id: Optional[int]) -> Optional[int]:
     if map_id in MAP_TO_TIER_NEST:
         return map_id
     return map_id
+
+
+def ship_series_weight_fallback_map_id(map_id: int) -> Optional[int]:
+    """
+    25xx/45xx 末两位 21–30（如活动 2521–2530、日志 4521–4530）在 DROP 未配置时，
+    回退到 −20 的基础子图（2501–2510 或 4501–4510，归一后均为 25xx 同位）。
+    """
+    band = map_id // 100
+    slot = map_id % 100
+    if band not in (25, 45) or not (
+        _SHIP_WEIGHT_FALLBACK_SLOT_MIN <= slot <= _SHIP_WEIGHT_FALLBACK_SLOT_MAX
+    ):
+        return None
+    base = map_id - _SHIP_WEIGHT_FALLBACK_DELTA
+    if base not in MAP_TO_TIER_NEST:
+        return None
+    return normalize_map_id(base) or base
+
+
+def _nest_drop_root_available(map_id: int) -> bool:
+    entry = MAP_TO_TIER_NEST.get(map_id)
+    if not entry:
+        return False
+    nest = entry[1]
+    return bool(_DROP_GRAPH.get(nest))
+
+
+def map_id_for_drop_weights(map_id: Optional[int]) -> Optional[int]:
+    """
+    解析用于掉落图递归的地图 ID：先 normalize，再校验巢根是否在 DROP 图中；
+    25xx/45xx 活动位缺表时回退 2501–2510 / 4501–4510 同位。
+    """
+    mid = normalize_map_id(map_id)
+    if mid is None:
+        return None
+    if mid in MAP_TO_TIER_NEST and _nest_drop_root_available(mid):
+        return mid
+    fallback = ship_series_weight_fallback_map_id(mid)
+    if fallback is not None and fallback in MAP_TO_TIER_NEST:
+        return fallback
+    return mid if mid in MAP_TO_TIER_NEST else None
+
+
+def map_tier_nest_for_weights(map_id: Optional[int]) -> Tuple[Optional[int], Optional[int]]:
+    """返回 (tier, nest_drop_id)，供地图权重与巢品质倍率使用。"""
+    mid = map_id_for_drop_weights(map_id)
+    if mid is None or mid not in MAP_TO_TIER_NEST:
+        return None, None
+    tier, nest = MAP_TO_TIER_NEST[mid]
+    return tier, nest
 
 
 def map_bundle_key_for_automation(map_id: int) -> str:
@@ -277,10 +335,9 @@ def _resolve_drop_to_items(
 
 def _nest_quality_multiplier(map_id: Optional[int], quality: int) -> float:
     """子图品质巢权重：当前子图 NEST 期望价 / 当前档参考 NEST 期望价。"""
-    map_id = normalize_map_id(map_id)
-    if map_id is None or map_id not in MAP_TO_TIER_NEST:
+    tier, nest = map_tier_nest_for_weights(map_id)
+    if tier is None or nest is None:
         return 1.0
-    tier, nest = MAP_TO_TIER_NEST[map_id]
     ref_nest = TIER_REF_NEST.get(tier)
     cur_weights = _NEST_WEIGHTS.get(nest)
     ref_weights = _NEST_WEIGHTS.get(ref_nest) if ref_nest is not None else None
@@ -386,8 +443,8 @@ def _weighted_est_price(
     :data:`WEIGHTED_EST_MAX_ITEM_BASE_VALUE`）的候选不计入加权和（权重在剩余候选上自然重归一）；
     若全部高于阈值则退回全体候选，以免无可用子集。地图 drop 解析仍基于完整 ``candidates`` 的 item_id 集合。
     """
-    map_id = normalize_map_id(map_id)
-    map_drop_id = MAP_TO_TIER_NEST.get(map_id, (None, None))[1] if map_id is not None else None
+    map_id_norm = normalize_map_id(map_id)
+    _tier, map_drop_id = map_tier_nest_for_weights(map_id)
     map_drop_weights = _resolve_drop_to_items(
         map_drop_id,
         {item.item_id for item in candidates},
@@ -401,7 +458,9 @@ def _weighted_est_price(
     est_pool = priced if priced else candidates
     pairs: List[Tuple[float, float]] = []
     for item in est_pool:
-        weight = _candidate_weight(item, map_category_weights, map_id, map_drop_weights)
+        weight = _candidate_weight(
+            item, map_category_weights, map_id_norm, map_drop_weights
+        )
         pairs.append((float(item.base_value), float(weight)))
     weight_sum = sum(w for _, w in pairs)
     if weight_sum <= 0 and map_drop_weights:
@@ -432,14 +491,16 @@ def candidate_probabilities(
     if len(candidates) == 1:
         return {candidates[0].item_id: 1.0}
 
-    map_id = normalize_map_id(map_id)
-    map_drop_id = MAP_TO_TIER_NEST.get(map_id, (None, None))[1] if map_id is not None else None
+    map_id_norm = normalize_map_id(map_id)
+    _tier, map_drop_id = map_tier_nest_for_weights(map_id)
     map_drop_weights = _resolve_drop_to_items(
         map_drop_id,
         {item.item_id for item in candidates},
     )
     weights = {
-        item.item_id: _candidate_weight(item, map_category_weights, map_id, map_drop_weights)
+        item.item_id: _candidate_weight(
+            item, map_category_weights, map_id_norm, map_drop_weights
+        )
         for item in candidates
     }
     total = sum(weights.values())
@@ -455,24 +516,28 @@ def candidate_probabilities(
 def probability_source_label(candidates: List[CsvItem], map_id: Optional[int] = None) -> str:
     """说明候选概率当前使用的是地图递归权重还是全局回退权重。"""
     original_map_id = map_id
-    map_id = normalize_map_id(map_id)
-    if map_id is None or map_id not in MAP_TO_TIER_NEST:
+    map_id_norm = normalize_map_id(map_id)
+    weight_map_id = map_id_for_drop_weights(map_id)
+    if weight_map_id is None or weight_map_id not in MAP_TO_TIER_NEST:
         return "全局权重"
-    map_drop_id = MAP_TO_TIER_NEST[map_id][1]
+    map_drop_id = MAP_TO_TIER_NEST[weight_map_id][1]
     resolved = _resolve_drop_to_items(map_drop_id, {item.item_id for item in candidates})
     if resolved:
-        if original_map_id != map_id:
-            return f"地图权重 {original_map_id}->{map_id}->{map_drop_id}"
-        return f"地图权重 {map_id}->{map_drop_id}"
-    return f"全局权重（地图 {original_map_id}->{map_id}->{map_drop_id} 未覆盖候选）"
+        parts = [str(p) for p in (original_map_id, map_id_norm, weight_map_id) if p is not None]
+        deduped: List[str] = []
+        for p in parts:
+            if not deduped or deduped[-1] != p:
+                deduped.append(p)
+        chain = "->".join(deduped + [str(map_drop_id)])
+        return f"地图权重 {chain}"
+    return f"全局权重（地图 {original_map_id}->{map_id_norm}->{map_drop_id} 未覆盖候选）"
 
 
 def map_category_ratios(map_id: Optional[int]) -> Dict[int, float]:
     """返回地图根 drop 的类别占比（category -> ratio），会自动归一化 map_id。"""
-    map_id = normalize_map_id(map_id)
-    if map_id is None or map_id not in MAP_TO_TIER_NEST:
+    _tier, map_drop_id = map_tier_nest_for_weights(map_id)
+    if map_drop_id is None:
         return {}
-    map_drop_id = MAP_TO_TIER_NEST[map_id][1]
     totals: Dict[int, float] = {}
 
     def dfs(cur_drop_id: int, scale: float, path_seen: Set[int]) -> None:
