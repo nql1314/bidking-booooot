@@ -19,6 +19,7 @@ from .runtime import (
     infer_fraud_empty_cells_algorithm_and_trim,
     infer_fraud_empty_cells_tiling_n,
     infer_unknown_contour_shapes_enabled,
+    infer_vacant_rect_phantoms_config_enabled,
     infer_vacant_rect_phantoms_enabled,
     load_runtime,
 )
@@ -44,6 +45,7 @@ __all__ = [
     "infer_fraud_empty_cells_algorithm_and_trim",
     "infer_fraud_empty_cells_tiling_n",
     "infer_unknown_contour_shapes_enabled",
+    "infer_vacant_rect_phantoms_config_enabled",
     "infer_vacant_rect_phantoms_enabled",
     "load_pricing",
     "resolve_for",

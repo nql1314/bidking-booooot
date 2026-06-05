@@ -1,6 +1,6 @@
 {
   "pricing": {
-    "vacant_red_floor_ceiling_pick_mode": "normal",
+    "vacant_red_floor_ceiling_pick_mode": "aggressive",
     "enable_opponent_bid_adjustment": false,
     "enable_vacant_red_floor_ceiling_pick": false,
     "enable_big_gold_adjustment": false,

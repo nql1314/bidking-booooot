@@ -147,6 +147,20 @@ def _infer_vacant_rect_phantoms_config_flag(raw: Mapping[str, Any]) -> bool:
     return True
 
 
+def infer_vacant_rect_phantoms_config_enabled(
+    cfg: Optional[Union[RuntimeConfig, Mapping[str, Any]]] = None,
+) -> bool:
+    """仅 ``pricing.infer_vacant_rect_phantoms`` 配置开关（不含第 4 回合门槛）。"""
+    raw: Mapping[str, Any]
+    if cfg is None:
+        raw = load_runtime().raw
+    elif isinstance(cfg, RuntimeConfig):
+        raw = cfg.raw
+    else:
+        raw = cfg
+    return _infer_vacant_rect_phantoms_config_flag(raw)
+
+
 def infer_vacant_rect_phantoms_enabled(
     cfg: Optional[Union[RuntimeConfig, Mapping[str, Any]]] = None,
     *,
@@ -158,14 +172,7 @@ def infer_vacant_rect_phantoms_enabled(
     读取 ``pricing.infer_vacant_rect_phantoms``；键缺失时为 ``True``。
     传入 ``current_round`` 时，仅当回合 ≥ 第 4 回合才为 ``True``（与推断层一致）。
     """
-    raw: Mapping[str, Any]
-    if cfg is None:
-        raw = load_runtime().raw
-    elif isinstance(cfg, RuntimeConfig):
-        raw = cfg.raw
-    else:
-        raw = cfg
-    if not _infer_vacant_rect_phantoms_config_flag(raw):
+    if not infer_vacant_rect_phantoms_config_enabled(cfg):
         return False
     if current_round is None:
         return True

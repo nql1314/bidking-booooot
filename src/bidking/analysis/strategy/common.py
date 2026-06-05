@@ -353,6 +353,37 @@ def _phantom_uids_from_snapshot(board_snapshot: Dict[str, Any]) -> Set[str]:
     return {str(k) for k in ph}
 
 
+def _phantom_row_quality_unknown(it: Dict[str, Any]) -> bool:
+    q_raw = it.get("quality")
+    if q_raw is None:
+        return True
+    try:
+        int(q_raw)
+        return False
+    except (TypeError, ValueError):
+        return True
+
+
+def _known_contour_unknown_quality_row(it: Dict[str, Any]) -> bool:
+    """有 ``shape`` 几何 footprint 且合并表 ``quality`` 仍为未知。"""
+    if not _phantom_row_quality_unknown(it):
+        return False
+    if it.get("shape") is None:
+        return False
+    return _geo_footprint_cells_from_shape_field(it.get("shape")) is not None
+
+
+def _phantom_tier_alloc_in_scope(
+    uid: str,
+    it: Dict[str, Any],
+    phantom_uids: Set[str],
+) -> bool:
+    """幽灵行，或合并表中的已知轮廓未知品质日志行。"""
+    if str(uid) in phantom_uids:
+        return True
+    return _known_contour_unknown_quality_row(it)
+
+
 def _phantom_quality_user_locked_uids(board_snapshot: Dict[str, Any]) -> Set[str]:
     overlay = board_snapshot.get("grid_overlay")
     if not isinstance(overlay, dict):
@@ -621,7 +652,8 @@ def _phantom_record_remaining_cells(rec: Dict[str, Any]) -> float:
     fp = float(rec["fp"])
     a5 = float(rec.get("a5") or 0.0)
     a6 = float(rec.get("a6") or 0.0)
-    return max(0.0, fp - a5 - a6)
+    ve = float(rec.get("vacant_equiv") or 0.0)
+    return max(0.0, fp - a5 - a6 - ve)
 
 
 def _phantom_record_append_step(
@@ -755,6 +787,60 @@ def _phantom_record_assign_gold(
     return a
 
 
+def _phantom_absorb_rem5_via_phantom_red_revert(
+    records: List[Dict[str, Any]],
+    rem5_ref: List[float],
+    global_steps: List[Dict[str, Any]],
+    *,
+    q5_count_known: bool,
+) -> None:
+    """几何空格用尽后仍有金预算：将本应 ``count_known_red`` 的 footprint 视作空置吸收 rem5。"""
+    if not q5_count_known or rem5_ref[0] <= 1e-9:
+        return
+    pool = [
+        rec
+        for rec in records
+        if 6 in rec["c_gr"] and _phantom_record_remaining_cells(rec) > 1e-9
+    ]
+    if not pool:
+        return
+    pool.sort(
+        key=lambda rec: (
+            -float(rec.get("p5") or 0.0),
+            float(rec["fp"]),
+            str(rec["uid"]),
+        )
+    )
+    absorbed = 0.0
+    rnd = 3
+    for rec in pool:
+        if rem5_ref[0] <= 1e-9:
+            break
+        take = min(_phantom_record_remaining_cells(rec), rem5_ref[0])
+        if take <= 1e-9:
+            continue
+        rec["vacant_equiv"] = float(rec.get("vacant_equiv") or 0.0) + take
+        rem5_ref[0] -= take
+        absorbed += take
+        _phantom_record_append_step(
+            rec,
+            rnd,
+            None,
+            take,
+            reason="phantom_red_revert_vacant_absorb",
+        )
+    if absorbed > 1e-9:
+        global_steps.append(
+            {
+                "round": rnd,
+                "quality": 5,
+                "cells": round(absorbed, 6),
+                "reason": "phantom_red_revert_vacant_absorb",
+                "rem5_after": round(rem5_ref[0], 6),
+            }
+        )
+
+
 def _phantom_resolve_post_gold(
     records: List[Dict[str, Any]],
     *,
@@ -762,8 +848,9 @@ def _phantom_resolve_post_gold(
     post_gold_thr_q5: float,
     post_gold_thr_q6: float,
     item_thr: float,
+    rem5_remaining: float = 0.0,
 ) -> None:
-    """金格预算用尽后，解析尚未分配的幽灵 footprint。"""
+    """金格预算用尽后，解析尚未分配的幽灵 / 已知轮廓未知品质 footprint。"""
     for rec in records:
         remaining = _phantom_record_remaining_cells(rec)
         if remaining <= 1e-9:
@@ -790,6 +877,8 @@ def _phantom_resolve_post_gold(
             continue
 
         if q5_count_known:
+            if rem5_remaining > 1e-9:
+                continue
             if 6 in c_gr:
                 rec["a6"] = a6 + remaining
                 _phantom_record_append_step(
@@ -868,7 +957,9 @@ def _phantom_global_gold_allocate(
     有 ``q5_grid_count`` 时再与 ``q5_grid_count - cq5`` 取更紧者。
     几何空格 < ``rem5`` 时仍只按 ``rem5`` 贪心记金（不无视预算整池标金）。
     仍有金预算时从 ``vacant`` 扣减。
-    未分到金的幽灵：已知 ``q5_grid_count`` 则记红，否则阈值定档或 Q5/Q6 分拆。
+    已知轮廓未知品质（非幽灵 uid）与幽灵一并进入金池排序。
+    空格用尽后仍有金预算且已知 ``q5_grid_count``：将本应强制记红的 footprint 还原为空置吸收 rem5，
+    再对余格做后置定档（仅 rem5 用尽时才 ``count_known_red``）。
     """
     global_steps: List[Dict[str, Any]] = []
     if not records:
@@ -950,12 +1041,21 @@ def _phantom_global_gold_allocate(
                 }
             )
 
+    # ── 第三轮：错误强制红 → 还原为空置并继续吸收 rem5 ──
+    _phantom_absorb_rem5_via_phantom_red_revert(
+        records,
+        rem5_ref,
+        global_steps,
+        q5_count_known=q5_count_known,
+    )
+
     _phantom_resolve_post_gold(
         records,
         q5_count_known=q5_count_known,
         post_gold_thr_q5=post_gold_thr_q5,
         post_gold_thr_q6=post_gold_thr_q6,
         item_thr=item_thr,
+        rem5_remaining=float(rem5_ref[0]),
     )
     return rem5_ref[0], global_steps
 
@@ -968,19 +1068,18 @@ def phantom_unknown_tier_credit_q456(
     confirmed_q6: int = 0,
 ) -> Tuple[Dict[int, float], Dict[str, Any]]:
     """
-    品质未知幽灵（``quality is None``）在 ``C_gr={5,6}\\excluded`` 上全局分摊占位，
-    同步写回 ``grid_overlay`` 幽灵行（品质 / 手动确认物品 / 分拆 tier 字段）。
+    品质未知幽灵及合并表「已知轮廓未知品质」行在 ``C_gr={5,6}\\excluded`` 上全局分摊占位，
+    同步写回 ``grid_overlay`` 幽灵行或 ``game_state.items``（品质 / 手动确认物品 / 分拆 tier 字段）。
 
-    已知 ``q5_grid_min`` 时：几何空格不足则候选幽灵全部记金；否则按金权重贪心匹配金格预算。
-    未入选者及金满后余格：已知 ``q5_grid_count`` 记红，否则阈值定档或 Q5/Q6 分拆。
+    已知 ``q5_grid_min`` 时：几何空格不足则候选池全部记金；否则按金权重贪心匹配金格预算。
+    未入选者及金满后余格：仅 rem5 用尽且已知 ``q5_grid_count`` 时记红，否则阈值定档或 Q5/Q6 分拆。
+    rem5 在几何空格扣尽后仍为正时，将本应强制记红的 footprint 视作空置继续吸收 rem5。
     无 ``q5_grid_min`` 时仍用回退精确匹配 + 空格吸收。手动画板已确认品质或物品不参与分摊。
 
     返回 ``({5: cells, 6: cells}, detail)``；``detail`` 仅供调试/单测，不再写入 ``pricing``。
     """
     t0 = time.perf_counter()
     phantom_uids = _phantom_uids_from_snapshot(board_snapshot)
-    if not phantom_uids:
-        return {5: 0.0, 6: 0.0}, {}
 
     alloc_cfg = _phantom_tier_alloc_config(board_snapshot)
     item_thr = float(alloc_cfg["item_prob_threshold"])
@@ -1008,9 +1107,12 @@ def phantom_unknown_tier_credit_q456(
     pending_records: List[Dict[str, Any]] = []
 
     for uid, it in items.items():
-        if uid not in phantom_uids or not isinstance(it, dict):
+        if not isinstance(it, dict):
             continue
-        if _phantom_row_manually_confirmed(board_snapshot, str(uid), it):
+        uid_s = str(uid)
+        if not _phantom_tier_alloc_in_scope(uid_s, it, phantom_uids):
+            continue
+        if _phantom_row_manually_confirmed(board_snapshot, uid_s, it):
             continue
         bid_raw = it.get("box_id")
         if bid_raw is None:
@@ -1038,8 +1140,9 @@ def phantom_unknown_tier_credit_q456(
         p5, p6 = _phantom_row_quality_probs(cands, probs) if cands else (0.0, 0.0)
         pending_records.append(
             {
-                "uid": str(uid),
+                "uid": uid_s,
                 "it": it,
+                "is_phantom": uid_s in phantom_uids,
                 "fp": float(fp),
                 "c_gr": c_gr,
                 "cands": cands,
@@ -1048,10 +1151,15 @@ def phantom_unknown_tier_credit_q456(
                 "p6": p6,
                 "a5": 0.0,
                 "a6": 0.0,
+                "vacant_equiv": 0.0,
                 "steps": [],
                 "resolved_item_id": None,
             }
         )
+
+    if not pending_records:
+        perf_log_elapsed("phantom_unknown_tier_credit_q456 (no rows)", t0)
+        return {5: 0.0, 6: 0.0}, {}
 
     pending_records.sort(key=lambda rec: (-float(rec["fp"]), str(rec["uid"])))
 
@@ -1089,7 +1197,8 @@ def phantom_unknown_tier_credit_q456(
             resolved_item_id=resolved_item_id,
             red_only_budget=red_only,
         )
-        _sync_phantom_alloc_to_board_snapshot(board_snapshot, uid, patch)
+        if rec.get("is_phantom"):
+            _sync_phantom_alloc_to_board_snapshot(board_snapshot, uid, patch)
         it.update(patch)
 
         credit_all[5] += a5
@@ -1122,6 +1231,8 @@ def phantom_unknown_tier_credit_q456(
 
     merged_after = _grid_overlay.merged_items_dict_from_snapshot(board_snapshot)
     apply_manual_confirm_projection(merged_after, csv_index)
+    gs = board_snapshot.get("game_state")
+    gs_items = gs.get("items") if isinstance(gs, dict) else None
     overlay = board_snapshot.get("grid_overlay")
     if isinstance(overlay, dict):
         ph = overlay.get("phantom_items")
@@ -1157,11 +1268,31 @@ def phantom_unknown_tier_credit_q456(
                             pref = {}
                             overlay["phantom_quality_pref"] = pref
                         pref[uid_s] = q_i
+        if isinstance(gs_items, dict):
+            for rec in pending_records:
+                if rec.get("is_phantom"):
+                    continue
+                uid_log = str(rec["uid"])
+                src = merged_after.get(uid_log)
+                dst = gs_items.get(uid_log)
+                if not isinstance(src, dict) or not isinstance(dst, dict):
+                    continue
+                for key in (
+                    "item_cid",
+                    "quality",
+                    "shape",
+                    "price",
+                    "manual_confirm_item_id",
+                ):
+                    if key in src:
+                        dst[key] = src[key]
         merged_cache = overlay.get("merged_items_dict")
         if isinstance(merged_cache, dict):
-            for uid_s, row in merged_after.items():
-                if uid_s in phantom_uids and isinstance(row, dict):
-                    merged_cache[uid_s] = dict(row)
+            for rec in pending_records:
+                uid_sync = str(rec["uid"])
+                row = merged_after.get(uid_sync)
+                if isinstance(row, dict):
+                    merged_cache[uid_sync] = dict(row)
 
     if not per_item and credit_all[5] == 0.0 and credit_all[6] == 0.0:
         perf_log_elapsed("phantom_unknown_tier_credit_q456 (empty)", t0)
