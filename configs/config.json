@@ -38,20 +38,28 @@
   "automation": {
     "bot_runner": "fresh_aisha_bot",
     "selected_mode": "aisha_premium",
-    "tool_rounds": [
-      1,
-      2,
-      3
-    ],
+    "tool_rounds": [],
     "default_map": "1",
     "default_runs": 1,
-    "selected_map": "240",
-    "selected_runs": 20,
+    "map_chain": [
+      {
+        "map_id": "210",
+        "runs": 1,
+        "tool_rounds": []
+      },
+      {
+        "map_id": "230",
+        "runs": 5,
+        "tool_rounds": []
+      }
+    ],
+    "selected_map": "210",
+    "selected_runs": 1,
     "warehouse_auto_sort": {
       "enabled": true
     },
-    "run_cycles": 1,
-    "cycle_rest_minutes": 5.0,
+    "run_cycles": 60,
+    "cycle_rest_minutes": 2.0,
     "enable_map_entry_money_check": false,
     "enable_aisha_round4_tool_vacant_gate": false,
     "aisha_round4_tool_min_vacant": 30,
@@ -60,7 +68,7 @@
       "default": 1.0
     },
     "bid_cap_skip_when_total_above": 0,
-    "game_start_timeout_seconds": 0.0,
+    "game_start_timeout_seconds": 120,
     "scheduled_start_enabled": false,
     "scheduled_start_hour": 8,
     "scheduled_start_minute": 0,
@@ -74,7 +82,7 @@
     "tool_after_snapshot_poll_seconds": 8.0,
     "tool_after_wait_seconds": 5.0,
     "click_pause_seconds": 0.12,
-    "after_map_select_wait_seconds": 8.0,
+    "after_map_select_wait_seconds": 5.0,
     "after_bid_confirm_wait_seconds": 1.0,
     "bid_confirm_verify_max_seconds": 30,
     "bid_confirm_retry_pause_seconds": 3,

@@ -1,10 +1,10 @@
 {
   "pricing": {
-    "fallback_bid_price": 112222,
+    "fallback_bid_price": 88888,
     "enable_big_gold_adjustment": false,
     "enable_opponent_bid_adjustment": true,
     "enable_vacant_red_floor_ceiling_pick": false,
-    "enable_late_round_low_bid_surrender": true,
+    "enable_late_round_low_bid_surrender": false,
     "late_round_low_bid_surrender_after_round": 4,
     "late_round_low_bid_surrender_below": 111111,
     "late_round_low_bid_surrender_bid": 8888,
