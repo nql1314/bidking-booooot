@@ -55,8 +55,12 @@ FIELD_META: dict[str, dict[str, str]] = {
         "description": "启动时加载的 bot 模块名（如 fresh_aisha_bot），决定自动化主循环实现。",
     },
     "automation.cycle_rest_minutes": {
-        "label": "循环间隔（分钟）",
-        "description": "多轮 run_cycles 之间休息的分钟数；0 表示不额外休息。",
+        "label": "大循环间隔（分钟）",
+        "description": "每完成一整条 map_chain 后的休息分钟数；0 表示不休息。",
+    },
+    "automation.map_chain": {
+        "label": "链式地图",
+        "description": "按顺序执行的地图列表；每项含 map_id、本段局数 runs、本段道具回合 tool_rounds（1–5）；与 run_cycles 相乘为总局数。",
     },
     "automation.default_map": {
         "label": "默认地图键",
@@ -111,8 +115,8 @@ FIELD_META: dict[str, dict[str, str]] = {
         "description": "出价确认后在此秒数内不响应 unknown 状态的 ESC 逃脱，防止误触打断流程。",
     },
     "automation.run_cycles": {
-        "label": "循环轮数",
-        "description": "自动循环跑图的外层轮数；每轮内仍按 default_runs 跑多局。",
+        "label": "大循环轮数",
+        "description": "整条 map_chain 重复执行的遍数；总局数 = 链内各段 runs 之和 × 本项。",
     },
     "automation.selected_mode": {
         "label": "策略模式",
@@ -365,8 +369,8 @@ FIELD_META: dict[str, dict[str, str]] = {
         "description": "点击出价确认后等待界面切换的秒数。",
     },
     "timing.after_map_select_wait_seconds": {
-        "label": "选图后等待（秒）",
-        "description": "选择地图后等待加载/开局界面的秒数。",
+        "label": "开始匹配后等待（秒）",
+        "description": "大厅点地图进入详情后，点击开始匹配（post_continue_confirm）再等待加载/开局的秒数。",
     },
     "timing.bid_confirm_retry_pause_seconds": {
         "label": "确认重试间隔（秒）",

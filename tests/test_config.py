@@ -86,6 +86,7 @@ class ConfigTests(unittest.TestCase):
             "safety": {},
         }
         lv = refresh_poll_loop_locals(cfg)
+        self.assertEqual(lv["runs_per_big_cycle"], 3)
         self.assertEqual(lv["runs_per_cycle"], 3)
         self.assertEqual(lv["run_cycles"], 4)
         self.assertEqual(lv["max_runs"], 12)
@@ -100,10 +101,33 @@ class ConfigTests(unittest.TestCase):
             "safety": {},
         }
         lv = refresh_poll_loop_locals(cfg)
-        self.assertEqual(lv["runs_per_cycle"], 5)
+        self.assertEqual(lv["runs_per_big_cycle"], 5)
         self.assertEqual(lv["run_cycles"], 1)
         self.assertEqual(lv["max_runs"], 5)
         self.assertEqual(lv["cycle_rest_minutes"], 1.0)
+
+    def test_map_chain_schedule(self) -> None:
+        from bidking.config.map_chain import automation_run_schedule, parse_automation_map_chain
+
+        auto = {
+            "map_chain": [
+                {"map_id": "240", "runs": 10},
+                {"map_id": "210", "runs": 5},
+            ],
+            "run_cycles": 2,
+            "cycle_rest_minutes": 3.0,
+            "maps": {"240": {"name": "A"}, "210": {"name": "B"}},
+        }
+        chain = parse_automation_map_chain(auto)
+        self.assertEqual(len(chain), 2)
+        self.assertEqual(chain[0]["map_id"], "240")
+        self.assertEqual(chain[1]["runs"], 5)
+        c, per_big, cycles, total, rest = automation_run_schedule(auto)
+        self.assertEqual(per_big, 15)
+        self.assertEqual(cycles, 2)
+        self.assertEqual(total, 30)
+        self.assertEqual(rest, 3.0)
+        self.assertEqual(len(c), 2)
 
 
 if __name__ == "__main__":

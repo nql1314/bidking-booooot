@@ -35,7 +35,7 @@
   - 地图技能 200009（所有藏品格数）：在已知区内已占位格数未达到该总数前，空置计数与橘红层**忽略诈骗格过滤**；吃满后对几何空置应用诈骗格剔除。
   - 诈骗格规则**仅用于**上述自动空置区（计数与初始橘红），**不限制**右键手动剔除/恢复空置标记。由 ``grid_view.fraud_empty_cells_algorithm`` 指定：字符串 ``tiling_strict`` / ``none`` 等，或列表 ``["tiling", n]`` / 对象 ``{"tiling": n}`` 将铺板与 trim 写在一起。
   - 空置候选格：普通右键可手动剔除该格（不计空置、不铺橘红），再右键同一格可恢复。
-  - 日志物品仍为「推算轮廓」（CSV 自动扩框、非手动画框）时：在该物品当前占格内右键可取消本次推算扩框（按锚格 1×1 显示），直至日志锁定形状或新对局。
+  - 日志物品仍为「推算轮廓」（配置自动扩展、CSV 批量扩展、非手动画框）时：在该物品当前占格内右键可取消扩框（按锚格 1×1 显示）；配置自动扩展取消后本局不再自动补回，直至日志锁定形状或新对局。
   - 第 4 回合起自动填充的 ``phantom_vac_*``：图例栏「自动填充」切换钮在开/关间切换并重绘；占格上 **Ctrl+左键** 直接改为金（Q5 默认），**Ctrl+右键** 直接改为红（Q6）；普通 **右键** 与手画幽灵相同可删除，本局内不再自动补回（新对局清空抑制表）。
 """
 
@@ -870,6 +870,8 @@ class GridWindow:
         self._runtime_raw = _rt_cfg.raw
         self._auto_fill_ui_enabled = False
         self._auto_expanded_log_uids: Set[str] = set()
+        # 用户右键取消的配置自动扩展日志 uid；重绘重算时不再自动补回
+        self._auto_expand_log_suppress_uids: Set[str] = set()
 
         # 实时 tail：关闭画板或返回主页时置位，供后台线程退出
         self._monitor_stop = threading.Event()
@@ -1123,6 +1125,7 @@ class GridWindow:
         self._manual_shapes_restore_backup = None
         self._vacant_manual_suppress.clear()
         self._auto_expanded_log_uids.clear()
+        self._auto_expand_log_suppress_uids.clear()
 
     def _apply_auto_fill_board_after_mode_change(self) -> None:
         """切换自动填充模式后：清空本地覆盖、重绘画板，必要时写回空 overlay 快照。"""
@@ -1259,6 +1262,22 @@ class GridWindow:
         for uid in list(self._auto_expanded_log_uids):
             self._manual_shapes.pop(uid, None)
 
+    def _cancel_log_inferred_contour(self, uid: str) -> bool:
+        """取消日志推算/自动扩展轮廓，恢复锚格 1×1；配置自动扩展者加入本局抑制表。"""
+        k = self.state.items.get(uid)
+        if k is None or k.shape is not None:
+            return False
+        suid = str(uid)
+        had_manual = suid in self._manual_shapes
+        was_auto = suid in self._auto_expanded_log_uids
+        if not had_manual and not was_auto:
+            return False
+        self._manual_shapes.pop(suid, None)
+        self._auto_expanded_log_uids.discard(suid)
+        if was_auto:
+            self._auto_expand_log_suppress_uids.add(suid)
+        return True
+
     def _sync_unknown_contour_log_shapes_expand(
         self,
         raw_pricing: Dict[str, Any],
@@ -1287,6 +1306,8 @@ class GridWindow:
         )
         new_auto: Set[str] = set()
         for uid in sorted(expand_result.inferred_log_shapes.keys()):
+            if str(uid) in self._auto_expand_log_suppress_uids:
+                continue
             w, h, dc, dr = expand_result.inferred_log_shapes[uid]
             if int(w) * int(h) <= 1:
                 continue
@@ -2992,6 +3013,7 @@ class GridWindow:
         self._sanitize_phantom_quality_prefs()
         self._validate_manual_confirmations()
         self._sanitize_auto_vacant_rect_phantom_suppress_uids()
+        self._sanitize_auto_expand_log_suppress_uids()
 
         if perf:
             _dr0 = time.perf_counter()
@@ -3032,6 +3054,15 @@ class GridWindow:
             str(uid)
             for uid in self._auto_vacant_rect_phantom_suppress_uids
             if _grid_overlay.is_auto_vacant_rect_phantom_uid(uid)
+        }
+
+    def _sanitize_auto_expand_log_suppress_uids(self) -> None:
+        """形状已锁定或物品已移除时，丢弃无效的自动扩展抑制项。"""
+        self._auto_expand_log_suppress_uids = {
+            str(uid)
+            for uid in self._auto_expand_log_suppress_uids
+            if uid in self.state.items
+            and self.state.items[uid].shape is None
         }
 
     def _validate_manual_confirmations(self) -> None:
@@ -4729,10 +4760,7 @@ class GridWindow:
             self._refresh()
             return
         if uid is not None and uid in self.state.items:
-            k = self.state.items[uid]
-            if k.shape is None and uid in self._manual_shapes:
-                self._manual_shapes.pop(uid, None)
-                self._auto_expanded_log_uids.discard(str(uid))
+            if self._cancel_log_inferred_contour(uid):
                 self._refresh()
                 return
         if uid is not None:

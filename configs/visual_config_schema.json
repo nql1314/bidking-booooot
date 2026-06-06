@@ -439,8 +439,8 @@
     {
       "path": "timing.after_map_select_wait_seconds",
       "type": "float",
-      "label": "选图后等待（秒）",
-      "description": "选择地图后等待加载/开局界面的秒数。",
+      "label": "开始匹配后等待（秒）",
+      "description": "大厅点地图进入详情后，点击开始匹配再等待加载/开局的秒数。",
       "scope": "config",
       "group": "时序",
       "hide": false

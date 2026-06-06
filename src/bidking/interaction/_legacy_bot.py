@@ -380,36 +380,13 @@ def persist_overlay_patch(overlay_path: Path, patch: dict[str, Any]) -> None:
     )
 
 
-def _automation_run_schedule(auto: dict[str, Any]) -> tuple[int, int, int, float]:
-    """解析「次数×循环」与循环间隔休息（分钟）。
+def _automation_run_schedule(
+    auto: dict[str, Any],
+) -> tuple[list[dict[str, Any]], int, int, int, float]:
+    """解析链式地图计划（见 ``bidking.config.map_chain``）。"""
+    from ..config.map_chain import automation_run_schedule
 
-    - ``selected_runs``：每循环完成的局数（次数）；
-    - ``run_cycles``：循环遍数，默认 1；
-    - ``cycle_rest_minutes``：相邻两循环之间的休息分钟数，默认 1（可为 0 关闭）；
-      实际休眠会在该值 ±10% 内均匀随机。
-
-    总目标局数 = 次数 × 循环。
-    """
-    per = int(auto.get("selected_runs") or auto.get("default_runs", 1))
-    if per < 1:
-        per = 1
-    cycles_raw = auto.get("run_cycles", 1)
-    try:
-        cycles = int(cycles_raw)
-    except (TypeError, ValueError):
-        cycles = 1
-    if cycles < 1:
-        cycles = 1
-    try:
-        rest_min = float(auto.get("cycle_rest_minutes", 1.0))
-    except (TypeError, ValueError):
-        rest_min = 1.0
-    if rest_min < 0.0:
-        rest_min = 0.0
-    total = per * cycles
-    if total < 1:
-        total = 1
-    return per, cycles, total, rest_min
+    return automation_run_schedule(auto)
 
 
 def refresh_poll_loop_locals(config: dict[str, Any]) -> dict[str, Any]:
@@ -418,7 +395,10 @@ def refresh_poll_loop_locals(config: dict[str, Any]) -> dict[str, Any]:
     auto = config.get("automation") or {}
     safety = config.get("safety") or {}
     stuck = safety.get("stuck_after_handled_round") or {}
-    runs_per_cycle, run_cycles, max_runs, cycle_rest_minutes = _automation_run_schedule(auto)
+    map_chain, runs_per_big_cycle, run_cycles, max_runs, cycle_rest_minutes = (
+        _automation_run_schedule(auto)
+    )
+    first_map = str(map_chain[0]["map_id"]) if map_chain else resolve_automation_map_config_key(auto)
     return {
         "poll_seconds": float(timing.get("poll_seconds", 1.0)),
         "transition_debounce": float(timing.get("transition_debounce_seconds", 8.0)),
@@ -427,8 +407,10 @@ def refresh_poll_loop_locals(config: dict[str, Any]) -> dict[str, Any]:
         "post_confirm_escape_block_seconds": float(auto.get("post_confirm_escape_block_seconds", 30.0)),
         "stuck_handled_enabled": bool(stuck.get("enabled", True)),
         "stuck_handled_threshold": max(1, int(stuck.get("consecutive_poll_threshold", 60))),
-        "selected_map": resolve_automation_map_config_key(auto),
-        "runs_per_cycle": runs_per_cycle,
+        "selected_map": first_map,
+        "map_chain": map_chain,
+        "runs_per_big_cycle": runs_per_big_cycle,
+        "runs_per_cycle": runs_per_big_cycle,
         "run_cycles": run_cycles,
         "cycle_rest_minutes": cycle_rest_minutes,
         "max_runs": max_runs,
@@ -1580,10 +1562,13 @@ def run_map_selection_transition(config: dict[str, Any], selected_map: str) -> f
         human_click_at_screen(config, sx, sy, log_detail=f"map_select.{selected_map}")
     timing = config.get("timing", {}) or {}
     sleep_interruptible(float(timing.get("click_pause_seconds", 0.12)))
-    sleep_interruptible(float(timing.get("after_map_select_wait_seconds", 2.0)))
     click_point(config, "post_continue_confirm")
+    sleep_interruptible(float(timing.get("after_map_select_wait_seconds", 2.0)))
     confirm_at = time.monotonic()
-    log("map selection transition complete; waiting for round OCR", gui_verbose_only=True)
+    log(
+        "map start-match confirm clicked; waiting for game load / round OCR",
+        gui_verbose_only=True,
+    )
     return confirm_at
 
 
@@ -2883,6 +2868,8 @@ def handle_round(
     config: dict[str, Any],
     config_path: Path,
     round_no: int,
+    *,
+    tool_rounds: set[int] | None = None,
 ) -> None:
     ensure_not_stopped()
     bs_data = load_board_snapshot_for_loop(config)
@@ -2896,7 +2883,10 @@ def handle_round(
             if isinstance(waited, dict):
                 bs_data = waited
     sleep_interruptible(float(timing_cfg.get("round_detect_wait_seconds", 0.0) or 0.0))
-    tool_rounds = {int(item) for item in config.get("automation", {}).get("tool_rounds", [1, 2])}
+    if tool_rounds is None:
+        from ..config.map_chain import default_tool_rounds
+
+        tool_rounds = set(default_tool_rounds(config.get("automation") or {}))
     rn = int(round_no)
     ran_tool_this_round = rn in tool_rounds
     if rn >= NO_TOOL_FROM_ROUND:
@@ -3021,11 +3011,14 @@ def run_loop(
         config.setdefault("automation", {})["selected_mode"] = str(force_selected_mode)
     apply_pyautogui_from_config(config)
     lv = refresh_poll_loop_locals(config)
+    map_chain: list[dict[str, Any]] = list(lv["map_chain"])
     selected_map = lv["selected_map"]
     max_runs = lv["max_runs"]
-    runs_per_cycle = lv["runs_per_cycle"]
+    runs_per_big_cycle = lv["runs_per_big_cycle"]
     run_cycles = lv["run_cycles"]
     cycle_rest_minutes = lv["cycle_rest_minutes"]
+    chain_step_index = 0
+    runs_on_chain_step = 0
     prepare_target_window(config, center=True)
 
     log("BidKing bot 已启动（交互层；出价由 pricing.compute_price 读快照计算）；按 F9 停止")
@@ -3037,9 +3030,18 @@ def run_loop(
             "第4回合将打印 effective=pricing.vacant+auto_phantom_cells"
         )
     log("mode: full-window OCR -> lobby/end/round handling", gui_verbose_only=True)
+    from ..config.map_chain import format_map_chain_plan
+
+    auto_maps = (config.get("automation") or {}).get("maps") or {}
     log(
-        f"运行计划：每循环 {runs_per_cycle} 局 × {run_cycles} 循环 → 合计 {max_runs} 局；"
-        f"循环间休息 {cycle_rest_minutes:g} 分钟（0 表示不休息；否则实际时长在该值 ±10% 内随机）",
+        format_map_chain_plan(
+            map_chain,
+            auto_maps if isinstance(auto_maps, dict) else {},
+            runs_per_big_cycle=runs_per_big_cycle,
+            run_cycles=run_cycles,
+            max_runs=max_runs,
+            cycle_rest_minutes=cycle_rest_minutes,
+        ),
     )
 
     handled_rounds: set[int] = set()
@@ -3074,19 +3076,63 @@ def run_loop(
         if progress_sink is not None:
             progress_sink(completed_runs, max_runs)
 
-    def _maybe_cycle_rest() -> None:
+    def _map_display_name(map_key: str) -> str:
+        maps_cfg = (config.get("automation") or {}).get("maps") or {}
+        if isinstance(maps_cfg, dict):
+            item = maps_cfg.get(str(map_key), {})
+            if isinstance(item, dict):
+                return str(item.get("name") or map_key)
+        return str(map_key)
+
+    def _advance_map_chain_after_run() -> bool:
+        """本局结束后推进链式下标；若走完一整条链返回 True（可触发大循环休息）。"""
+        nonlocal chain_step_index, runs_on_chain_step, selected_map, map_chain
+        if not map_chain:
+            return False
+        runs_on_chain_step += 1
+        step = map_chain[chain_step_index]
+        if runs_on_chain_step < int(step["runs"]):
+            return False
+        runs_on_chain_step = 0
+        finished_big_cycle = False
+        next_index = chain_step_index + 1
+        if next_index >= len(map_chain):
+            chain_step_index = 0
+            finished_big_cycle = True
+        else:
+            chain_step_index = next_index
+        prev_map = selected_map
+        selected_map = str(map_chain[chain_step_index]["map_id"])
+        if prev_map != selected_map:
+            log(
+                f"链式切图：{prev_map}.{_map_display_name(prev_map)} "
+                f"→ {selected_map}.{_map_display_name(selected_map)}"
+            )
+        return finished_big_cycle
+
+    def _maybe_cycle_rest(*, finished_big_cycle: bool) -> None:
         if (
-            runs_per_cycle > 0
-            and completed_runs % runs_per_cycle == 0
+            finished_big_cycle
             and completed_runs < max_runs
             and cycle_rest_minutes > 0.0
         ):
             rest_sec = float(cycle_rest_minutes) * 60.0 * random.uniform(0.9, 1.1)
             log(
-                f"本循环已完成 {runs_per_cycle} 局（累计 {completed_runs}/{max_runs}），"
-                f"休息约 {rest_sec / 60.0:.2f} 分钟（配置 {cycle_rest_minutes:g} 分钟 ±10%）…"
+                f"已完成一整条地图链（{runs_per_big_cycle} 局，累计 {completed_runs}/{max_runs}），"
+                f"大循环休息约 {rest_sec / 60.0:.2f} 分钟（配置 {cycle_rest_minutes:g} 分钟 ±10%）…"
             )
             sleep_interruptible(rest_sec)
+
+    def _on_single_run_completed() -> bool:
+        """登记完成一局并处理链式/休息；返回 True 表示已达目标局数应退出。"""
+        nonlocal completed_runs, preflight_esc_before_next_map_select
+        completed_runs += 1
+        preflight_esc_before_next_map_select = True
+        log(f"completed runs: {completed_runs}/{max_runs}")
+        _notify_run_progress()
+        finished_big = _advance_map_chain_after_run()
+        _maybe_cycle_rest(finished_big_cycle=finished_big)
+        return completed_runs >= max_runs
 
     _notify_run_progress()
     while True:
@@ -3107,9 +3153,16 @@ def run_loop(
             post_confirm_escape_block_seconds = lv["post_confirm_escape_block_seconds"]
             stuck_handled_enabled = lv["stuck_handled_enabled"]
             stuck_handled_threshold = lv["stuck_handled_threshold"]
-            selected_map = lv["selected_map"]
+            new_chain = list(lv["map_chain"])
+            if new_chain:
+                map_chain[:] = new_chain
+                if chain_step_index >= len(map_chain):
+                    chain_step_index = 0
+                    runs_on_chain_step = 0
+                selected_map = str(map_chain[chain_step_index]["map_id"])
             max_runs = lv["max_runs"]
-            runs_per_cycle = lv["runs_per_cycle"]
+            runs_per_big_cycle = lv["runs_per_big_cycle"]
+            run_cycles = lv["run_cycles"]
             cycle_rest_minutes = lv["cycle_rest_minutes"]
             _notify_run_progress()
             game_start_timeout_seconds = lv["game_start_timeout_seconds"]
@@ -3226,12 +3279,7 @@ def run_loop(
                 )
                 if confirm_at:
                     last_post_continue_confirm_at = confirm_at
-                completed_runs += 1
-                preflight_esc_before_next_map_select = True
-                log(f"completed runs: {completed_runs}/{max_runs}")
-                _notify_run_progress()
-                _maybe_cycle_rest()
-                if completed_runs >= max_runs:
+                if _on_single_run_completed():
                     _on_target_runs_reached(config)
                     return
                 sleep_interruptible(poll_seconds)
@@ -3383,7 +3431,18 @@ def run_loop(
                 continue
 
             log(f"loop {loop_index}: round {round_no} -> handle_round", gui_verbose_only=True)
-            handle_round(config, config_path, round_no)
+            from ..config.map_chain import tool_rounds_set_for_chain_step
+
+            auto_cfg = config.get("automation") or {}
+            if map_chain and 0 <= chain_step_index < len(map_chain):
+                round_tools = tool_rounds_set_for_chain_step(
+                    map_chain[chain_step_index], auto_cfg
+                )
+            else:
+                from ..config.map_chain import default_tool_rounds
+
+                round_tools = set(default_tool_rounds(auto_cfg))
+            handle_round(config, config_path, round_no, tool_rounds=round_tools)
             handled_rounds.add(round_no)
 
             if round_no >= 5:
@@ -3411,12 +3470,7 @@ def run_loop(
             )
             if confirm_at:
                 last_post_continue_confirm_at = confirm_at
-            completed_runs += 1
-            preflight_esc_before_next_map_select = True
-            log(f"completed runs: {completed_runs}/{max_runs}")
-            _notify_run_progress()
-            _maybe_cycle_rest()
-            if completed_runs >= max_runs:
+            if _on_single_run_completed():
                 _on_target_runs_reached(config)
                 return
             sleep_interruptible(poll_seconds)
