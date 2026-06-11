@@ -101,14 +101,12 @@
       "y": 1014
     },
     "end_reward_click": {
-      "origin": "left_bottom",
-      "x": 980,
-      "y": 540
+      "x": 1151,
+      "y": 1003
     },
     "end_close_click": {
-      "origin": "left_bottom",
-      "x": 1355,
-      "y": 96
+      "x": 1152,
+      "y": 1003
     },
     "continue_button": {
       "origin": "left_bottom",

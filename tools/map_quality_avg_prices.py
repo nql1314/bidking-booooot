@@ -11,6 +11,7 @@
 用法（在仓库根目录）:
   python tools/map_quality_avg_prices.py
   python tools\\map_quality_avg_prices.py --csv data\\map_quality_avg_out.csv
+  python tools\\map_quality_avg_prices.py --no-write
 """
 
 from __future__ import annotations
@@ -61,7 +62,16 @@ def map_item_probs(map_id: int) -> dict[int, float]:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--csv", help="写入结果 CSV 路径")
+    ap.add_argument(
+        "--csv",
+        default=str(DATA_DIR / "map_quality_avg_out.csv"),
+        help="写入结果 CSV 路径（默认 data/map_quality_avg_out.csv）",
+    )
+    ap.add_argument(
+        "--no-write",
+        action="store_true",
+        help="不写文件，仅打印样例行",
+    )
     args = ap.parse_args()
 
     index_path = str(DATA_DIR / "item_prices.csv")
@@ -131,7 +141,10 @@ def main() -> int:
         "avg_price_per_item",
         "avg_price_per_cell",
     ]
-    if args.csv:
+    if args.no_write:
+        print(json.dumps(rows[:12], ensure_ascii=False, indent=2))
+        print("...", "total rows", len(rows))
+    else:
         outp = Path(args.csv)
         outp.parent.mkdir(parents=True, exist_ok=True)
         with outp.open("w", encoding="utf-8-sig", newline="") as f:
@@ -140,9 +153,6 @@ def main() -> int:
             for r in rows:
                 w.writerow({k: r.get(k, "") for k in keys})
         print("wrote", outp)
-    else:
-        print(json.dumps(rows[:12], ensure_ascii=False, indent=2))
-        print("...", "total rows", len(rows))
     return 0
 
 

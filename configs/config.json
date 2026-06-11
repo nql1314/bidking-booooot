@@ -33,28 +33,23 @@
     "path": "data/board_snapshot.json",
     "write_mode": "both",
     "schema_version_min": 1,
-    "self_user_uid": "358372071974712"
+    "self_user_uid": "941456831344888"
   },
   "automation": {
-    "bot_runner": "fresh_aisha_bot",
-    "selected_mode": "aisha_premium",
+    "bot_runner": "fresh_bidking_bot",
+    "selected_mode": "ahmad_premium",
     "tool_rounds": [],
     "default_map": "1",
     "default_runs": 1,
     "map_chain": [
       {
         "map_id": "210",
-        "runs": 1,
-        "tool_rounds": []
-      },
-      {
-        "map_id": "230",
-        "runs": 5,
+        "runs": 10,
         "tool_rounds": []
       }
     ],
     "selected_map": "210",
-    "selected_runs": 1,
+    "selected_runs": 10,
     "warehouse_auto_sort": {
       "enabled": true
     },
@@ -68,7 +63,7 @@
       "default": 1.0
     },
     "bid_cap_skip_when_total_above": 0,
-    "game_start_timeout_seconds": 120,
+    "game_start_timeout_seconds": 120.0,
     "scheduled_start_enabled": false,
     "scheduled_start_hour": 8,
     "scheduled_start_minute": 0,
@@ -77,8 +72,8 @@
   },
   "timing": {
     "poll_seconds": 1,
-    "round_detect_wait_seconds": 8.0,
-    "round1_extra_wait_seconds": 2.0,
+    "round_detect_wait_seconds": 10.0,
+    "round1_extra_wait_seconds": 4.0,
     "tool_after_snapshot_poll_seconds": 8.0,
     "tool_after_wait_seconds": 5.0,
     "click_pause_seconds": 0.12,
@@ -91,7 +86,7 @@
     "reward_continue_debounce_seconds": 1.0
   },
   "advisor": {
-    "role": "aisha"
+    "role": "ahmad"
   },
   "viewer": {
     "game_report_max_matches": 500

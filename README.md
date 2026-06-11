@@ -120,3 +120,6 @@ cd D:/workzone/bidking-booooot
 ## 不在范围
 
 - 拉文（Raven）相关分支 —— `pricing/strategy.py` 仅保留接口位
+
+
+python d:\workzone\bidking-bot\bidking_maa_test\window_backend.py capture --full-client --config d:\workzone\bidking-bot\bidking_maa_test\automation_config.json --output d:\workzone\bidking-bot\full.png

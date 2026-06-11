@@ -171,7 +171,7 @@ def load_csv(path: str) -> Tuple[Dict[int, CsvItem], List[CsvItem]]:
 
     index: Dict[int, CsvItem] = {}
     items: List[CsvItem] = []
-    with open(path, newline='', encoding='utf-8') as f:
+    with open(path, newline='', encoding='utf-8-sig') as f:
         reader = csv.DictReader(f)
         for row in reader:
             try:
