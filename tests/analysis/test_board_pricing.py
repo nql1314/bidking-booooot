@@ -2143,7 +2143,16 @@ class BoardPricingTests(unittest.TestCase):
         )
         self.assertGreater(c_wide, c_narrow)
         self.assertAlmostEqual(float(v), float(e_narrow), delta=1.0)
-        self.assertLess(float(v), float(e_wide) * 0.6)
+        self.assertEqual(
+            item_db.weighted_est_max_item_base_value(None, quality=6),
+            item_db.WEIGHTED_EST_MAX_1X1_ITEM_BASE_VALUE,
+        )
+        self.assertEqual(
+            item_db.weighted_est_max_item_base_value(None, quality=5),
+            item_db.WEIGHTED_EST_MAX_ITEM_BASE_VALUE,
+        )
+        # 宽池与 1×1 窄池共用 10 万 cap，期望价应接近（差仅来自候选集合大小）
+        self.assertAlmostEqual(float(e_wide), float(e_narrow), delta=float(e_narrow) * 0.2)
 
     def test_unknown_contour_q6_reduces_tier_extra_by_weighted_footprint(self) -> None:
         """无 shape 的红档占位：``confirmed_q6`` 按权重等效格计，再扣减 ``q6_grid_min`` tier_extra。"""

@@ -561,6 +561,70 @@ def _prune_board_snapshot_run_archives(
             pass
 
 
+_LIVE_TAIL_EVENT_TYPES = frozenset(
+    {
+        "S2C_37_game_next_round_notify",
+        "S2C_39_game_use_item",
+        "S2C_265_game_use_emoji_notify",
+        "C2S_34_game_bid",
+    }
+)
+
+
+def event_game_uid_from_network_data(data: dict) -> str:
+    """从 ``OnHanderNotify`` / ``Send`` 的 JSON 根或 ``GameData`` 取对局 Uid。"""
+    if not isinstance(data, dict):
+        return ""
+    for key in ("GameUid", "Uid"):
+        v = str(data.get(key) or "").strip()
+        if v:
+            return v
+    gd = data.get("GameData")
+    if isinstance(gd, dict):
+        for key in ("Uid", "GameUid"):
+            v = str(gd.get(key) or "").strip()
+            if v:
+                return v
+    return ""
+
+
+def should_recover_missed_new_game(
+    *,
+    live_active: bool,
+    state_uid: str,
+    event_uid: str,
+) -> bool:
+    """漏收 ``S2C_33`` 或局结束后：是否应凭事件 Uid 重置为新对局。"""
+    ev = str(event_uid or "").strip()
+    cur = str(state_uid or "").strip()
+    if not ev:
+        return False
+    if live_active:
+        return bool(cur) and ev != cur
+    return ev != cur
+
+
+def _maybe_reopen_truncated_log(f, path: str):
+    """``Player.log`` 被截断或替换后重新打开；返回 ``(file, reopened)``。"""
+    try:
+        st = os.stat(path)
+        pos = f.tell()
+    except OSError:
+        return f, False
+    if st.st_size >= pos:
+        return f, False
+    try:
+        f.close()
+    except OSError:
+        pass
+    nf = open(path, "r", encoding="utf-8", errors="replace")
+    if st.st_size > 65536:
+        nf.seek(st.st_size - 65536)
+    else:
+        nf.seek(0)
+    return nf, True
+
+
 # 地图质量 CSV、快照定价与 bid 元数据见 ``board_pricing`` 模块。
 
 HIGH_VALUE_THRESHOLD = 100_000
@@ -2832,19 +2896,74 @@ class GridWindow:
         t = threading.Thread(target=self._monitor_thread, daemon=True, name="log-tail")
         t.start()
 
+    def _recover_missed_new_game_if_needed(self, event_type: str, data: dict) -> bool:
+        """漏收 ``S2C_33`` 时凭事件 Uid 重置状态；返回是否已切到新对局。"""
+        if event_type in ("S2C_33_game_start_notify", "S2C_45_game_over_notify"):
+            return False
+        ev_uid = event_game_uid_from_network_data(data)
+        if not should_recover_missed_new_game(
+            live_active=bool(self._live_game_active),
+            state_uid=str(self.state.uid or ""),
+            event_uid=ev_uid,
+        ):
+            return False
+        self.state = GameState()
+        self._skill_logs.clear()
+        self._last_raw_pricing = None
+        self._live_game_active = True
+        self.state.uid = ev_uid
+        gd = data.get("GameData")
+        if isinstance(gd, dict):
+            if gd.get("MapId") is not None:
+                try:
+                    self.state.map_id = int(gd.get("MapId") or 0)
+                except (TypeError, ValueError):
+                    pass
+            ul = gd.get("UserLog")
+            if isinstance(ul, list) and ul:
+                self.state.update_players(ul)
+        return True
+
+    def _handle_live_tail_event(
+        self,
+        event_type: str,
+        data: dict,
+        *,
+        silent: io.StringIO,
+    ) -> None:
+        if event_type == "S2C_37_game_next_round_notify":
+            handle_s2c37(data, self.state, self.csv_index, self.csv_items, silent)
+        elif event_type == "S2C_39_game_use_item":
+            handle_s2c39(data, self.state, self.csv_index, self.csv_items, silent)
+        elif event_type == "S2C_265_game_use_emoji_notify":
+            handle_s2c265(data, self.state, self.csv_index, self.csv_items, silent)
+        elif event_type == "C2S_34_game_bid":
+            handle_c2s34(data, self.state, self.csv_index, self.csv_items, silent)
+
     def _monitor_thread(self) -> None:
         """
         后台线程：从文件 EOF 开始监听新增行，解析事件并更新 self.state。
         状态修改均在 self._lock 保护下进行；事件信号写入 self._queue。
         """
         silent = io.StringIO()
-        with open(self._log_path, "r", encoding="utf-8", errors="replace") as f:
-            f.seek(0, 2)  # 直接跳到文件末尾，只处理新增内容
+        path = str(self._log_path or "")
+        if not path:
+            return
+        f = open(path, "r", encoding="utf-8", errors="replace")
+        f.seek(0, 2)  # 直接跳到文件末尾，只处理新增内容
+        try:
             while True:
                 if self._monitor_stop.is_set():
                     return
                 line = f.readline()
                 if not line:
+                    f, reopened = _maybe_reopen_truncated_log(f, path)
+                    if reopened:
+                        print(
+                            "[grid_view] Player.log truncated/replaced; tail reopened",
+                            file=sys.stderr,
+                            flush=True,
+                        )
                     time.sleep(0.3)
                     continue
                 result = extract_event(line)
@@ -2865,45 +2984,6 @@ class GridWindow:
                         self._queue.put("new_game")
 
                     elif (
-                        event_type == "S2C_37_game_next_round_notify"
-                        and self._live_game_active
-                    ):
-                        handle_s2c37(
-                            data, self.state, self.csv_index, self.csv_items, silent
-                        )
-                        self._append_skill_log_entry(event_type, data)
-                        self._queue.put("update")
-
-                    elif (
-                        event_type == "S2C_39_game_use_item" and self._live_game_active
-                    ):
-                        handle_s2c39(
-                            data, self.state, self.csv_index, self.csv_items, silent
-                        )
-                        self._append_skill_log_entry(event_type, data)
-                        self._queue.put("update")
-
-                    elif (
-                        event_type == "S2C_265_game_use_emoji_notify"
-                        and self._live_game_active
-                    ):
-                        handle_s2c265(
-                            data, self.state, self.csv_index, self.csv_items, silent
-                        )
-                        self._append_skill_log_entry(event_type, data)
-                        self._queue.put("update")
-
-                    elif (
-                        event_type == "C2S_34_game_bid"
-                        and self._live_game_active
-                    ):
-                        handle_c2s34(
-                            data, self.state, self.csv_index, self.csv_items, silent
-                        )
-                        self._append_skill_log_entry(event_type, data)
-                        self._queue.put("update")
-
-                    elif (
                         event_type == "S2C_45_game_over_notify"
                         and self._live_game_active
                     ):
@@ -2918,6 +2998,23 @@ class GridWindow:
                         self._append_skill_log_entry(event_type, data)
                         self._live_game_active = False
                         self._queue.put("update")
+
+                    elif event_type in _LIVE_TAIL_EVENT_TYPES:
+                        recovered = self._recover_missed_new_game_if_needed(
+                            event_type, data
+                        )
+                        if not self._live_game_active:
+                            continue
+                        self._handle_live_tail_event(
+                            event_type, data, silent=silent
+                        )
+                        self._append_skill_log_entry(event_type, data)
+                        self._queue.put("new_game" if recovered else "update")
+        finally:
+            try:
+                f.close()
+            except OSError:
+                pass
 
     def _poll_updates(self) -> None:
         """
@@ -2938,15 +3035,22 @@ class GridWindow:
             pass
 
         if needs_redraw:
-            with self._lock:
-                self._recalc_vis_rows()
-                if is_new_game:
-                    sp = self._snapshot_path
-                    if sp:
-                        _archive_board_snapshot_then_unlink(sp)
-                    self._reset_for_new_game()
-                else:
-                    self._refresh(write_snapshot=True)
+            try:
+                with self._lock:
+                    self._recalc_vis_rows()
+                    if is_new_game:
+                        sp = self._snapshot_path
+                        if sp:
+                            _archive_board_snapshot_then_unlink(sp)
+                        self._reset_for_new_game()
+                    else:
+                        self._refresh(write_snapshot=True)
+            except Exception as exc:
+                print(
+                    f"[grid_view] poll refresh failed: {type(exc).__name__}: {exc}",
+                    file=sys.stderr,
+                    flush=True,
+                )
 
         # 继续调度下一次轮询
         if not self._monitor_stop.is_set():
@@ -3606,6 +3710,12 @@ class GridWindow:
 
     def _finish_grid_shutdown(self) -> None:
         self._monitor_stop.set()
+        sp = self._snapshot_path
+        if sp:
+            try:
+                Path(sp).unlink(missing_ok=True)
+            except OSError:
+                pass
         home = self._home_shell
         self._home_shell = None
         try:

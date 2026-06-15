@@ -397,9 +397,19 @@ def _candidate_weight(
     )
 
 
-def weighted_est_max_item_base_value(shape: Optional[int]) -> float:
-    """多候选权重期望价用的单价上限；1×1 使用更低阈值以削弱天价品影响。"""
+def weighted_est_max_item_base_value(
+    shape: Optional[int],
+    *,
+    quality: Optional[int] = None,
+) -> float:
+    """多候选权重期望价用的单价上限。
+
+    - 已确认 1×1（``shape==11``）与轮廓未知红（``shape is None`` 且 ``quality==6``）
+      使用 :data:`WEIGHTED_EST_MAX_1X1_ITEM_BASE_VALUE`（10 万），削弱天价品对期望价的影响。
+    """
     if shape == 11:
+        return WEIGHTED_EST_MAX_1X1_ITEM_BASE_VALUE
+    if shape is None and quality == 6:
         return WEIGHTED_EST_MAX_1X1_ITEM_BASE_VALUE
     return WEIGHTED_EST_MAX_ITEM_BASE_VALUE
 
@@ -692,8 +702,9 @@ def query_item(
         8. 若类别正向过滤后为空，保留 shape+quality 结果（容错）
 
     估算规则（多候选时）：按 drop_table_weights.csv 中的掉落权重计算期望价；
-    单价高于形状相关上限的候选不参与该期望（1×1 为 :data:`WEIGHTED_EST_MAX_1X1_ITEM_BASE_VALUE`
-    即 10 万，其余为 :data:`WEIGHTED_EST_MAX_ITEM_BASE_VALUE` 即 500 万），不改变候选列表；
+    单价高于形状相关上限的候选不参与该期望（1×1 与轮廓未知红为
+    :data:`WEIGHTED_EST_MAX_1X1_ITEM_BASE_VALUE` 即 10 万，其余为
+    :data:`WEIGHTED_EST_MAX_ITEM_BASE_VALUE` 即 500 万），不改变候选列表；
     ItemCid 已指定或仅剩单候选时为精确价，不适用此截断。
     """
     if item_cid and item_cid in csv_index:
@@ -724,7 +735,7 @@ def query_item(
         candidates,
         map_category_weights,
         map_id,
-        max_item_base_value=weighted_est_max_item_base_value(shape),
+        max_item_base_value=weighted_est_max_item_base_value(shape, quality=quality),
     )
     label = "权重价" if est is not None else ""
 
