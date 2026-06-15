@@ -31,8 +31,11 @@ ROOT = Path(__file__).resolve().parent
 from ..pricing.compute import compute_price as pricing_compute_price  # noqa: E402
 from ..pricing.snapshot_io import resolve_effective_round  # noqa: E402
 from .board_snapshot_util import (  # noqa: E402
+    BoardSnapshotGameMismatch,
+    board_snapshot_file_path,
     clear_board_snapshot_file,
     current_round_from_snapshot,
+    ensure_board_snapshot_matches_current_game,
     game_uid_from_snapshot,
     load_board_snapshot_for_loop,
 )
@@ -1374,6 +1377,16 @@ def _snapshot_has_game_over_notify(snapshot: dict[str, Any] | None) -> bool:
     return False
 
 
+def _board_snapshot_file_mtime(config: dict[str, Any]) -> float | None:
+    path = board_snapshot_file_path(config)
+    if path is None or not path.is_file():
+        return None
+    try:
+        return float(path.stat().st_mtime)
+    except OSError:
+        return None
+
+
 def _wait_bid_confirm_snapshot(
     config: dict[str, Any],
     *,
@@ -1382,7 +1395,8 @@ def _wait_bid_confirm_snapshot(
     wait_seconds: float,
     poll_seconds: float,
     global_deadline: float,
-) -> Literal["confirmed", "next_round", "game_over", "pending"]:
+    snapshot_mtime_at_start: float | None = None,
+) -> Literal["confirmed", "next_round", "game_over", "pending", "stale"]:
     """在 ``wait_seconds`` 内轮询快照，直至 C2S_34、回合推进或 game over。"""
     wait_until = time.monotonic() + max(0.0, wait_seconds)
     poll = max(0.08, float(poll_seconds))
@@ -1397,6 +1411,13 @@ def _wait_bid_confirm_snapshot(
             if _snapshot_round_advanced_past(fresh, round_no):
                 return "next_round"
         if time.monotonic() >= wait_until:
+            cur_mtime = _board_snapshot_file_mtime(config)
+            if (
+                snapshot_mtime_at_start is not None
+                and cur_mtime is not None
+                and cur_mtime <= snapshot_mtime_at_start
+            ):
+                return "stale"
             return "pending"
         remain = min(poll, wait_until - time.monotonic(), global_deadline - time.monotonic())
         if remain <= 0:
@@ -1415,12 +1436,22 @@ def input_bid(
     price: int,
     *,
     round_no: int | None = None,
+    expected_game_uid: str | None = None,
+    ocr_round: int | None = None,
 ) -> BidConfirmOutcome:
     timing = config.get("timing", {}) or {}
     post_wait = float(timing.get("after_bid_confirm_wait_seconds", 1.0))
     use_snapshot = _bid_confirm_snapshot_verify_enabled(config)
 
     if not use_snapshot:
+        if round_no is not None:
+            ensure_board_snapshot_matches_current_game(
+                config,
+                expected_game_uid=expected_game_uid,
+                round_no=int(round_no),
+                ocr_round=ocr_round,
+                context=f"input_bid round {round_no}",
+            )
         _perform_bid_ui_sequence(config, price)
         sleep_interruptible(post_wait)
         return "unverified"
@@ -1440,10 +1471,18 @@ def input_bid(
     attempt = 0
     prior_keys = _c2s34_bid_match_keys(load_board_snapshot_for_loop(config))
     effective_round = int(round_no)
+    snapshot_mtime_at_start = _board_snapshot_file_mtime(config)
 
     while True:
         ensure_not_stopped()
         attempt += 1
+        ensure_board_snapshot_matches_current_game(
+            config,
+            expected_game_uid=expected_game_uid,
+            round_no=effective_round,
+            ocr_round=ocr_round,
+            context=f"input_bid round {effective_round} attempt {attempt}",
+        )
         _perform_bid_ui_sequence(config, price)
 
         snap_outcome = _wait_bid_confirm_snapshot(
@@ -1453,7 +1492,15 @@ def input_bid(
             wait_seconds=retry_pause,
             poll_seconds=snapshot_poll,
             global_deadline=deadline,
+            snapshot_mtime_at_start=snapshot_mtime_at_start,
         )
+        if snap_outcome == "stale":
+            raise BoardSnapshotGameMismatch(
+                f"input_bid round {effective_round}: 出价确认期间快照未更新，"
+                "画板可能已关闭或卡死",
+                round_no=effective_round,
+                attempt=attempt,
+            )
         if snap_outcome == "confirmed":
             log(
                 f"bid_confirm: snapshot C2S_34_game_bid confirmed "
@@ -1479,13 +1526,12 @@ def input_bid(
             return "game_over"
 
         if time.monotonic() >= deadline:
-            log(
-                f"bid_confirm: snapshot verify timeout after {attempt} attempt(s); "
-                "never saw C2S_34_game_bid",
-                gui_verbose_only=True,
+            raise BoardSnapshotGameMismatch(
+                f"input_bid round {effective_round}: 出价确认超时（{attempt} 次尝试），"
+                "快照中未见 C2S_34_game_bid，画板可能已关闭或卡死",
+                round_no=effective_round,
+                attempt=attempt,
             )
-            sleep_interruptible(post_wait)
-            return "verify_timeout"
 
         log(
             f"bid_confirm: no C2S_34 in snapshot yet, retry UI after {retry_pause}s",
@@ -2870,7 +2916,9 @@ def handle_round(
     round_no: int,
     *,
     tool_rounds: set[int] | None = None,
-) -> None:
+    expected_game_uid: str | None = None,
+    ocr_round: int | None = None,
+) -> str | None:
     ensure_not_stopped()
     bs_data = load_board_snapshot_for_loop(config)
     timing_cfg = config.get("timing", {}) or {}
@@ -2922,6 +2970,14 @@ def handle_round(
     if isinstance(fresh_bs, dict):
         bs_data = fresh_bs
 
+    bs_data, bound_game_uid = ensure_board_snapshot_matches_current_game(
+        config,
+        expected_game_uid=expected_game_uid,
+        round_no=int(round_no),
+        ocr_round=ocr_round,
+        context=f"handle_round round {round_no}",
+    )
+
     price, details = compute_price(
         config,
         config_path=config_path,
@@ -2940,7 +2996,13 @@ def handle_round(
         details=details,
         final_price=price,
     )
-    bid_outcome = input_bid(config, price, round_no=int(round_no))
+    bid_outcome = input_bid(
+        config,
+        price,
+        round_no=int(round_no),
+        expected_game_uid=bound_game_uid,
+        ocr_round=ocr_round,
+    )
     if bid_outcome in ("bid_ok", "unverified"):
         try:
             from ..pricing.self_bid_cache import (
@@ -2972,6 +3034,7 @@ def handle_round(
         )
     bs_after_bid = load_board_snapshot_for_loop(config)
     _express_after_snapshot_hooks(config, bs_after_bid)
+    return bound_game_uid
 
 
 def handle_end_transition(
@@ -3045,7 +3108,7 @@ def run_loop(
     )
 
     handled_rounds: set[int] = set()
-    cached_game_uid: str | None = None
+    active_game_uid: str | None = None
     preflight_esc_before_next_map_select = True
     await_non_lobby_after_preflight_esc = False
     await_non_lobby_stuck_polls = 0
@@ -3218,14 +3281,15 @@ def run_loop(
             game_uid = game_uid_from_snapshot(bs_data)
             if (
                 game_uid is not None
-                and cached_game_uid is not None
-                and game_uid != cached_game_uid
+                and active_game_uid is not None
+                and game_uid != active_game_uid
             ):
                 log(
-                    f"loop {loop_index}: 新局 game_uid {cached_game_uid!r} -> {game_uid!r}；"
+                    f"loop {loop_index}: 新局 game_uid {active_game_uid!r} -> {game_uid!r}；"
                     "重置回合状态并清空 self_bid_cache"
                 )
                 handled_rounds.clear()
+                active_game_uid = game_uid
                 _express_round1_signal_bid_by_game.clear()
                 try:
                     from ..pricing.self_bid_cache import clear_self_bid_disk_cache
@@ -3233,8 +3297,6 @@ def run_loop(
                     clear_self_bid_disk_cache(reason="bot_loop_new_game_uid")
                 except Exception:
                     pass
-            if game_uid is not None:
-                cached_game_uid = game_uid
 
             if isinstance(bs_data, dict):
                 _express_after_snapshot_hooks(config, bs_data)
@@ -3277,6 +3339,7 @@ def run_loop(
                     transition_debounce,
                     f"loop {loop_index}",
                 )
+                active_game_uid = None
                 if confirm_at:
                     last_post_continue_confirm_at = confirm_at
                 if _on_single_run_completed():
@@ -3303,6 +3366,7 @@ def run_loop(
                     run_failed_auction_settlement_transition(config)
                     preflight_esc_before_next_map_select = True
                     handled_rounds.clear()
+                    active_game_uid = None
                     last_failed_auction_at = time.monotonic()
                 else:
                     log(f"loop {loop_index}: failed auction settlement ignored by debounce", gui_verbose_only=True)
@@ -3348,6 +3412,7 @@ def run_loop(
                                 time.monotonic() + game_start_timeout_seconds
                             )
                         handled_rounds.clear()
+                        active_game_uid = None
                         last_lobby_at = time.monotonic()
                 else:
                     log(f"loop {loop_index}: auction lobby ignored by debounce", gui_verbose_only=True)
@@ -3408,6 +3473,7 @@ def run_loop(
             if round_no == 1 and any(value > 1 for value in handled_rounds):
                 log("new auction inferred from round 1; reset handled rounds")
                 handled_rounds.clear()
+                active_game_uid = None
             if round_no not in handled_rounds:
                 stuck_already_handled_polls = 0
 
@@ -3424,6 +3490,7 @@ def run_loop(
                     run_stuck_after_handled_recovery(config)
                     stuck_already_handled_polls = 0
                     handled_rounds.clear()
+                    active_game_uid = None
                     sleep_interruptible(poll_seconds)
                     continue
                 log(f"loop {loop_index}: round {round_no} already handled; waiting", gui_verbose_only=True)
@@ -3442,7 +3509,16 @@ def run_loop(
                 from ..config.map_chain import default_tool_rounds
 
                 round_tools = set(default_tool_rounds(auto_cfg))
-            handle_round(config, config_path, round_no, tool_rounds=round_tools)
+            bound_uid = handle_round(
+                config,
+                config_path,
+                round_no,
+                tool_rounds=round_tools,
+                expected_game_uid=active_game_uid,
+                ocr_round=poll_round,
+            )
+            if bound_uid:
+                active_game_uid = bound_uid
             handled_rounds.add(round_no)
 
             if round_no >= 5:
@@ -3458,6 +3534,10 @@ def run_loop(
         except StopRequested:
             log("stopped by GUI")
             return
+        except BoardSnapshotGameMismatch as exc:
+            log(f"画板快照与当前对局不一致，停止 bot: {exc}")
+            request_stop()
+            return
         except EndPromptDetected as exc:
             pending_game_start_deadline = None
             map_select_no_start_streak = 0
@@ -3468,6 +3548,7 @@ def run_loop(
                 transition_debounce,
                 f"active handling ({exc.source})",
             )
+            active_game_uid = None
             if confirm_at:
                 last_post_continue_confirm_at = confirm_at
             if _on_single_run_completed():

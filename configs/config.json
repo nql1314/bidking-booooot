@@ -36,19 +36,27 @@
     "self_user_uid": "941456831344888"
   },
   "automation": {
-    "bot_runner": "fresh_bidking_bot",
-    "selected_mode": "ahmad_premium",
-    "tool_rounds": [],
+    "bot_runner": "fresh_aisha_bot",
+    "selected_mode": "aisha_premium",
+    "tool_rounds": [
+      1,
+      2,
+      3
+    ],
     "default_map": "1",
     "default_runs": 1,
     "map_chain": [
       {
-        "map_id": "210",
+        "map_id": "440",
         "runs": 10,
-        "tool_rounds": []
+        "tool_rounds": [
+          1,
+          2,
+          3
+        ]
       }
     ],
-    "selected_map": "210",
+    "selected_map": "440",
     "selected_runs": 10,
     "warehouse_auto_sort": {
       "enabled": true
@@ -86,7 +94,7 @@
     "reward_continue_debounce_seconds": 1.0
   },
   "advisor": {
-    "role": "ahmad"
+    "role": "aisha"
   },
   "viewer": {
     "game_report_max_matches": 500

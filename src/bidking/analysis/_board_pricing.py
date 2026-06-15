@@ -272,7 +272,7 @@ def _item_value(
                 cand,
                 map_category_weights or None,
                 map_id_normalized,
-                max_item_base_value=weighted_est_max_item_base_value(sh),
+                max_item_base_value=weighted_est_max_item_base_value(sh, quality=q),
                 quantile=price_quantile,
             )
     result = float(w_est) if w_est is not None else float(best.base_value)
