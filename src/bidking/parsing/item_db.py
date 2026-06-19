@@ -66,10 +66,8 @@ MAP_TO_TIER_NEST: Dict[int, Tuple[int, int]] = {
     2525: (105, 2045), 2526: (105, 2046), 2527: (105, 2047), 2528: (105, 2048),
     2529: (105, 2049), 2530: (105, 2050),
 }
-# 25xx/45xx 沉船活动位（末两位 21–30）无可用 DROP 根时，回退到 −20 对应基础子图（2501–2510 / 4501–4510）
-_SHIP_WEIGHT_FALLBACK_SLOT_MIN = 21
-_SHIP_WEIGHT_FALLBACK_SLOT_MAX = 30
-_SHIP_WEIGHT_FALLBACK_DELTA = 20
+# 25xx/45xx 非基础子图（末两位 11+）无可用 DROP 根或未登记时，回退到同位基础子图 2501–2510 / 4501–4510
+_SHIP_BASE_SUBMAP_SLOT_MAX = 10
 TIER_REF_NEST: Dict[int, int] = {
     101: 2001,
     102: 2011,
@@ -91,21 +89,25 @@ def normalize_map_id(map_id: Optional[int]) -> Optional[int]:
         return minus2k
     if map_id in MAP_TO_TIER_NEST:
         return map_id
+    fallback = ship_series_weight_fallback_map_id(map_id)
+    if fallback is not None:
+        return fallback
     return map_id
 
 
 def ship_series_weight_fallback_map_id(map_id: int) -> Optional[int]:
     """
-    25xx/45xx 末两位 21–30（如活动 2521–2530、日志 4521–4530）在 DROP 未配置时，
-    回退到 −20 的基础子图（2501–2510 或 4501–4510，归一后均为 25xx 同位）。
+    25xx/45xx 非基础子图（末两位 11+，含 2511–2520 / 2521–2530 / 253x / 453x 等）
+    在 DROP 未配置或未登记时，回退到同位基础子图 2501–2510（45xx 经 normalize 亦为 25xx 同位）。
+
+    映射：末两位 slot → ((slot - 1) % 10) + 1，例如 2515→2505、2525→2505、2535→2505。
     """
     band = map_id // 100
     slot = map_id % 100
-    if band not in (25, 45) or not (
-        _SHIP_WEIGHT_FALLBACK_SLOT_MIN <= slot <= _SHIP_WEIGHT_FALLBACK_SLOT_MAX
-    ):
+    if band not in (25, 45) or slot <= _SHIP_BASE_SUBMAP_SLOT_MAX:
         return None
-    base = map_id - _SHIP_WEIGHT_FALLBACK_DELTA
+    base_slot = ((slot - 1) % 10) + 1
+    base = band * 100 + base_slot
     if base not in MAP_TO_TIER_NEST:
         return None
     return normalize_map_id(base) or base
@@ -122,7 +124,7 @@ def _nest_drop_root_available(map_id: int) -> bool:
 def map_id_for_drop_weights(map_id: Optional[int]) -> Optional[int]:
     """
     解析用于掉落图递归的地图 ID：先 normalize，再校验巢根是否在 DROP 图中；
-    25xx/45xx 活动位缺表时回退 2501–2510 / 4501–4510 同位。
+    25xx/45xx 非基础子图缺表或巢根不可用时回退 2501–2510 / 4501–4510 同位。
     """
     mid = normalize_map_id(map_id)
     if mid is None:

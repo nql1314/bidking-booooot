@@ -102,7 +102,7 @@ def resolve_map_id_for_quality_csv(
 ) -> Optional[int]:
     """
     查 map_quality_* CSV 时使用的 ``map_id``：先 ``normalize_map_id``，无行则对
-    25xx/45xx 末两位 21–30 回退到 −20 的基础子图（2501–2510 / 4501–4510 同位）。
+    25xx/45xx 非基础子图（末两位 11+）回退到同位基础子图（2501–2510 / 4501–4510）。
     """
     from ..parsing.item_db import normalize_map_id, ship_series_weight_fallback_map_id
 
