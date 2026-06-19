@@ -58,6 +58,8 @@ class MapAvgCsvTests(unittest.TestCase):
     def test_activity_map_quality_csv_fallback(self) -> None:
         self.assertEqual(resolve_map_id_for_quality_csv(2521), 2501)
         self.assertEqual(resolve_map_id_for_quality_csv(4525), 2505)
+        self.assertEqual(resolve_map_id_for_quality_csv(2535), 2505)
+        self.assertEqual(resolve_map_id_for_quality_csv(4535), 2505)
         cells = get_map_quality_cells_for_map(2521)
         self.assertNotIn(2521, load_map_quality_cells_by_map_id())
         self.assertAlmostEqual(cells["q5"], 100.0)

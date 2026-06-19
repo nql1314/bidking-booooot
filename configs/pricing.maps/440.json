@@ -34,7 +34,7 @@
     },
     "aisha_round4_tool_min_vacant": 35,
     "enable_aisha_round4_tool_vacant_gate": true,
-    "bid_cap_skip_when_total_above": 3500000,
+    "bid_cap_skip_when_total_above": 0,
     "aisha_bid_ratio_by_round_when_q5_known": {
       "5": 1.15,
       "default": 1.16

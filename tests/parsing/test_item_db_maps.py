@@ -18,9 +18,19 @@ def test_activity_ship_maps_share_base_tier_nest() -> None:
 def test_ship_series_weight_fallback_map_id() -> None:
     assert item_db.ship_series_weight_fallback_map_id(2521) == 2501
     assert item_db.ship_series_weight_fallback_map_id(2530) == 2510
+    assert item_db.ship_series_weight_fallback_map_id(2515) == 2505
+    assert item_db.ship_series_weight_fallback_map_id(2535) == 2505
+    assert item_db.ship_series_weight_fallback_map_id(4531) == 2501
     assert item_db.ship_series_weight_fallback_map_id(4525) == 2505
-    assert item_db.ship_series_weight_fallback_map_id(2511) is None
+    assert item_db.ship_series_weight_fallback_map_id(2511) == 2501
+    assert item_db.ship_series_weight_fallback_map_id(2501) is None
     assert item_db.ship_series_weight_fallback_map_id(2401) is None
+
+
+def test_normalize_unknown_ship_series_to_base_submap() -> None:
+    assert item_db.normalize_map_id(2535) == 2505
+    assert item_db.normalize_map_id(4535) == 2505
+    assert item_db.normalize_map_id(6535) == 6535
 
 
 def test_map_id_for_drop_weights_activity_matches_base() -> None:
@@ -29,6 +39,7 @@ def test_map_id_for_drop_weights_activity_matches_base() -> None:
     )
     assert item_db.map_tier_nest_for_weights(2521) == item_db.map_tier_nest_for_weights(2501)
     assert item_db.map_tier_nest_for_weights(4525) == item_db.map_tier_nest_for_weights(4505)
+    assert item_db.map_tier_nest_for_weights(2535) == item_db.map_tier_nest_for_weights(2505)
     assert item_db.map_tier_nest_for_weights(2521) == (105, 2041)
     assert item_db.map_id_for_drop_weights(2511) == 2511
 
