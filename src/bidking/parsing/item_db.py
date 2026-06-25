@@ -24,6 +24,10 @@ DEFAULT_MAP_CATEGORY_WEIGHTS: Dict[int, float] = {
 WEIGHTED_EST_MAX_ITEM_BASE_VALUE: float = 5_000_000.0
 # 1×1（shape=11）多候选权重期望价：排除 10 万以上高价品对均价的拉动（与 UI「10万+」标记一致）。
 WEIGHTED_EST_MAX_1X1_ITEM_BASE_VALUE: float = 100_000.0
+# 表内掉落权重手工校正（重新导出 calculator_data_merged 仍生效）。
+ITEM_DROP_WEIGHT_MULT: Dict[int, float] = {
+    1106011: 0.5,  # 《富春山居图》
+}
 _DROP_WEIGHT_BY_ITEM: Dict[int, List[Tuple[int, int, int]]] = {}
 _DROP_GRAPH: Dict[int, List[Tuple[int, float]]] = {}
 _DROP_RESOLVED_CACHE: Dict[Tuple[int, Tuple[int, ...]], Dict[int, float]] = {}
@@ -204,6 +208,14 @@ def load_csv(path: str) -> Tuple[Dict[int, CsvItem], List[CsvItem]]:
     return index, items
 
 
+def _effective_drop_leaf_weight(ref_id: int, weight: float) -> float:
+    """叶子物品掉落边权；``ITEM_DROP_WEIGHT_MULT`` 在加载时叠乘。"""
+    mult = ITEM_DROP_WEIGHT_MULT.get(ref_id, 1.0)
+    if mult == 1.0:
+        return weight
+    return weight * mult
+
+
 def load_weight_data(base_dir: str) -> Dict[int, List[Tuple[int, int, int]]]:
     """
     优先读取 HTML 工具使用的合并 CSV；不存在时回退到旧的简化权重表。
@@ -249,12 +261,13 @@ def load_drop_weights(path: str) -> Dict[int, List[Tuple[int, int, int]]]:
                 category = drop_id // 10
                 quality = drop_id % 10
                 ref_id = int(row['ref_id'])
-                weight = int(row['weight'])
+                weight = float(row['weight'])
             except (KeyError, TypeError, ValueError):
                 continue
+            weight = _effective_drop_leaf_weight(ref_id, weight)
             if weight <= 0:
                 continue
-            graph.setdefault(drop_id, []).append((ref_id, float(weight)))
+            graph.setdefault(drop_id, []).append((ref_id, weight))
             weights.setdefault(ref_id, []).append((category, quality, weight))
 
     _DROP_WEIGHT_BY_ITEM = weights

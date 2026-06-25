@@ -12,6 +12,7 @@ import pytest
 
 from bidking.interaction.board_snapshot_util import (
     BoardSnapshotGameMismatch,
+    board_snapshot_stop_bot_on_game_mismatch,
     ensure_board_snapshot_matches_current_game,
 )
 
@@ -109,6 +110,23 @@ def test_rejects_stale_snapshot_file_mtime(tmp_path: Path) -> None:
             round_no=2,
             ocr_round=2,
         )
+
+
+def test_stop_bot_on_game_mismatch_config() -> None:
+    assert board_snapshot_stop_bot_on_game_mismatch({}) is True
+    assert board_snapshot_stop_bot_on_game_mismatch({"board_snapshot": {}}) is True
+    assert (
+        board_snapshot_stop_bot_on_game_mismatch(
+            {"board_snapshot": {"stop_bot_on_game_mismatch": False}}
+        )
+        is False
+    )
+    assert (
+        board_snapshot_stop_bot_on_game_mismatch(
+            {"board_snapshot": {"stop_bot_on_game_mismatch": "off"}}
+        )
+        is False
+    )
 
 
 def test_skips_when_board_snapshot_disabled() -> None:
