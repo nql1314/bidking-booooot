@@ -29,12 +29,30 @@ def board_snapshot_file_age_seconds(config: dict[str, Any]) -> float | None:
         return None
 
 
+def _board_snapshot_truthy(v: Any, *, default: bool) -> bool:
+    if v is None:
+        return default
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return bool(int(v))
+    if isinstance(v, str):
+        return v.strip().lower() in ("1", "true", "yes", "on")
+    return default
+
+
 def board_snapshot_max_stale_seconds(config: dict[str, Any]) -> float:
     bs = config.get("board_snapshot") or {}
     try:
         return max(0.0, float(bs.get("max_stale_seconds", 120.0)))
     except (TypeError, ValueError):
         return 120.0
+
+
+def board_snapshot_stop_bot_on_game_mismatch(config: dict[str, Any]) -> bool:
+    """画板快照与 bot 对局不一致时是否自动停止主循环（默认 ``True``）。"""
+    bs = config.get("board_snapshot") or {}
+    return _board_snapshot_truthy(bs.get("stop_bot_on_game_mismatch"), default=True)
 
 
 def _read_board_snapshot_if_enabled(config: dict[str, Any]) -> dict[str, Any] | None:

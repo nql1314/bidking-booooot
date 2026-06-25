@@ -33,6 +33,7 @@ from ..pricing.snapshot_io import resolve_effective_round  # noqa: E402
 from .board_snapshot_util import (  # noqa: E402
     BoardSnapshotGameMismatch,
     board_snapshot_file_path,
+    board_snapshot_stop_bot_on_game_mismatch,
     clear_board_snapshot_file,
     current_round_from_snapshot,
     ensure_board_snapshot_matches_current_game,
@@ -1542,6 +1543,10 @@ def input_bid(
 
 def run_post_round_transition(config: dict[str, Any]) -> float:
     log("post-round transition: fixed click chain", gui_verbose_only=True)
+    timing = config.get("timing") or {}
+    pre_reward_wait = float(timing.get("before_end_reward_click_seconds", 1.5))
+    if pre_reward_wait > 0:
+        sleep_interruptible(pre_reward_wait)
     click_point(config, "end_reward_click", repeat=2)
     sleep_interruptible(1.0)
     click_point(config, "end_close_click", repeat=2)
@@ -3535,9 +3540,14 @@ def run_loop(
             log("stopped by GUI")
             return
         except BoardSnapshotGameMismatch as exc:
-            log(f"画板快照与当前对局不一致，停止 bot: {exc}")
-            request_stop()
-            return
+            if board_snapshot_stop_bot_on_game_mismatch(config):
+                log(f"画板快照与当前对局不一致，停止 bot: {exc}")
+                request_stop()
+                return
+            log(
+                f"画板快照与当前对局不一致（stop_bot_on_game_mismatch=false，继续运行）: {exc}"
+            )
+            sleep_interruptible(poll_seconds)
         except EndPromptDetected as exc:
             pending_game_start_deadline = None
             map_select_no_start_streak = 0

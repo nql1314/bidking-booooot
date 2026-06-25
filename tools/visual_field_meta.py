@@ -368,6 +368,10 @@ FIELD_META: dict[str, dict[str, str]] = {
         "label": "确认出价后等待（秒）",
         "description": "点击出价确认后等待界面切换的秒数。",
     },
+    "timing.before_end_reward_click_seconds": {
+        "label": "结算页出售前等待（秒）",
+        "description": "检测到对局结束、进入奖励结算页后，点击「出售」按钮前的等待秒数。",
+    },
     "timing.after_map_select_wait_seconds": {
         "label": "开始匹配后等待（秒）",
         "description": "大厅点地图进入详情后，点击开始匹配（post_continue_confirm）再等待加载/开局的秒数。",

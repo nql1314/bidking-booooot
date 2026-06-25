@@ -33,7 +33,9 @@
     "path": "data/board_snapshot.json",
     "write_mode": "both",
     "schema_version_min": 1,
-    "self_user_uid": "941456831344888"
+    "self_user_uid": "",
+    "max_stale_seconds": 300,
+    "stop_bot_on_game_mismatch": true
   },
   "automation": {
     "bot_runner": "fresh_aisha_bot",
@@ -91,7 +93,8 @@
     "bid_confirm_retry_pause_seconds": 3,
     "bid_confirm_snapshot_poll_seconds": 3,
     "transition_debounce_seconds": 5.0,
-    "reward_continue_debounce_seconds": 1.0
+    "reward_continue_debounce_seconds": 1.0,
+    "before_end_reward_click_seconds": 3
   },
   "advisor": {
     "role": "aisha"

@@ -282,6 +282,13 @@
       "450": 5000000
     }
   },
+  "board_snapshot": {
+    "enabled": false,
+    "path": "data/board_snapshot.json",
+    "schema_version_min": 1,
+    "max_stale_seconds": 300,
+    "stop_bot_on_game_mismatch": true
+  },
   "debug": {
     "save_crops": false,
     "save_ocr_text": false,
@@ -304,7 +311,7 @@
       "client_id": "734bb1294f3847158381d9d86dec2fbb",
       "open_id": "5fe78e41787a47b3b4e721709d19b1b9",
       "access_token_env": "BIDKING_TENCENT_DOCS_ACCESS_TOKEN",
-      "request_log": true
+      "request_log": false
     }
   }
 }
