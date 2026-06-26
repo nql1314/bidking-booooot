@@ -44,15 +44,23 @@ def test_map_id_for_drop_weights_activity_matches_base() -> None:
     assert item_db.map_id_for_drop_weights(2511) == 2511
 
 
-def test_rank_map_decoded_covers_all_map_ids() -> None:
-    path = Path(__file__).resolve().parents[2] / "data" / "RankMap.decoded.tsv"
-    if not path.is_file():
+def test_rank_map_csv_covers_all_map_ids() -> None:
+    data = Path(__file__).resolve().parents[2] / "data"
+    for name in ("RankMap.csv", "rank_map_export.csv"):
+        path = data / name
+        if path.is_file():
+            break
+    else:
         return
-    ids = [
-        int(line.split("\t", 1)[0])
-        for line in path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
+    if path.name == "rank_map_export.csv":
+        import csv
+
+        with path.open(encoding="utf-8-sig", newline="") as f:
+            ids = [int(row["map_id"]) for row in csv.DictReader(f) if row.get("map_id")]
+    else:
+        from bidking.tools.game_tables import load_rank_map_rows_from_csv
+
+        ids = [int(row[0]) for row in load_rank_map_rows_from_csv(path)]
     missing = [
         mid
         for mid in ids

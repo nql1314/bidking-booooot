@@ -40,22 +40,14 @@
   "automation": {
     "bot_runner": "fresh_aisha_bot",
     "selected_mode": "aisha_premium",
-    "tool_rounds": [
-      1,
-      2,
-      3
-    ],
+    "tool_rounds": [1, 2, 3],
     "default_map": "1",
     "default_runs": 1,
     "map_chain": [
       {
         "map_id": "440",
         "runs": 10,
-        "tool_rounds": [
-          1,
-          2,
-          3
-        ]
+        "tool_rounds": [1, 2, 3]
       }
     ],
     "selected_map": "440",

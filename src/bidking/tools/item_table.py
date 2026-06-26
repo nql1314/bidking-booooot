@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""将 ``Item.txt``（整文件 Base64）解码并导出 ``item_prices.csv``。"""
+"""从 bidking-tool 导出的 ``Item.csv`` 生成 ``item_prices.csv``。"""
 
 from __future__ import annotations
 
@@ -11,16 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Sequence
 
-from bidking.tools.game_tables import decode_if_base64
-
-# Table_Item.cs Load() 列索引
-_COL_ID = 0
-_COL_DISPLAY = 1
-_COL_NAME_KEY = 3
-_COL_TYPE_IDS = 6
-_COL_SLOT_TYPE = 7
-_COL_QUALITY = 8
-_COL_BASE_VALUE = 9
+from bidking.tools.table_csv_io import iter_csv_rows, load_language_map_csv
 
 CATEGORY_MIN = 101
 CATEGORY_MAX = 110
@@ -69,32 +60,16 @@ def parse_int_list(raw: str) -> List[int]:
     return out
 
 
-def load_language_map(path: Path | None) -> Dict[str, str]:
-    if path is None or not path.is_file():
-        return {}
-    text = decode_if_base64(path.read_bytes())
-    mapping: Dict[str, str] = {}
-    for raw_line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
-        line = raw_line.strip()
-        if not line:
-            continue
-        parts = line.split("\t")
-        if len(parts) < 2 or not parts[0].strip():
-            continue
-        mapping[parts[0].strip()] = parts[1].strip()
-    return mapping
-
-
-def resolve_item_name(parts: Sequence[str], lang: Dict[str, str]) -> str:
-    display = parts[_COL_DISPLAY].strip() if len(parts) > _COL_DISPLAY else ""
+def resolve_item_name(row: dict[str, str], lang: Dict[str, str]) -> str:
+    display = (row.get("col_1") or "").strip()
     if display:
         return display
-    name_key = parts[_COL_NAME_KEY].strip() if len(parts) > _COL_NAME_KEY else ""
+    name_key = (row.get("item_name") or "").strip()
     if name_key and name_key in lang:
         return lang[name_key]
     if name_key:
         return name_key
-    return parts[_COL_ID].strip() if parts else ""
+    return (row.get("id") or "").strip()
 
 
 def include_item(item_id: int, category_tags: Sequence[int]) -> bool:
@@ -117,32 +92,29 @@ def item_sort_key(row: ItemRow) -> tuple[int, int]:
     return (3, row.item_id)
 
 
-def parse_item_rows(decoded: str, lang: Dict[str, str]) -> List[ItemRow]:
+def parse_item_csv_rows(item_csv: Path, lang: Dict[str, str]) -> List[ItemRow]:
     rows: List[ItemRow] = []
-    for raw_line in decoded.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
-        line = raw_line.strip()
-        if not line:
-            continue
-        parts = line.split("\t")
-        if not parts or not parts[0].strip():
+    for row in iter_csv_rows(item_csv):
+        raw_id = (row.get("id") or "").strip()
+        if not raw_id:
             continue
         try:
-            item_id = int(parts[0].strip())
+            item_id = int(raw_id)
         except ValueError:
             continue
-        category_tags = tuple(parse_int_list(parts[_COL_TYPE_IDS] if len(parts) > _COL_TYPE_IDS else ""))
+        category_tags = tuple(parse_int_list(row.get("item_type_id") or ""))
         if not include_item(item_id, category_tags):
             continue
         try:
-            shape = int(parts[_COL_SLOT_TYPE]) if len(parts) > _COL_SLOT_TYPE and parts[_COL_SLOT_TYPE].strip() else 0
-            quality = int(parts[_COL_QUALITY]) if len(parts) > _COL_QUALITY and parts[_COL_QUALITY].strip() else 0
-            base_value = int(parts[_COL_BASE_VALUE]) if len(parts) > _COL_BASE_VALUE and parts[_COL_BASE_VALUE].strip() else 0
+            shape = int((row.get("slot_type") or "0").strip() or "0")
+            quality = int((row.get("item_quality") or "0").strip() or "0")
+            base_value = int((row.get("base_value") or "0").strip() or "0")
         except ValueError:
             continue
         rows.append(
             ItemRow(
                 item_id=item_id,
-                name=resolve_item_name(parts, lang),
+                name=resolve_item_name(row, lang),
                 category_tags=category_tags,
                 shape=shape,
                 quality=quality,
@@ -172,27 +144,25 @@ def write_item_prices_csv(path: Path, rows: Sequence[ItemRow]) -> None:
             )
 
 
-def export_item_txt(
-    item_txt: Path,
+def export_item_csv(
+    item_csv: Path,
     out_csv: Path,
     *,
-    lang_txt: Path | None = None,
+    lang_csv: Path | None = None,
 ) -> int:
-    raw = item_txt.read_bytes()
-    decoded = decode_if_base64(raw)
-    lang = load_language_map(lang_txt)
-    rows = parse_item_rows(decoded, lang)
+    lang = load_language_map_csv(lang_csv)
+    rows = parse_item_csv_rows(item_csv, lang)
     write_item_prices_csv(out_csv, rows)
     return len(rows)
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="解码 Item.txt（Base64）并导出 item_prices.csv")
+    p = argparse.ArgumentParser(description="从 Item.csv 导出 item_prices.csv")
     p.add_argument(
-        "--item-txt",
+        "--item-csv",
         type=Path,
-        default=Path("data") / "Item.txt",
-        help="Item.txt 路径（默认 ./data/Item.txt）",
+        default=Path("data") / "Item.csv",
+        help="Item.csv 路径（默认 ./data/Item.csv）",
     )
     p.add_argument(
         "--out",
@@ -201,21 +171,21 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="输出 CSV（默认 ./data/item_prices.csv）",
     )
     p.add_argument(
-        "--lang-txt",
+        "--lang-csv",
         type=Path,
         default=None,
-        help="可选 Language.txt，用于 display 为空时解析 item_name 键",
+        help="可选 Language.csv，用于 col_1 为空时解析 item_name 键",
     )
     return p
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _build_arg_parser().parse_args(list(argv) if argv is not None else None)
-    item_path = args.item_txt
+    item_path = args.item_csv
     if not item_path.is_file():
         print(f"错误：未找到 {item_path}", file=sys.stderr)
         return 2
-    n = export_item_txt(item_path, args.out, lang_txt=args.lang_txt)
+    n = export_item_csv(item_path, args.out, lang_csv=args.lang_csv)
     print(f"已写入 {args.out}（{n} 行）", file=sys.stderr)
     return 0
 

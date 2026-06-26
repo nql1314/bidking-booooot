@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import argparse
-import sys
 from pathlib import Path
 
 from ..config.paths import config_overlay_path
-from ..interaction._legacy_bot import load_merged_bot_config, run_aisha_loop
-from ..interaction.bot_startup_gate import BotStartupBlocked, prime_bot_gate_cache
+from ..interaction._legacy_bot import run_aisha_loop
 from ._common import configure_logging, install_snapshot_file_writer, load_all
 
 
@@ -27,24 +25,7 @@ def main(argv: list[str] | None = None) -> None:
     configure_logging(runtime, app_log_path=Path(args.app_log).resolve())
     install_snapshot_file_writer(runtime)
 
-    cfg_path = config_overlay_path()
-    merged = load_merged_bot_config(cfg_path)
-    prime_bot_gate_cache(merged)
-
-    try:
-        from ..interaction.public_blacklist_sync import (
-            schedule_public_blacklist_sync_on_startup,
-        )
-
-        schedule_public_blacklist_sync_on_startup(merged)
-    except Exception as exc:
-        print(f"[bidking] 公共黑名单启动同步未安排: {exc}", file=sys.stderr)
-
-    try:
-        run_aisha_loop(cfg_path)
-    except BotStartupBlocked as exc:
-        print(str(exc), file=sys.stderr)
-        raise SystemExit(1) from exc
+    run_aisha_loop(config_overlay_path())
 
 
 if __name__ == "__main__":

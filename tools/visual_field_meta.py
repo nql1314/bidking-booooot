@@ -78,30 +78,6 @@ FIELD_META: dict[str, dict[str, str]] = {
         "label": "爱莎第4回合空置门控",
         "description": "开启后：第4回合仅在空置格≥门槛且 Q5 网格统计已知时才使用道具。",
     },
-    "automation.express_station_round1_emoji.enabled": {
-        "label": "快递站开局发表情",
-        "description": "快递站系列地图第1回合：先点表情入口 (57,1015)（客户端 left_top），等待 1 秒后再点所选表情。",
-    },
-    "automation.express_station_round1_emoji.anti_routine_enabled": {
-        "label": "快递站表情反套路",
-        "description": "仍发表情、对暗号，出价走后端估价，暗号对上不写黑名单。",
-    },
-    "automation.express_station_round1_emoji.emoji": {
-        "label": "快递站开局表情",
-        "description": "仅显示/设置今天使用的表情；星期表请在 pricing.maps JSON 中维护 emoji_by_weekday。",
-    },
-    "automation.express_station_round1_emoji.wait_after_send_seconds": {
-        "label": "发表情后等待（秒）",
-        "description": "发送表情后轮询快照；仅当对手回与己方相同的表情（EmojiCid 一致）时用暗号价，否则走后端估价。",
-    },
-    "automation.express_station_round1_emoji.seat_1_price": {
-        "label": "快递站暗号价（座位1）",
-        "description": "只读展示；修改请编辑 configs/pricing.maps/<地图档>.json 中的 seat_1_price。",
-    },
-    "automation.express_station_round1_emoji.seat_2_price": {
-        "label": "快递站暗号价（座位2）",
-        "description": "只读展示；修改请编辑 configs/pricing.maps/<地图档>.json 中的 seat_2_price。",
-    },
     "automation.game_start_timeout_seconds": {
         "label": "开局等待超时（秒）",
         "description": "选图后等待「开始」界面出现的最大秒数，超时则重试或放弃本局。",

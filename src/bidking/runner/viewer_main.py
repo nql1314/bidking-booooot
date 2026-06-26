@@ -20,8 +20,10 @@ from ..parsing._legacy_runner import parse_last_game, parse_last_game_rounds
 from ..ui.grid import GridWindow
 
 
-# 启动看板页顶栏说明（与历史 bot GUI 说明一致）；B 站地址单独做可点击超链接
-_LAUNCH_TAB_BANNER_PREFIX = "免费分享 禁止倒卖 Q群 956946772 关注我B站 了解最新功能 "
+# 启动看板页顶栏说明；GitHub / B 站地址单独做可点击超链接
+_LAUNCH_TAB_BANNER_PREFIX = "免费分享 禁止倒卖 Q群 956946772 1076496131 看板源码开源 "
+_GITHUB_REPO_URL = "https://github.com/nql1314/bidking-booooot"
+_LAUNCH_TAB_BANNER_MID = " 关注我B站 "
 _BILIBILI_SPACE_URL = "https://space.bilibili.com/1934731"
 
 
@@ -131,33 +133,7 @@ def _launch_bot_runner(start_root: tk.Tk) -> None:
     BidKingApp(top)
 
 
-def _prime_gate_for_viewer() -> None:
-    from ..config.paths import config_overlay_path
-    from ..interaction._legacy_bot import load_merged_bot_config
-    from ..interaction.bot_startup_gate import prime_bot_gate_cache
-
-    try:
-        cfg = load_merged_bot_config(config_overlay_path())
-    except Exception:
-        cfg = {}
-    prime_bot_gate_cache(cfg)
-
-
 def _show_start_page(default_log: str, csv_path: str) -> None:
-    _prime_gate_for_viewer()
-    try:
-        from ..config.runtime import load_runtime
-        from ..interaction.public_blacklist_sync import (
-            schedule_public_blacklist_sync_on_startup,
-        )
-
-        schedule_public_blacklist_sync_on_startup(load_runtime().raw)
-    except Exception as exc:
-        print(
-            f"[bidking] 公共黑名单启动同步未安排: {exc}",
-            file=sys.stderr,
-        )
-
     root = tk.Tk()
     root.title(f"BidKing 鉴影可视化 v{__version__} - 启动")
     root.geometry("960x720")
@@ -183,39 +159,30 @@ def _show_start_page(default_log: str, csv_path: str) -> None:
     frame = tk.Frame(launch_tab, padx=14, pady=12)
     frame.pack(fill="both", expand=True)
 
-    from ..interaction.bot_startup_gate import get_bot_gate_status
-
-    gate_status = get_bot_gate_status()
-    remote_banner = (
-        gate_status.banner.strip()
-        if gate_status is not None and gate_status.banner.strip()
-        else ""
-    )
-
-    announce_box = tk.Frame(frame, bg="#fff8e8", highlightbackground="#e0c878", highlightthickness=1)
-    announce_box.pack(anchor="w", fill="x", pady=(0, 8))
-    tk.Label(
-        announce_box,
-        text="公告",
-        bg="#fff8e8",
-        fg="#8a4510",
-        font=("微软雅黑", 9, "bold"),
-    ).pack(anchor="w", padx=10, pady=(8, 2))
-    tk.Label(
-        announce_box,
-        text=remote_banner or "（暂无远程公告，请检查网络或文档配置）",
-        bg="#fff8e8",
-        fg="#5a3a10" if remote_banner else "#888888",
-        font=("微软雅黑", 10),
-        wraplength=900,
-        justify="left",
-    ).pack(anchor="w", padx=10, pady=(0, 8))
-
     banner_row = tk.Frame(frame)
     banner_row.pack(anchor="w", fill="x", pady=(0, 10))
     tk.Label(
         banner_row,
         text=_LAUNCH_TAB_BANNER_PREFIX,
+        fg="#3a4a5a",
+        font=("微软雅黑", 9),
+    ).pack(side="left", anchor="nw")
+    github_lbl = tk.Label(
+        banner_row,
+        text=_GITHUB_REPO_URL,
+        fg="#0066cc",
+        font=("微软雅黑", 9, "underline"),
+        cursor="hand2",
+        justify="left",
+    )
+    github_lbl.pack(side="left", anchor="nw")
+    github_lbl.bind(
+        "<Button-1>",
+        lambda _event: webbrowser.open(_GITHUB_REPO_URL),
+    )
+    tk.Label(
+        banner_row,
+        text=_LAUNCH_TAB_BANNER_MID,
         fg="#3a4a5a",
         font=("微软雅黑", 9),
     ).pack(side="left", anchor="nw")

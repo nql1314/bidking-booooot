@@ -271,16 +271,6 @@ class VisualConfigPanel:
                 grp.columnconfigure(1, weight=1)
 
                 val = get_by_path(data, path)
-                if path == "automation.express_station_round1_emoji.emoji":
-                    from ..interaction._legacy_bot import express_station_effective_emoji
-
-                    au = data.get("automation") if isinstance(data.get("automation"), dict) else {}
-                    block = (
-                        au.get("express_station_round1_emoji")
-                        if isinstance(au.get("express_station_round1_emoji"), dict)
-                        else {}
-                    )
-                    val = express_station_effective_emoji(block)
                 ftype = str(field.get("type") or "str").strip().lower()
                 if ftype == "bool":
                     var.set(bool(val))
@@ -718,9 +708,6 @@ class VisualConfigPanel:
             doc = dict(prior)
             shared = self._map_quality_unit_source_bundle(mk)
             self._apply_bindings(doc, self._map_bindings)
-            from ..interaction._legacy_bot import sync_express_station_emoji_force_after_manual_edit
-
-            sync_express_station_emoji_force_after_manual_edit(doc)
             if self._map_quality_unit_editable(mk) and self._map_quality_unit_vars:
                 if shared == mk:
                     self._apply_map_quality_unit_to_doc(doc)

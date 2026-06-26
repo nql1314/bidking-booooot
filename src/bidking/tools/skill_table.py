@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""将 ``Skill.txt``（整文件 Base64）解码为 UTF-8 Tab 表并导出 CSV。"""
+"""从 bidking-tool 导出的 ``Skill.csv`` 生成 bot 使用的 ``Skill_export.csv``。"""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from typing import List, Sequence
 
-from bidking.tools.game_tables import decode_if_base64
+from bidking.tools.table_csv_io import iter_csv_rows
 
 _SKILL_COLUMNS = (
     "skill_id",
@@ -41,21 +41,47 @@ _SKILL_COLUMNS = (
     "param_26",
 )
 
-_NCOL = len(_SKILL_COLUMNS)
+_SKILL_CSV_FIELDS = (
+    "id",
+    "col_1",
+    "col_2",
+    "skill_group",
+    "skill_name",
+    "skilldesc",
+    "skill_textshow",
+    "skill_type",
+    "skilltarget",
+    "skilltargetvalue",
+    "skilltarget2",
+    "skilltargetvalue2",
+    "skilltarget3",
+    "skilltargetvalue3",
+    "skill_count_type",
+    "skill_count",
+    "skilleffect_position",
+    "skill_icon",
+    "skill_value",
+    "skill_active_type",
+    "skill_opt",
+    "skill_opt_param1",
+    "skill_opt_param2",
+    "skill_cast",
+    "skill_round",
+    "skill_CD",
+    "show_type",
+)
 
 
-def parse_skill_tsv(decoded: str) -> List[List[str]]:
+def skill_csv_row_to_export_cols(row: dict[str, str]) -> List[str]:
+    return [(row.get(src) or "").strip() for src in _SKILL_CSV_FIELDS]
+
+
+def load_skill_export_rows(skill_csv: Path) -> List[List[str]]:
     rows: List[List[str]] = []
-    for raw in decoded.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
-        line = raw.strip()
-        if not line:
+    for row in iter_csv_rows(skill_csv):
+        if not (row.get("id") or "").strip():
             continue
-        parts = line.split("\t")
-        if len(parts) < _NCOL:
-            parts = parts + [""] * (_NCOL - len(parts))
-        else:
-            parts = parts[:_NCOL]
-        rows.append(parts)
+        rows.append(skill_csv_row_to_export_cols(row))
     return rows
 
 
@@ -68,21 +94,19 @@ def write_skill_csv(path: Path, rows: Sequence[Sequence[str]]) -> None:
             w.writerow(list(cols))
 
 
-def export_skill_txt(skill_txt: Path, out_csv: Path) -> int:
-    raw = skill_txt.read_bytes()
-    decoded = decode_if_base64(raw)
-    rows = parse_skill_tsv(decoded)
+def export_skill_csv(skill_csv: Path, out_csv: Path) -> int:
+    rows = load_skill_export_rows(skill_csv)
     write_skill_csv(out_csv, rows)
     return len(rows)
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="解码 Skill.txt（Base64）并导出 CSV")
+    p = argparse.ArgumentParser(description="从 Skill.csv 导出 Skill_export.csv")
     p.add_argument(
-        "--skill-txt",
+        "--skill-csv",
         type=Path,
-        default=Path("data") / "Skill.txt",
-        help="Skill.txt 路径（默认 ./data/Skill.txt）",
+        default=Path("data") / "Skill.csv",
+        help="Skill.csv 路径（默认 ./data/Skill.csv）",
     )
     p.add_argument(
         "--out",
@@ -95,11 +119,11 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _build_arg_parser().parse_args(list(argv) if argv is not None else None)
-    skill_path = args.skill_txt
+    skill_path = args.skill_csv
     if not skill_path.is_file():
         print(f"错误：未找到 {skill_path}", file=sys.stderr)
         return 2
-    n = export_skill_txt(skill_path, args.out)
+    n = export_skill_csv(skill_path, args.out)
     print(f"已写入 {args.out}（{n} 行）", file=sys.stderr)
     return 0
 

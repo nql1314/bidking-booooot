@@ -1,14 +1,9 @@
 # -*- coding: utf-8 -*-
 
-import base64
 import csv
 from pathlib import Path
 
 from bidking.tools import item_table as it
-
-
-def _b64_utf8(s: str) -> bytes:
-    return base64.b64encode(s.encode("utf-8"))
 
 
 def test_parse_int_list():
@@ -25,22 +20,14 @@ def test_include_item_rules():
     assert not it.include_item(1001, [7])
 
 
-def test_parse_item_rows_filters_and_maps():
-    line = "\t".join(
-        [
-            "1013001",
-            "烧烤架",
-            "",
-            "itemName_1013001",
-            "",
-            "",
-            "[101,109]",
-            "22",
-            "3",
-            "3855",
-        ]
+def test_parse_item_csv_rows_filters_and_maps(tmp_path: Path):
+    item = tmp_path / "Item.csv"
+    item.write_text(
+        "id,col_1,col_2,item_name,item_nm,item_desc,item_type_id,slot_type,item_quality,base_value\n"
+        "1013001,烧烤架,,itemName_1013001,,,\"[101,109]\",22,3,3855\n",
+        encoding="utf-8-sig",
     )
-    rows = it.parse_item_rows(line + "\n", {})
+    rows = it.parse_item_csv_rows(item, {})
     assert len(rows) == 1
     row = rows[0]
     assert row.item_id == 1013001
@@ -51,25 +38,15 @@ def test_parse_item_rows_filters_and_maps():
     assert row.base_value == 3855
 
 
-def test_export_item_txt_writes_csv(tmp_path: Path):
-    inner = "\t".join(
-        [
-            "1013001",
-            "烧烤架",
-            "",
-            "itemName_1013001",
-            "",
-            "",
-            "[101,109]",
-            "22",
-            "3",
-            "3855",
-        ]
+def test_export_item_csv_writes_csv(tmp_path: Path):
+    item = tmp_path / "Item.csv"
+    item.write_text(
+        "id,col_1,col_2,item_name,item_nm,item_desc,item_type_id,slot_type,item_quality,base_value\n"
+        "1013001,烧烤架,,itemName_1013001,,,\"[101,109]\",22,3,3855\n",
+        encoding="utf-8-sig",
     )
-    item = tmp_path / "Item.txt"
-    item.write_bytes(_b64_utf8(inner))
     out = tmp_path / "item_prices.csv"
-    n = it.export_item_txt(item, out)
+    n = it.export_item_csv(item, out)
     assert n == 1
     with out.open(encoding="utf-8-sig", newline="") as f:
         rows = list(csv.DictReader(f))

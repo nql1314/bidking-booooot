@@ -15,16 +15,6 @@ def main() -> None:
 
     init_game_report_csv_session()
 
-    try:
-        from bidking.config.runtime import load_runtime
-        from bidking.interaction.public_blacklist_sync import (
-            schedule_public_blacklist_sync_on_startup,
-        )
-
-        schedule_public_blacklist_sync_on_startup(load_runtime().raw)
-    except Exception:
-        pass
-
     import tkinter as tk
 
     root = tk.Tk()
