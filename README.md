@@ -60,9 +60,6 @@ copy /Y configs\config.json.example configs\config.json
 
 ```cmd
 python -m bidking.runner.viewer_main
-python -m bidking.runner.bot_main
-python -m bidking.runner.aisha_main
-python -c "from bidking.ui.app import main; main()"
 python -m pytest -q
 ```
 
