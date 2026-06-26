@@ -1,0 +1,80 @@
+name: Bug 报告
+description: 报告画板、日志解析、OCR 或 Bot 相关缺陷
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        提交前请确认：**勿**粘贴真实 UID、token、完整 `Player.log` 或含他人昵称的对局数据。可脱敏或只描述现象。
+
+  - type: dropdown
+    id: entry
+    attributes:
+      label: 入口
+      options:
+        - viewer（画板看板）
+        - bot（艾哈迈德）
+        - aisha（艾莎）
+        - 其他 CLI / 工具
+    validations:
+      required: true
+
+  - type: input
+    id: python
+    attributes:
+      label: Python 版本
+      description: 运行 `python --version` 的输出
+      placeholder: "3.13.x"
+    validations:
+      required: true
+
+  - type: input
+    id: map
+    attributes:
+      label: 地图 / 档位（可选）
+      description: 例如 `configs/pricing.maps/450.json` 或地图 ID，可脱敏
+      placeholder: "450"
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 从启动命令到出现问题前的操作
+      placeholder: |
+        1. python -m bidking.runner.viewer_main
+        2. 打开某局回放
+        3. …
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望行为
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际行为
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 相关日志或截图说明（脱敏）
+      description: 可粘贴报错栈、OCR 识别片段；勿含他人隐私
+      render: shell
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 自检
+      options:
+        - label: 我已脱敏，未包含真实 UID / token / 他人对局数据
+          required: true
+        - label: 我已阅读 CONTRIBUTING.md 中的测试说明
+          required: false

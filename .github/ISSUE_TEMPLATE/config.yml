@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 贡献指南
+    url: https://github.com/nql1314/bidking-booooot/blob/main/CONTRIBUTING.md
+    about: 开发环境、测试与 PR 规范
+  - name: 安全问题
+    url: https://github.com/nql1314/bidking-booooot/blob/main/SECURITY.md
+    about: 请勿在公开 Issue 中报告安全漏洞或粘贴凭证
