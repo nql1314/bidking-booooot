@@ -3,7 +3,13 @@ name = "bidking"
 version = "1.21"
 description = "BidKing: 分层架构的画板看板+自动化竞拍机器人"
 readme = "README.md"
+license = "Apache-2.0"
 requires-python = ">=3.13"
+
+[project.urls]
+Homepage = "https://github.com/nql1314/bidking-booooot"
+Repository = "https://github.com/nql1314/bidking-booooot"
+Issues = "https://github.com/nql1314/bidking-booooot/issues"
 dependencies = [
     "Pillow>=10.0.0",
     "numpy>=1.26.0",

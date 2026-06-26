@@ -77,6 +77,7 @@ python -m pytest -q
 ## 贡献与安全
 
 - 贡献指南：[CONTRIBUTING.md](CONTRIBUTING.md)
+- 行为准则：[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
 - 安全问题：[SECURITY.md](SECURITY.md)
 
 ## 不在范围
