@@ -58,10 +58,23 @@ Desktop.ini
 # Local viewer / match artifacts
 data/run/
 data/board_snapshot.json
+data/pricing_context.json
 data/game_match_reports.csv
 data/game_match_reports_*.csv
 data/emoji_signal_public_blacklist.csv
 data/emoji_signal_match_blacklist.csv
 data/self_bid_cache.json
 data/tier_combo_presolve_q456.json
+
+# Bot debug dumps (runtime.json debug.runs_dir, OCR/screenshot bundles)
+runs/
+
+# Window capture scratch (interaction/window.py --output)
+**/automation_runs/
+
+# Local config overlays (templates: configs/config.json.example)
 configs/config.json
+configs/price_config.json
+
+# Copied PyInstaller artifact at repo root (real build output stays under dist/)
+/grid_view.exe
