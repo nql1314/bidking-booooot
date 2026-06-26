@@ -1,0 +1,97 @@
+{
+  "pricing": {
+    "enable_late_round_low_bid_surrender": false,
+    "late_round_low_bid_surrender_after_round": 4,
+    "late_round_low_bid_surrender_below": 222222,
+    "late_round_low_bid_surrender_bid": 88888,
+    "enable_vacant_red_floor_ceiling_pick": false,
+    "enable_opponent_bid_adjustment": false,
+    "infer_vacant_rect_phantoms": false,
+    "price_avg_infer_max_item_count": 30,
+    "grid_avg_infer_max_item_count": 30,
+    "grid_avg_infer_max_grid_count": 60,
+    "auto_vacant_phantom_price": "avg",
+    "phantom_unknown_tier": {
+      "post_gold_quality_threshold_q5": 0.8,
+      "post_gold_quality_threshold_q6": 0.8
+    },
+    "opponent_bid_blend_weights": {
+      "bid": 0.0,
+      "opponent": 0.0
+    }
+  },
+  "grid_view": {
+    "unknown_bg": "#1a7394",
+    "fraud_empty_cells_algorithm": "tiling_strict",
+    "auto_expand_log_contour": true
+  },
+  "safety": {
+    "verify_bid_confirm_snapshot": false
+  },
+  "board_snapshot": {
+    "enabled": true,
+    "path": "data/board_snapshot.json",
+    "write_mode": "both",
+    "schema_version_min": 1,
+    "self_user_uid": "",
+    "max_stale_seconds": 300,
+    "stop_bot_on_game_mismatch": true
+  },
+  "automation": {
+    "bot_runner": "fresh_aisha_bot",
+    "selected_mode": "aisha_premium",
+    "tool_rounds": [1, 2, 3],
+    "default_map": "1",
+    "default_runs": 1,
+    "map_chain": [
+      {
+        "map_id": "440",
+        "runs": 10,
+        "tool_rounds": [1, 2, 3]
+      }
+    ],
+    "selected_map": "440",
+    "selected_runs": 10,
+    "warehouse_auto_sort": {
+      "enabled": true
+    },
+    "run_cycles": 60,
+    "cycle_rest_minutes": 2.0,
+    "enable_map_entry_money_check": false,
+    "enable_aisha_round4_tool_vacant_gate": false,
+    "aisha_round4_tool_min_vacant": 30,
+    "aisha_bid_ratio_by_round_when_q5_known": {
+      "5": 1.0,
+      "default": 1.0
+    },
+    "bid_cap_skip_when_total_above": 0,
+    "game_start_timeout_seconds": 120.0,
+    "scheduled_start_enabled": false,
+    "scheduled_start_hour": 8,
+    "scheduled_start_minute": 0,
+    "shutdown_after_run_enabled": false,
+    "shutdown_after_run_delay_seconds": 60
+  },
+  "timing": {
+    "poll_seconds": 1,
+    "round_detect_wait_seconds": 10.0,
+    "round1_extra_wait_seconds": 4.0,
+    "tool_after_snapshot_poll_seconds": 8.0,
+    "tool_after_wait_seconds": 5.0,
+    "click_pause_seconds": 0.12,
+    "after_map_select_wait_seconds": 5.0,
+    "after_bid_confirm_wait_seconds": 1.0,
+    "bid_confirm_verify_max_seconds": 30,
+    "bid_confirm_retry_pause_seconds": 3,
+    "bid_confirm_snapshot_poll_seconds": 3,
+    "transition_debounce_seconds": 5.0,
+    "reward_continue_debounce_seconds": 1.0,
+    "before_end_reward_click_seconds": 3
+  },
+  "advisor": {
+    "role": "aisha"
+  },
+  "viewer": {
+    "game_report_max_matches": 500
+  }
+}

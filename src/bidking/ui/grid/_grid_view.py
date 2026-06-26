@@ -884,12 +884,6 @@ class GridWindow:
                     file=sys.stderr,
                 )
         self._snapshot_export_overlay = bool(snapshot_export_overlay)
-        from ...config.runtime import load_runtime
-        from ...interaction.public_blacklist_sync import (
-            schedule_public_blacklist_sync_on_startup,
-        )
-
-        schedule_public_blacklist_sync_on_startup(load_runtime().raw)
         self._perf_log_path: Path = _grid_perf_log_path(self._snapshot_path or "")
         self._perf_log_mode: str = _grid_perf_log_mode()
         self._skill_logs: List[dict] = []
@@ -902,7 +896,6 @@ class GridWindow:
         self._header_compute_sig: Optional[Tuple[Any, ...]] = None
         # 定价结果变化时写回 ``board_snapshot.json``（与 bot ``compute_price`` 重算同源）
         self._last_emitted_pricing_sig: Optional[Tuple[Any, ...]] = None
-        self._express_players_sig: Optional[Tuple[Any, ...]] = None
         # 地图类别权重：与定价 ``_board_pricing`` 一致，未传入时用 ``map_category_ratios``；
         # 勿留空（item_db 会退回各类别 1.0），否则弹窗概率/权重价与估算总价脱节。
         if map_category_weights:
@@ -1919,210 +1912,6 @@ class GridWindow:
         except Exception:
             return ""
 
-    def _board_snapshot_for_express_blacklist_ui(self) -> tuple[dict[str, Any], dict[str, Any]]:
-        """供快递站表情黑名单 UI 使用的快照与 ``board_snapshot`` 配置段。"""
-        snap: dict[str, Any] = dict(self._make_board_snapshot())
-        gs = snap.get("game_state") or {}
-        g_uid = str(gs.get("uid") or "").strip()
-        if g_uid:
-            snap["game_uid"] = g_uid
-        try:
-            from ...analysis.strategy.ahmad import _local_board_snapshot_branch
-
-            branch = _local_board_snapshot_branch()
-        except Exception:
-            branch = {}
-        cfg_uid = str(branch.get("self_user_uid") or "").strip()
-        if cfg_uid:
-            snap["self_user_uid"] = cfg_uid
-        return snap, branch
-
-    def _collect_express_match_players(self) -> List[Dict[str, Any]]:
-        """快递站（档 210）本局玩家及黑名单状态。"""
-        from ...analysis.strategy.ahmad import map_bundle_is_express_station_series
-        from ...interaction.emoji_signal_blacklist import player_express_blacklist_reason
-        from ...pricing.snapshot_players import board_snapshot_self_identity
-
-        mid = int(self.state.map_id or 0)
-        if not map_bundle_is_express_station_series(mid):
-            return []
-        snap, branch = self._board_snapshot_for_express_blacklist_ui()
-        config = {"board_snapshot": branch}
-        self_uid, _ = board_snapshot_self_identity(config, snap)
-        self_uid_s = str(self_uid or "").strip()
-        g_uid = str(
-            (snap.get("game_state") or {}).get("uid")
-            or snap.get("game_uid")
-            or ""
-        ).strip()
-        players = self.state.players if isinstance(self.state.players, dict) else {}
-        out: List[Dict[str, Any]] = []
-        for p_uid, pdata in players.items():
-            if not isinstance(pdata, dict):
-                continue
-            uid_s = str(p_uid or "").strip()
-            if not uid_s:
-                continue
-            name = str(pdata.get("name") or uid_s).strip()
-            bl = player_express_blacklist_reason(
-                uid=uid_s, name=name, game_uid=g_uid
-            )
-            out.append(
-                {
-                    "uid": uid_s,
-                    "name": name,
-                    "is_self": bool(self_uid_s and uid_s == self_uid_s),
-                    "blacklist": bl,
-                }
-            )
-        out.sort(key=lambda p: (not p.get("is_self"), str(p.get("name") or "")))
-        return out
-
-    def _toggle_player_match_blacklist(self, uid: str, name: str) -> None:
-        """点击切换：加入或移出本局对局黑名单。"""
-        from ...interaction.emoji_signal_blacklist import (
-            add_player_to_match_blacklist,
-            is_on_match_blacklist,
-            remove_player_from_match_blacklist,
-        )
-        from ...pricing.snapshot_players import player_round_price_bid
-
-        snap, _branch = self._board_snapshot_for_express_blacklist_ui()
-        g_uid = str(
-            (snap.get("game_state") or {}).get("uid")
-            or snap.get("game_uid")
-            or ""
-        ).strip()
-        if is_on_match_blacklist(game_uid=g_uid, uid=uid, name=name):
-            changed, note = remove_player_from_match_blacklist(
-                game_uid=g_uid, uid=uid, name=name
-            )
-        else:
-            rnd = int(self.state.current_round or 1)
-            pdata = (
-                self.state.players.get(uid)
-                if isinstance(self.state.players, dict)
-                else None
-            )
-            bid = (
-                player_round_price_bid(pdata, rnd)
-                if isinstance(pdata, dict)
-                else None
-            )
-            changed, note = add_player_to_match_blacklist(
-                game_uid=g_uid,
-                uid=uid,
-                name=name,
-                round_no=rnd,
-                bid=bid,
-            )
-        hint = getattr(self, "_express_players_hint_label", None)
-        if hint is not None:
-            hint.config(text=note, fg="#7dffb0" if changed else "#ffb070")
-            self.root.after(
-                2500,
-                lambda: hint.config(text="", fg="#7dffb0")
-                if hint.winfo_exists()
-                else None,
-            )
-        if changed:
-            self._express_players_sig = None
-            self._update_express_players_row()
-
-    def _update_express_players_row(self) -> None:
-        """快递站地图：顶栏展示本局玩家；黑名单标红；点击切换对局黑名单。"""
-        frame = getattr(self, "_express_players_frame", None)
-        if frame is None:
-            return
-        bg = "#1a1a2e"
-        players = self._collect_express_match_players()
-        sig = tuple(
-            (p["uid"], p["name"], p.get("blacklist"), p.get("is_self"))
-            for p in players
-        )
-        if sig == self._express_players_sig:
-            return
-        self._express_players_sig = sig
-        for child in frame.winfo_children():
-            child.destroy()
-        if not players:
-            return
-        tk.Label(
-            frame,
-            text="对局玩家",
-            bg=bg,
-            fg="#9fd9ff",
-            font=("微软雅黑", 10, "bold"),
-            anchor="w",
-        ).pack(side="left", anchor="w")
-        tk.Label(
-            frame,
-            text="（点击玩家加入/移出对局黑名单）",
-            bg=bg,
-            fg="#7a8aaa",
-            font=("微软雅黑", 9),
-            anchor="w",
-        ).pack(side="left", padx=(6, 12), anchor="w")
-        for p in players:
-            uid = str(p["uid"])
-            name = str(p["name"])
-            bl = str(p.get("blacklist") or "")
-            is_self = bool(p.get("is_self"))
-            if bl == "public":
-                fg = "#ff5050"
-                tag = "·公共黑名单"
-            elif bl == "match":
-                fg = "#ff6060"
-                tag = "·对局黑名单"
-            else:
-                fg = "#b8d8ff"
-                tag = ""
-            if is_self:
-                if bl == "public":
-                    text = "我·公共黑名单"
-                elif bl == "match":
-                    text = "我·对局黑名单"
-                else:
-                    text = "我"
-            else:
-                text = f"{name}{tag}"
-            can_toggle = not is_self
-            lbl = tk.Label(
-                frame,
-                text=text,
-                bg=bg,
-                fg=fg,
-                font=("微软雅黑", 10, "bold" if bl else "normal"),
-                cursor="hand2" if can_toggle else "arrow",
-                anchor="w",
-            )
-            lbl.pack(side="left", padx=(0, 14), anchor="w")
-            if is_self:
-                tip = (
-                    f"昵称: {name}\nUID: {uid}\n（己方不可操作对局黑名单）"
-                )
-            elif bl == "match":
-                tip = f"UID: {uid}\n昵称: {name}\n点击移出对局黑名单"
-            else:
-                tip = f"UID: {uid}\n昵称: {name}\n点击加入对局黑名单"
-            _PricingHoverTip(lbl, lambda t=tip: t)
-            if can_toggle:
-                lbl.bind(
-                    "<Button-1>",
-                    lambda _e, u=uid, n=name: self._toggle_player_match_blacklist(
-                        u, n
-                    ),
-                )
-        self._express_players_hint_label = tk.Label(
-            frame,
-            text="",
-            bg=bg,
-            fg="#7dffb0",
-            font=("微软雅黑", 9),
-            anchor="w",
-        )
-        self._express_players_hint_label.pack(side="left", padx=(8, 0), anchor="w")
-
     def _info_summary_text(self) -> str:
         """第 2 行摘要：画板总格、已知物品件数、总格数、平均格数。"""
         try:
@@ -3061,7 +2850,6 @@ class GridWindow:
 
     def _reset_for_new_game(self) -> None:
         """新对局开始：清空幽灵、更新标题、重建 Canvas。"""
-        self._express_players_sig = None
         self._clear_board_overlay_local_state()
 
         self.root.title(
@@ -3071,7 +2859,6 @@ class GridWindow:
         )
         if hasattr(self, "_info_bar_label"):
             self._info_bar_label.config(text=self._info_summary_text())
-        self._update_express_players_row()
         cw = GRID_COLS * CELL_W + 1
         ch = GRID_ROWS * CELL_H + 1
         self.canvas.config(
@@ -3620,8 +3407,6 @@ class GridWindow:
         else:
             self._est_label_floor.config(text="")
 
-        self._update_express_players_row()
-
     # ── 界面构建 ──────────────────────────────────────────────────────────
 
     def _create_topmost_pin_photo(self) -> Optional[Any]:
@@ -3825,11 +3610,6 @@ class GridWindow:
         )
         self._top_cats_label.pack(side="left", padx=(20, 0), anchor="w")
 
-        # ── 快递站（210）：本局玩家 + 黑名单标红 ─────────────────────────────
-        row_players = tk.Frame(bar, bg=BG)
-        row_players.pack(fill="x", padx=10, pady=(3, 0))
-        self._express_players_frame = row_players
-
         # ── 第 2 行：对局摘要 ─────────────────────────────────────────────
         row2 = tk.Frame(bar, bg=BG)
         row2.pack(fill="x", padx=10, pady=(3, 0))
@@ -3880,7 +3660,6 @@ class GridWindow:
         def _after_idle_refresh() -> None:
             self._info_bar_label.config(text=self._info_summary_text())
             self._top_cats_label.config(text=self._top_cats_text())
-            self._update_express_players_row()
 
         self.root.after_idle(_after_idle_refresh)
 

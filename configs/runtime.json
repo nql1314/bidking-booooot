@@ -132,48 +132,6 @@
       "origin": "left_bottom",
       "x": 996,
       "y": 90
-    },
-    "express_station_round1_emoji": {
-      "panel": {
-        "origin": "left_top",
-        "x": 57,
-        "y": 1000
-      },
-      "panel_wait_seconds": 1.0,
-      "targets": {
-        "问候": {
-          "x": 230,
-          "y": 469
-        },
-        "自信": {
-          "x": 230,
-          "y": 538
-        },
-        "嘲讽": {
-          "x": 230,
-          "y": 618
-        },
-        "惊讶": {
-          "x": 230,
-          "y": 688
-        },
-        "遗憾": {
-          "x": 230,
-          "y": 777
-        },
-        "感谢": {
-          "x": 230,
-          "y": 838
-        },
-        "赞赏": {
-          "x": 230,
-          "y": 913
-        },
-        "生气": {
-          "x": 230,
-          "y": 987
-        }
-      }
     }
   },
   "automation": {
@@ -303,15 +261,5 @@
   "viewer": {
     "show_bot_runner": true,
     "game_report_max_matches": 1000
-  },
-  "sheet_merge": {
-    "max_sync_bid": 25000,
-    "book_id": "300000000$CHPaUrsWPlRG",
-    "openapi": {
-      "client_id": "734bb1294f3847158381d9d86dec2fbb",
-      "open_id": "5fe78e41787a47b3b4e721709d19b1b9",
-      "access_token_env": "BIDKING_TENCENT_DOCS_ACCESS_TOKEN",
-      "request_log": false
-    }
   }
 }

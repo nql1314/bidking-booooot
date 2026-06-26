@@ -3,8 +3,10 @@
 技能日志 → ``event_stats`` **标量直读与轮廓补全**见 :mod:`bidking.analysis.skill_event_stats_from_logs`
 （:func:`parse_skill_entries_to_event_stats_direct`、:data:`EVENT_STATS_ATTRIBUTE_SOURCES`）。
 
-本模块负责 **已知字段上的推理**：随机均价下界、分档 count/grid 互推、紫/金/红**总价**+CSV 组合、
-金红总格守恒、q12 汇总、分档零一致性等（物品价侧不从均价反推件数/总价）。
+本模块负责 **已知字段上的推理**：随机均价下界、分档 count/grid 互推、金红总格守恒、q12 汇总、分档零一致性等（物品价侧不从均价反推件数/总价）。
+
+.. deprecated::
+    紫/金/红 ``tier_combo_presolve_q456.json`` 预计算组合表已废弃并移除，不再从 CSV 反推件数/占格。
 """
 
 from __future__ import annotations
@@ -22,7 +24,6 @@ from ..parsing.skill_bindings import (
     MAP_SKILL_RANDOM6_AVG_PRICE,
     MAP_SKILL_RANDOM9_AVG_PRICE,
 )
-from ..parsing.state import CsvItem
 from .skill_event_stats_from_logs import (
     merge_latest_skill_entries,
     parse_skill_entries_to_event_stats_direct,
@@ -33,7 +34,6 @@ from .skill_event_stats_from_logs import (
 from .map_avg_csv import (
     map_quality_csv_path_resolved,
 )
-from .tier_combo_presolve import presolve_grid_sums
 
 
 def _min_total_from_avg(avg: Optional[float]) -> Optional[int]:
@@ -88,9 +88,6 @@ _RATIO_INFER_TOL = 1e-4
 
 # ``avg * n`` 与最近整数距离 ≤ delta 时，``n`` 的上限搜索范围（防极端无理数/浮点噪声死循环）。
 _AVG_NEAR_INTEGER_MAX_MULTIPLIER = 200
-
-# 地图分档（紫/金/红）组合反推：件数枚举上界（与预计算表 ``n``≤3 一致）；超过则不查表。
-_TIER_COMBO_MAX_ITEM_COUNT = 3
 
 # 放宽距离阈值时上限：任意正数 ``avg`` 在 ``n=1`` 下距离最近整数恒 ≤ 0.5。
 _MAX_NEAR_INTEGER_DELTA = 0.5
@@ -593,158 +590,6 @@ def _infer_q56_grid_from_total_and_q14(d: Dict[str, Any]) -> None:
             d["q5_grid_count"] = rest
 
 
-_item_prices_cache: Optional[Tuple[Dict[int, CsvItem], List[CsvItem]]] = None
-
-
-def _load_item_prices_for_combo() -> List[CsvItem]:
-    global _item_prices_cache
-    if _item_prices_cache is not None:
-        return _item_prices_cache[1]
-    if not os.path.isfile(CSV_PATH):
-        _item_prices_cache = ({}, [])
-        return []
-    try:
-        _item_prices_cache = item_db.load_csv(CSV_PATH)
-    except OSError:
-        _item_prices_cache = ({}, [])
-    return _item_prices_cache[1]
-
-
-def _tier_candidate_nt_list_from_total(
-    d: Dict[str, Any], pfx: str, *, quality: int
-) -> List[Tuple[int, int]]:
-    """由总价 ``price_total``（及可选已知件数）枚举预计算表可解释的 ``(n, T)``。"""
-    T_obs = _as_int_count(d.get(f"{pfx}price_total"))
-    if T_obs is None or T_obs <= 0:
-        return []
-    T = int(T_obs)
-    n_obs = _as_int_count(d.get(f"{pfx}count"))
-    seen: Set[Tuple[int, int]] = set()
-    out: List[Tuple[int, int]] = []
-
-    def try_add(n: int) -> None:
-        if n <= 0 or n > _TIER_COMBO_MAX_ITEM_COUNT:
-            return
-        if _tier_combo_grid_sums(quality, n, T_need=T) is None:
-            return
-        key = (n, T)
-        if key not in seen:
-            seen.add(key)
-            out.append(key)
-
-    if n_obs is not None and n_obs > 0:
-        try_add(int(n_obs))
-        return out
-
-    for n in range(1, _TIER_COMBO_MAX_ITEM_COUNT + 1):
-        try_add(n)
-    return out
-
-
-def _tier_combo_grid_sums(quality: int, n: int, *, T_need: int) -> Set[int]:
-    """``(品质, n, 总价)`` 下可达总格：仅 ``tier_combo_presolve_q456.json``；无表项则为空集。"""
-    looked = presolve_grid_sums(quality, n, int(T_need))
-    return set(looked) if looked is not None else set()
-
-
-def _apply_tier_item_combo_from_csv(
-    d: Dict[str, Any],
-    pfx: str,
-    quality: int,
-    csv_items: Sequence[CsvItem],
-    *,
-    grid_avg_infer_max_item_count: int = _DEFAULT_GRID_AVG_INFER_MAX_ITEM_COUNT,
-) -> None:
-    """在有效 ``price_total`` 且该档 ``*_grid_count`` 仍未知时，用 CSV 预计算表解释件数与占格。
-
-    不在此用总格作约束；技能已给出总格时跳过（由其它路径维护）。无有效总价时不运行。
-
-    件数枚举不超过 ``_TIER_COMBO_MAX_ITEM_COUNT``；**件数仍未知**且 ``count_min`` 大于该上界时不做组合枚举（避免离谱下界）。
-
-    若日志已给出 ``count``，即使 ``count_min`` 较大仍可用预计算表尝试补全 ``grid_count``。
-
-    唯一 ``(总价, 总格)`` 时写入 ``count`` / ``grid_count`` 并刷新均价、均格（均价由总价÷件数回写，非均价反推）；
-    否则仅强化 ``count_min`` / ``grid_min``。
-    """
-    pool = [it for it in csv_items if it.quality == quality]
-    if not pool:
-        return
-
-    count_k = f"{pfx}count"
-    grid_k = f"{pfx}grid_count"
-    avg_grid_k = f"{pfx}grid_avg"
-    avg_price_k = f"{pfx}price_avg"
-    total_k = f"{pfx}price_total"
-    count_min_k = f"{pfx}count_min"
-    grid_min_k = f"{pfx}grid_min"
-
-    if _as_int_count(d.get(total_k)) is None:
-        return
-    if _as_int_count(d.get(grid_k)) is not None:
-        return
-    n_locked = _as_int_count(d.get(count_k))
-    cm0 = _as_int_count(d.get(count_min_k))
-    if n_locked is None and cm0 is not None and cm0 > _TIER_COMBO_MAX_ITEM_COUNT:
-        return
-    triples = _tier_candidate_nt_list_from_total(d, pfx, quality=quality)
-    if not triples:
-        return
-
-    triples.sort(key=lambda x: (x[0], x[1]))
-
-    feasible: List[Tuple[int, int, Set[int]]] = []
-    n_min: Optional[int] = None
-    for n, T in triples:
-        if n_min is not None and n > n_min:
-            break
-        gs = _tier_combo_grid_sums(quality, n, T_need=T)
-        if not gs:
-            continue
-        if n_min is None:
-            n_min = n
-        if n == n_min:
-            feasible.append((n, T, gs))
-
-    if not feasible or n_min is None:
-        return
-
-    outcomes: Set[Tuple[int, int]] = set()
-    for _n, T, gs in feasible:
-        for g in gs:
-            outcomes.add((T, int(g)))
-
-    if len(outcomes) == 1:
-        T_u, G_u = next(iter(outcomes))
-        n_u = int(n_min)
-        d[count_k] = n_u
-        d[total_k] = int(T_u)
-        d[grid_k] = int(G_u)
-        d[avg_grid_k] = round_computed_div_avg(float(G_u) / float(n_u))
-        d[avg_price_k] = round_computed_div_avg(float(T_u) / float(n_u))
-        _finalize_tier_min_bounds(
-            d,
-            count_k=count_k,
-            grid_k=grid_k,
-            avg_grid_k=avg_grid_k,
-            count_min_k=count_min_k,
-            grid_min_k=grid_min_k,
-            grid_avg_infer_max_item_count=grid_avg_infer_max_item_count,
-        )
-        return
-
-    cm = _as_int_count(d.get(count_min_k))
-    cm = _max_optional_int(cm, int(n_min))
-    d[count_min_k] = cm
-
-    grid_mins: List[int] = []
-    for _n, T, gs in feasible:
-        grid_mins.extend(int(g) for g in gs)
-    if grid_mins:
-        gm = min(grid_mins)
-        ex = _as_int_count(d.get(grid_min_k))
-        d[grid_min_k] = _max_optional_int(ex, gm)
-
-
 def build_raw_pricing_dict(
     *,
     map_id: int,
@@ -759,7 +604,7 @@ def build_raw_pricing_dict(
     返回含 ``event_stats``、``census_absent_qualities``（分档零一致性整理后 ``qK_count==0`` 的品质列表，
     供 :mod:`.scan_inference` 与 UI 负向合并）等。
 
-    ``price_avg_infer_max_item_count``：保留入参以兼容旧调用方，**不再参与**紫/金/红推理（价侧仅总价+CSV 组合）。
+    ``price_avg_infer_max_item_count``：保留入参以兼容旧调用方，**不再参与**紫/金/红推理。
 
     ``grid_avg_infer_max_item_count`` / ``grid_avg_infer_max_grid_count``：均格侧合并到 ``count_min`` 的乘数上界、
     以及由均格反推总格唯一解时的候选 ``G`` 上界（``1..500``）；省略时读 ``pricing.*`` 缺省分别为
@@ -848,7 +693,7 @@ def build_raw_pricing_dict(
     direct = parse_skill_entries_to_event_stats_direct(skill_merged)
     direct["random_avg_price_min"] = random_avg_price_min
 
-    # ── 2) 已知字段上的推理（分档互推、CSV 组合、零一致性、q12 汇总等）──
+    # ── 2) 已知字段上的推理（分档互推、零一致性、q12 汇总等）──
     _infer_tier_count_grid_price(
         direct,
         count_k="total_count",
@@ -858,7 +703,6 @@ def build_raw_pricing_dict(
         total_price_k=None,
     )
 
-    csv_items_combo = _load_item_prices_for_combo()
     for _pfx, _q in (("q4_", 4), ("q5_", 5), ("q6_", 6)):
         _infer_tier_count_grid_price(
             direct,
@@ -890,13 +734,6 @@ def build_raw_pricing_dict(
             avg_grid_k=f"{_pfx}grid_avg",
             count_min_k=f"{_pfx}count_min",
             grid_min_k=f"{_pfx}grid_min",
-            grid_avg_infer_max_item_count=gmic,
-        )
-        _apply_tier_item_combo_from_csv(
-            direct,
-            _pfx,
-            _q,
-            csv_items_combo,
             grid_avg_infer_max_item_count=gmic,
         )
 

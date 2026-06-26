@@ -5,14 +5,14 @@ Game Match Reports 统计分析脚本
 统计230系列地图的数据
 """
 
-import os
+import argparse
 import csv
 import glob
+import os
 from collections import defaultdict
 from datetime import datetime
 
-# 目标文件夹路径
-TARGET_DIR = r"c:\Users\49479\Desktop\竞拍统计\竞拍统计"
+DEFAULT_TARGET_DIR = "data"
 
 def parse_uid(uid):
     """解析UID，返回地图编号和唯一ID"""
@@ -142,8 +142,16 @@ def format_time_range(time_list):
     return f"{time_list[0]} 至 {time_list[-1]}"
 
 def main():
-    # 查找所有CSV文件
-    csv_pattern = os.path.join(TARGET_DIR, "game_match_reports_*.csv")
+    parser = argparse.ArgumentParser(description="统计 game_match_reports_*.csv")
+    parser.add_argument(
+        "--dir",
+        default=DEFAULT_TARGET_DIR,
+        help="包含 game_match_reports_*.csv 的目录（默认 data）",
+    )
+    args = parser.parse_args()
+    target_dir = args.dir
+
+    csv_pattern = os.path.join(target_dir, "game_match_reports_*.csv")
     csv_files = glob.glob(csv_pattern)
 
     # 排除history文件
@@ -212,7 +220,7 @@ def main():
     print(f"    [AIR1314] 平均每局收益: {overall_avg_air1314:+.2f}")
 
     # 生成CSV报表
-    output_csv = os.path.join(TARGET_DIR, "230系列统计报表.csv")
+    output_csv = os.path.join(target_dir, "230系列统计报表.csv")
     with open(output_csv, 'w', newline='', encoding='utf-8-sig') as f:
         writer = csv.writer(f)
         writer.writerow([

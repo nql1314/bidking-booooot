@@ -200,17 +200,6 @@ class BidKingApp:
 
         self.build_ui()
         self.load_into_form()
-        try:
-            from ..interaction.public_blacklist_sync import (
-                schedule_public_blacklist_sync_on_startup,
-            )
-
-            schedule_public_blacklist_sync_on_startup(self.config)
-        except Exception as exc:
-            print(
-                f"[bidking] 公共黑名单启动同步未安排: {exc}",
-                file=sys.stderr,
-            )
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
     # ── 配置加载/合并 ──────────────────────────────────────────────────────
@@ -719,11 +708,6 @@ class BidKingApp:
             except bot.StopRequested:
                 self.append_log("GUI stop: stopped")
             except Exception as exc:  # noqa: BLE001
-                from ..interaction.bot_startup_gate import BotStartupBlocked
-
-                if isinstance(exc, BotStartupBlocked):
-                    self.append_log(str(exc))
-                    return
                 self.append_log(traceback.format_exc())
             finally:
                 self.root.after(0, self.on_worker_done)
@@ -803,14 +787,6 @@ class BidKingApp:
             self.apply_form_to_config()
         except Exception as exc:  # noqa: BLE001
             messagebox.showerror("配置错误", str(exc))
-            return
-
-        from ..interaction.bot_startup_gate import BotStartupBlocked, ensure_bot_startup_allowed
-
-        try:
-            ensure_bot_startup_allowed(self.config)
-        except BotStartupBlocked as exc:
-            messagebox.showerror("Bot 不可用", str(exc))
             return
 
         auto = self.config.get("automation") or {}

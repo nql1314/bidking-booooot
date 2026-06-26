@@ -23,7 +23,6 @@ bidking-parse-log = "bidking.parsing.parse_log:main"
 bidking-game-tables = "bidking.tools.game_tables:main"
 bidking-item-table = "bidking.tools.item_table:main"
 bidking-skill-table = "bidking.tools.skill_table:main"
-bidking-sync-blacklist-sheet = "bidking.tools.blacklist_sheet_sync:main"
 bot_runner = "bidking.ui.app:main"
 grid_view = "bidking.runner.viewer_main:main"
 
