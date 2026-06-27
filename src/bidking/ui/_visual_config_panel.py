@@ -449,7 +449,12 @@ class VisualConfigPanel:
         if not mk:
             return 0
         try:
-            return int(load_prefix3_to_min_map_id().get(mk, int(mk) if mk.isdigit() else 0))
+            rep = int(load_prefix3_to_min_map_id().get(mk, 0))
+            if rep > 0:
+                return rep
+            if mk.isdigit() and len(mk) == 3:
+                return int(mk) * 10 + 1
+            return int(mk) if mk.isdigit() else 0
         except (TypeError, ValueError):
             return 0
 

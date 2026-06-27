@@ -67,5 +67,12 @@ class MapAvgCsvTests(unittest.TestCase):
         self.assertEqual(pfx, "450")
         self.assertEqual(rep, 2505)
 
+    def test_rank_56xx_quality_csv_anchors_5601_not_2401(self) -> None:
+        self.assertEqual(resolve_map_id_for_quality_csv(5607), 5601)
+        self.assertEqual(resolve_map_id_for_quality_csv(5611), 5601)
+        rep, pfx = representative_map_id_for_ticket(5603)
+        self.assertEqual(pfx, "560")
+        self.assertEqual(rep, 5601)
+
 if __name__ == "__main__":
     unittest.main()

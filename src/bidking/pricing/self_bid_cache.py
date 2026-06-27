@@ -23,7 +23,7 @@ def _game_uid_from_snapshot(board_snapshot: dict[str, Any]) -> str | None:
     u = str((board_snapshot.get("game_state") or {}).get("uid") or "").strip()
     return u or None
 
-_SECRET_MAP_KEYS = frozenset({"440", "450"})
+_SECRET_MAP_KEYS = frozenset({"440", "450", "560"})
 
 
 def _board_snapshot_is_secret_auction(board_snapshot: dict[str, Any]) -> bool:

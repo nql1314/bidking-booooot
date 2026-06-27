@@ -23,6 +23,11 @@ def test_board_map_bundle_key_4402_is_440() -> None:
 def test_board_map_bundle_key_4503_is_450() -> None:
     snap = {"game_state": {"map_id": 4503, "players": {}}}
     assert board_map_bundle_key(snap) == "450"
+
+
+def test_board_map_bundle_key_5607_is_560() -> None:
+    snap = {"game_state": {"map_id": 5607, "players": {}}}
+    assert board_map_bundle_key(snap) == "560"
     assert board_snapshot_is_secret_auction(snap) is True
 
 
