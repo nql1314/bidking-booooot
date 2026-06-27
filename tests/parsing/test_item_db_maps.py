@@ -9,6 +9,17 @@ def test_normalize_activity_ship_map_45xx_to_25xx() -> None:
     assert item_db.normalize_map_id(2525) == 2525
 
 
+def test_normalize_rank_villa_map_56xx_to_2401_pool() -> None:
+    for mid in range(5601, 5612):
+        assert item_db.normalize_map_id(mid) == 2401
+
+
+def test_rank_villa_maps_share_2401_tier_nest() -> None:
+    nest = item_db.MAP_TO_TIER_NEST[2401]
+    for mid in range(5601, 5612):
+        assert item_db.MAP_TO_TIER_NEST[mid] == nest == (104, 2031)
+
+
 def test_activity_ship_maps_share_base_tier_nest() -> None:
     assert item_db.MAP_TO_TIER_NEST[2521] == item_db.MAP_TO_TIER_NEST[2501]
     assert item_db.MAP_TO_TIER_NEST[2530] == item_db.MAP_TO_TIER_NEST[2510]
@@ -42,6 +53,34 @@ def test_map_id_for_drop_weights_activity_matches_base() -> None:
     assert item_db.map_tier_nest_for_weights(2535) == item_db.map_tier_nest_for_weights(2505)
     assert item_db.map_tier_nest_for_weights(2521) == (105, 2041)
     assert item_db.map_id_for_drop_weights(2511) == 2511
+
+
+def test_merge_config_overrides_560_independent_of_240() -> None:
+    from bidking.analysis.map_avg_csv import resolve_map_id_for_quality_csv
+    from bidking.analysis.map_quality_unit_config import merge_config_overrides_into_runtime
+    from bidking.config.map_runtime_overlay import merged_runtime_with_map_pricing
+    from bidking.parsing.item_db import map_bundle_key_for_automation
+
+    assert map_bundle_key_for_automation(5607) == "560"
+    resolved_5607 = resolve_map_id_for_quality_csv(5607)
+    assert resolved_5607 != 2401
+    assert 5601 <= resolved_5607 <= 5611
+
+    base: dict = {"pricing": {}, "automation": {"selected_map": "210"}}
+    q560 = (
+        merged_runtime_with_map_pricing(base, map_bundle_key="560")
+        .get("pricing", {})
+        .get("map_quality_unit_per_cell", {})
+    )
+    q240 = (
+        merged_runtime_with_map_pricing(base, map_bundle_key="240")
+        .get("pricing", {})
+        .get("map_quality_unit_per_cell", {})
+    )
+    assert q560.get("q56") == 22000.0
+    assert q240.get("q56") == 22000.0
+    assert merge_config_overrides_into_runtime(base, 5607) == q560
+    assert merge_config_overrides_into_runtime(base, 2401) == q240
 
 
 def test_rank_map_csv_covers_all_map_ids() -> None:

@@ -14,7 +14,7 @@ from typing import Dict, List, Sequence
 from bidking.tools.table_csv_io import iter_csv_rows, load_language_map_csv
 
 CATEGORY_MIN = 101
-CATEGORY_MAX = 110
+CATEGORY_MAX = 111
 EXTRA_CATEGORY_TAGS = frozenset({14, 100})
 DEFAULT_GRID_SIZE = "[10,5]"
 

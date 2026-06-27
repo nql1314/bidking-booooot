@@ -103,18 +103,32 @@ def resolve_map_id_for_quality_csv(
     """
     查 map_quality_* CSV 时使用的 ``map_id``：先 ``normalize_map_id``，无行则对
     25xx/45xx 非基础子图（末两位 11+）回退到同位基础子图（2501–2510 / 4501–4510）。
+
+    56xx 掉落池虽归 2401，但品质 CSV / 格单价参考锚定本档（5601 或已有行的子图），
+    不与 24xx 混用。
     """
     from ..parsing.item_db import normalize_map_id, ship_series_weight_fallback_map_id
 
-    mid = normalize_map_id(map_id)
-    if mid is None:
-        return None
     present = known_map_ids if known_map_ids is not None else map_ids_in_quality_avg_csv(
         snapshot_path_hint
     )
 
     def _has_rows(candidate: int) -> bool:
         return candidate in present
+
+    if map_id is not None:
+        raw = int(map_id)
+        if raw // 100 == 56:
+            if _has_rows(raw):
+                return raw
+            anchor = 5601
+            if _has_rows(anchor):
+                return anchor
+            return anchor
+
+    mid = normalize_map_id(map_id)
+    if mid is None:
+        return None
 
     if _has_rows(mid):
         return mid
@@ -197,8 +211,9 @@ def representative_map_id_for_ticket(
         snapshot_path_hint=snapshot_path_hint,
         known_map_ids=known,
     )
-    if resolved is not None and resolved in known:
-        return int(resolved), pfx
+    if resolved is not None:
+        if resolved in known or resolved // 100 == 56:
+            return int(resolved), pfx
     rep = load_prefix3_to_min_map_id(snapshot_path_hint).get(pfx, mid)
     return int(rep), pfx
 

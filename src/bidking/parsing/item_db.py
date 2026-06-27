@@ -17,7 +17,7 @@ DROP_WEIGHTS_CSV = "drop_table_weights.csv"
 MERGED_DATA_CSV = "calculator_data_merged.csv"
 MAP_PRIOR_HTML = "物品轮廓爆率推断器.html"
 DEFAULT_MAP_CATEGORY_WEIGHTS: Dict[int, float] = {
-    cat: 1.0 for cat in range(101, 111)
+    cat: 1.0 for cat in range(101, 112)
 }
 # 多候选权重期望价：单价超过该阈值的候选不参与期望计算（避免天价拉爆期望），
 # 候选集合本身不变；已指定 ItemCid 或仅剩单候选时走精确价，不经过此逻辑。
@@ -57,9 +57,11 @@ MAP_TO_TIER_NEST: Dict[int, Tuple[int, int]] = {
     4501: (105, 2041), 4502: (105, 2042), 4503: (105, 2043), 4504: (105, 2044),
     4505: (105, 2045), 4506: (105, 2046), 4507: (105, 2047), 4508: (105, 2048),
     4509: (105, 2049), 4510: (105, 2050),
-    4511: (105, 2141), 4512: (105, 2142), 4513: (105, 2143), 4514: (105, 2144),
-    4515: (105, 2145), 4516: (105, 2146), 4517: (105, 2147), 4518: (105, 2148),
-    4519: (105, 2149), 4520: (105, 2150),
+    2601: (106, 2051),
+    # 56xx 竞拍之巅：全子图与 2401 同巢池（见 normalize_map_id）
+    5601: (104, 2031), 5602: (104, 2031), 5603: (104, 2031), 5604: (104, 2031),
+    5605: (104, 2031), 5606: (104, 2031), 5607: (104, 2031), 5608: (104, 2031),
+    5609: (104, 2031), 5610: (104, 2031), 5611: (104, 2031),
 }
 # 25xx/45xx 非基础子图（末两位 11+）无可用 DROP 根或未登记时，回退到同位基础子图 2501–2510 / 4501–4510
 _SHIP_BASE_SUBMAP_SLOT_MAX = 10
@@ -77,11 +79,14 @@ def normalize_map_id(map_id: Optional[int]) -> Optional[int]:
     """将游戏日志里的等价 MapCid 归一到权重表使用的地图 ID。"""
     if map_id is None:
         return None
-    # 先尝试 −2000（44xx→24xx、45xx→25xx、含 4511→2511），以便 MAP 中同时登记
+    # 先尝试 −2000（44xx→24xx、45xx→25xx），以便 MAP 中同时登记
     # 日志 MapId 与表内 ID 时，仍归一到 HTML/先验里使用的较小号。
     minus2k = map_id - 2000
     if minus2k in MAP_TO_TIER_NEST:
         return minus2k
+    # 56xx 竞拍之巅 → 2401 同池（BidMap drop_group 均为 2401）
+    if map_id // 100 == 56 and 2401 in MAP_TO_TIER_NEST:
+        return 2401
     if map_id in MAP_TO_TIER_NEST:
         return map_id
     fallback = ship_series_weight_fallback_map_id(map_id)
@@ -568,7 +573,7 @@ def map_category_ratios(map_id: Optional[int]) -> Dict[int, float]:
             category = ref_id // 10
             quality = ref_id % 10
             # 类别池节点通常是 1011~1106（category*10 + quality）。
-            if 101 <= category <= 110 and 1 <= quality <= 6:
+            if 101 <= category <= 111 and 1 <= quality <= 6:
                 totals[category] = totals.get(category, 0.0) + child_scale
                 continue
             # 新地图 2601 会经由通用品质池 1201~1206 直接落到物品。
@@ -576,7 +581,7 @@ def map_category_ratios(map_id: Optional[int]) -> Dict[int, float]:
             if ref_id in _KNOWN_ITEM_IDS:
                 tags = [
                     tag for tag in _ITEM_CATEGORY_TAGS.get(ref_id, [])
-                    if 101 <= tag <= 110
+                    if 101 <= tag <= 111
                 ]
                 if tags:
                     tag_scale = child_scale / len(tags)

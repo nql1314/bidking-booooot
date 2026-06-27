@@ -16,7 +16,7 @@ _VACANT_RED_PICK_MODE_AGGRESSIVE = "aggressive"
 _VACANT_RED_PICK_MODE_FORCE_GOLD_RED = "force_gold_red"
 
 # 暗图（440/450 隐秘拍卖档）：积极模式不比较对手价，规则 7 之后统一均价
-_AGGRESSIVE_DARK_MAP_BUNDLE_KEYS = frozenset({"440", "450"})
+_AGGRESSIVE_DARK_MAP_BUNDLE_KEYS = frozenset({"440", "450", "560"})
 
 _HERO_CID_RED_SCOUT = 110
 

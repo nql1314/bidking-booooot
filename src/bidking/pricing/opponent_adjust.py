@@ -16,7 +16,7 @@ from .snapshot_players import (
 from ._multipliers import resolve_round_multiplier
 
 # ``automation.maps`` 档键：幽静别墅 / 沉船密封舱；快照 ``players.*.prices`` 为排名而非金币。
-SECRET_AUCTION_MAP_BUNDLE_KEYS: frozenset[str] = frozenset({"440", "450"})
+SECRET_AUCTION_MAP_BUNDLE_KEYS: frozenset[str] = frozenset({"440", "450", "560"})
 
 # 隐秘图：上回合己方排位 → 对手预估出价 = bid_pre * 系数（可被配置覆盖）
 DEFAULT_SECRET_AUCTION_RANK_OPPONENT_MULTIPLIERS: dict[int, float] = {
