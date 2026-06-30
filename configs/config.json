@@ -33,7 +33,7 @@
     "path": "data/board_snapshot.json",
     "write_mode": "both",
     "schema_version_min": 1,
-    "self_user_uid": "",
+    "self_user_uid": "358372071974712",
     "max_stale_seconds": 300,
     "stop_bot_on_game_mismatch": true
   },
@@ -43,27 +43,29 @@
     "tool_rounds": [
       1,
       2,
-      3
+      3,
+      4
     ],
     "default_map": "1",
     "default_runs": 1,
     "map_chain": [
       {
-        "map_id": "440",
+        "map_id": "560",
         "runs": 10,
         "tool_rounds": [
           1,
           2,
-          3
+          3,
+          4
         ]
       }
     ],
-    "selected_map": "440",
+    "selected_map": "560",
     "selected_runs": 10,
     "warehouse_auto_sort": {
       "enabled": true
     },
-    "run_cycles": 60,
+    "run_cycles": 1,
     "cycle_rest_minutes": 2.0,
     "enable_map_entry_money_check": false,
     "enable_aisha_round4_tool_vacant_gate": false,
