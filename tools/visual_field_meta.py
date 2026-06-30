@@ -22,6 +22,18 @@ FIELD_META: dict[str, dict[str, str]] = {
         "label": "保险价",
         "description": "已知物品总价（不含第4回合空置区自动 phantom_vac 填充）超过此值时不再应用封顶。0 表示与封顶价相同，推荐设为游戏内保险价",
     },
+    "automation.enable_bid_price_tail": {
+        "label": "启用出价尾数",
+        "description": "开启后，策略算价经封顶/对手调整后，将末尾替换为尾数集合中的某一档（向上取整后取最小可用组合）。",
+    },
+    "automation.bid_price_tail_digits": {
+        "label": "出价尾数位宽",
+        "description": "替换价格末尾几位数字，默认 3（千分位尾数如 333、888）。",
+    },
+    "automation.bid_price_tails": {
+        "label": "出价尾数集合",
+        "description": "逗号分隔的尾数列表，如 333, 666, 888；留空则回退旧千分位数字重复逻辑；未配置时默认 333, 666, 888。",
+    },
     "automation.bid_ratio_by_round.1": {
         "label": "第1回合系数",
         "description": "第1回合最终出价 ≈ 基础估价 × 系数；可 >1 以抬高靠近天花板时的出价；不得超过 1.5。",

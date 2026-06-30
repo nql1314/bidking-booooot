@@ -44,6 +44,15 @@
     "aisha_bid_ratio_by_round_when_q5_known": {
       "5": 0.0,
       "default": 0.0
-    }
+    },
+    "enable_bid_price_tail": true,
+    "bid_price_tail_digits": 3,
+    "bid_price_tails": [
+      111,
+      333,
+      666,
+      888,
+      999
+    ]
   }
 }
