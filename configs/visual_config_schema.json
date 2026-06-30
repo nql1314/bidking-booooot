@@ -22,6 +22,33 @@
       "hide": false
     },
     {
+      "path": "automation.enable_bid_price_tail",
+      "type": "bool",
+      "label": "启用出价尾数",
+      "description": "开启后，在封顶与对手调整之后将最终出价调整为「高位 + 集合尾数」；关闭则保持策略算价原值。",
+      "scope": "both",
+      "group": "自动化",
+      "hide": false
+    },
+    {
+      "path": "automation.bid_price_tail_digits",
+      "type": "int",
+      "label": "出价尾数位宽",
+      "description": "替换价格末尾几位数字，默认 3（即 xxx 形式的千分位尾数，如 13333、288888）。有效范围 1–6。",
+      "scope": "both",
+      "group": "自动化",
+      "hide": false
+    },
+    {
+      "path": "automation.bid_price_tails",
+      "type": "int_list",
+      "label": "出价尾数集合",
+      "description": "向上取整后在集合中选最小可用尾数拼到高位之后，如 333, 666, 888。留空则使用旧逻辑（按千分位数字重复 3 次）。未配置时默认 333, 666, 888。",
+      "scope": "both",
+      "group": "自动化",
+      "hide": false
+    },
+    {
       "path": "automation.bid_ratio_by_round.1",
       "type": "float",
       "label": "第1回合系数",

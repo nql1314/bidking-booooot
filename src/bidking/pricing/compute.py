@@ -194,7 +194,7 @@ def compute_price(
         effective_round,
         bid_ratio=ratio,
     )
-    fin, payload = apply_human_like_price_tail(fin, payload)
+    fin, payload = apply_human_like_price_tail(fin, payload, effective_config)
     fin, payload = apply_early_round_fallback_floor(
         fin, effective_round, int(fallback), payload
     )

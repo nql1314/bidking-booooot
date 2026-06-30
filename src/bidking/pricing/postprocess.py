@@ -4,36 +4,132 @@ from typing import Any
 
 from ._numeric import parse_int_config
 
+_DEFAULT_BID_PRICE_TAILS = (333, 666, 888)
+_DEFAULT_BID_PRICE_TAIL_DIGITS = 3
+
 
 def _thousands_digit_tail_pattern(high: int) -> int:
     """千分位数字重复 3 次，如千位为 3 → 333，为 9 → 999。"""
     return (high % 10) * 111
 
 
-def apply_human_like_price_tail(fin: int, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
-    """千分位尾数：按千分位数字重复该数字 3 次（如 13321→13333，299333→299999）。"""
+def _bid_price_tail_digits_from_config(config: dict[str, Any] | None) -> int:
+    automation = (config or {}).get("automation") or {}
+    digits = max(1, min(6, parse_int_config(automation.get("bid_price_tail_digits"), _DEFAULT_BID_PRICE_TAIL_DIGITS)))
+    return int(digits)
+
+
+def _bid_price_tails_from_config(config: dict[str, Any] | None, *, digits: int) -> list[int] | None:
+    """
+    解析 ``automation.bid_price_tails``。
+
+    - 未配置或空列表：返回 ``None``，调用方走千分位数字重复的旧逻辑。
+    - 已配置：返回去重排序后的合法尾数（0 <= tail < 10**digits）。
+    """
+    automation = (config or {}).get("automation") or {}
+    raw = automation.get("bid_price_tails")
+    if raw is None:
+        return list(_DEFAULT_BID_PRICE_TAILS)
+    if not isinstance(raw, list) or not raw:
+        return None
+    divisor = 10**digits
+    out: list[int] = []
+    seen: set[int] = set()
+    for item in raw:
+        try:
+            tail = int(item)
+        except (TypeError, ValueError):
+            continue
+        if not (0 <= tail < divisor):
+            continue
+        if tail in seen:
+            continue
+        seen.add(tail)
+        out.append(tail)
+    out.sort()
+    return out if out else None
+
+
+def _pick_bid_price_with_tail_collection(
+    fin: int,
+    tails: list[int],
+    *,
+    digits: int,
+) -> tuple[int, str]:
+    """在尾数集合中选最小可用组合，使结果 >= fin（等价于向上取整后拼接尾数）。"""
     fin = int(fin)
-    before = fin
+    divisor = 10**digits
+    if fin < divisor:
+        return fin, f"skip_lt_{divisor}"
+
+    high_start, _ = divmod(fin, divisor)
+    sorted_tails = sorted(set(int(t) for t in tails))
+    for high in range(high_start, high_start + 1_000_000):
+        for tail in sorted_tails:
+            cand = high * divisor + tail
+            if cand >= fin:
+                tag = str(tail)
+                if high > high_start:
+                    tag = f"{tail}_carry"
+                return cand, tag
+    return fin, "no_match"
+
+
+def _apply_legacy_thousands_digit_tail(fin: int) -> tuple[int, str]:
+    """旧逻辑：按千分位数字重复 3 次（如 13321→13333）。"""
+    fin = int(fin)
     if fin < 1000:
-        payload["human_price_tail"] = {
-            "before": before,
-            "after": fin,
-            "pattern": "skip_lt_1000",
-        }
-        return fin, payload
+        return fin, "skip_lt_1000"
 
     high, _low = divmod(fin, 1000)
     pattern = _thousands_digit_tail_pattern(high)
     cand = high * 1000 + pattern
     if cand >= fin:
-        fin = cand
-        tag = str(pattern)
+        return cand, str(pattern)
+    high += 1
+    pattern = _thousands_digit_tail_pattern(high)
+    return high * 1000 + pattern, f"{pattern}_carry"
+
+
+def apply_human_like_price_tail(
+    fin: int,
+    payload: dict[str, Any],
+    config: dict[str, Any] | None = None,
+) -> tuple[int, dict[str, Any]]:
+    """
+    最终出价尾数：默认替换末 3 位，从 ``automation.bid_price_tails`` 向上取整后选最小可用尾数。
+
+    ``automation.enable_bid_price_tail`` 为 false 时跳过；``bid_price_tails`` 显式空列表时回退旧千分位重复逻辑。
+    """
+    fin = int(fin)
+    before = fin
+    automation = (config or {}).get("automation") or {}
+    enabled = bool(automation.get("enable_bid_price_tail", True))
+    digits = _bid_price_tail_digits_from_config(config)
+    tails = _bid_price_tails_from_config(config, digits=digits)
+
+    meta: dict[str, Any] = {
+        "before": before,
+        "enabled": enabled,
+        "tail_digits": digits,
+    }
+    if tails is not None:
+        meta["tails"] = list(tails)
+    if not enabled:
+        meta["after"] = fin
+        meta["pattern"] = "disabled"
+        payload["human_price_tail"] = meta
+        return fin, payload
+
+    if tails is None:
+        fin, tag = _apply_legacy_thousands_digit_tail(fin)
+        meta["mode"] = "legacy_thousands_digit"
     else:
-        high += 1
-        pattern = _thousands_digit_tail_pattern(high)
-        fin = high * 1000 + pattern
-        tag = f"{pattern}_carry"
-    payload["human_price_tail"] = {"before": before, "after": fin, "pattern": tag}
+        fin, tag = _pick_bid_price_with_tail_collection(fin, tails, digits=digits)
+        meta["mode"] = "custom_tails"
+    meta["after"] = fin
+    meta["pattern"] = tag
+    payload["human_price_tail"] = meta
     return fin, payload
 
 

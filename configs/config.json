@@ -33,34 +33,24 @@
     "path": "data/board_snapshot.json",
     "write_mode": "both",
     "schema_version_min": 1,
-    "self_user_uid": "358372071974712",
+    "self_user_uid": "941456831344888",
     "max_stale_seconds": 300,
     "stop_bot_on_game_mismatch": true
   },
   "automation": {
     "bot_runner": "fresh_aisha_bot",
     "selected_mode": "aisha_premium",
-    "tool_rounds": [
-      1,
-      2,
-      3,
-      4
-    ],
+    "tool_rounds": [],
     "default_map": "1",
     "default_runs": 1,
     "map_chain": [
       {
-        "map_id": "560",
+        "map_id": "230",
         "runs": 10,
-        "tool_rounds": [
-          1,
-          2,
-          3,
-          4
-        ]
+        "tool_rounds": []
       }
     ],
-    "selected_map": "560",
+    "selected_map": "230",
     "selected_runs": 10,
     "warehouse_auto_sort": {
       "enabled": true
@@ -80,7 +70,16 @@
     "scheduled_start_hour": 8,
     "scheduled_start_minute": 0,
     "shutdown_after_run_enabled": false,
-    "shutdown_after_run_delay_seconds": 60
+    "shutdown_after_run_delay_seconds": 60,
+    "enable_bid_price_tail": false,
+    "bid_price_tail_digits": 3,
+    "bid_price_tails": [
+      333,
+      666,
+      888,
+      999,
+      111
+    ]
   },
   "timing": {
     "poll_seconds": 1,
