@@ -16,7 +16,7 @@
       "path": "automation.bid_cap_skip_when_total_above",
       "type": "int",
       "label": "保险价",
-      "description": "本局估价总额超过此值时不再应用封顶（高估值局保留策略出价）。0 表示按同封顶价，和地图保险价一致",
+      "description": "游戏内保险价：已知物品总价超过此值时破保险，出价上限改为此值；未破保险时上限仍为封顶价。0 表示与封顶价相同",
       "scope": "map",
       "group": "自动化",
       "hide": false
