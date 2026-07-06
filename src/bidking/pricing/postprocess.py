@@ -286,7 +286,12 @@ def apply_bid_cap(
     known_items_total: float | int | None = None,
     pricing_total: float | int | None = None,
 ) -> tuple[int, dict[str, Any]]:
-    """封顶出价；``bid_cap_skip_when_total_above`` 与 **已知物品总价**（不含 ``phantom_vac_*`` 自动填充）比较。"""
+    """封顶出价。
+
+    - 已知物品总价（不含 ``phantom_vac_*`` 自动填充）未超过 ``bid_cap_skip_when_total_above``
+      时，出价上限为 ``bid_cap_price``。
+    - 超过保险价（破保险）时，不再用封顶价，改以保险价为出价上限。
+    """
     automation = config.get("automation") or {}
     bid_cap = max(0, parse_int_config(automation.get("bid_cap_price"), 0))
     if bid_cap <= 0:
@@ -312,17 +317,20 @@ def apply_bid_cap(
             compare_total = None
 
     if compare_total is not None and compare_total > float(skip_threshold):
+        insurance_cap = int(skip_threshold)
+        capped = min(int(final_price), insurance_cap)
         payload["bid_cap"] = {
             "enabled": True,
             "cap_price": bid_cap,
-            "applied": False,
+            "insurance_cap_price": insurance_cap,
+            "applied": capped != int(final_price),
             "skipped": True,
             "reason": "known_items_total_above_skip_threshold",
             "known_items_total": compare_total,
             "skip_threshold": skip_threshold,
             "original_price": int(final_price),
         }
-        return int(final_price), payload
+        return int(capped), payload
 
     capped = min(int(final_price), bid_cap)
     payload["bid_cap"] = {

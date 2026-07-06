@@ -33,9 +33,10 @@
     "path": "data/board_snapshot.json",
     "write_mode": "both",
     "schema_version_min": 1,
+    
     "self_user_uid": "941456831344888",
     "max_stale_seconds": 300,
-    "stop_bot_on_game_mismatch": true
+    "stop_bot_on_game_mismatch": false
   },
   "automation": {
     "bot_runner": "fresh_aisha_bot",

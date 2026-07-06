@@ -20,7 +20,7 @@ FIELD_META: dict[str, dict[str, str]] = {
     },
     "automation.bid_cap_skip_when_total_above": {
         "label": "保险价",
-        "description": "已知物品总价（不含第4回合空置区自动 phantom_vac 填充）超过此值时不再应用封顶。0 表示与封顶价相同，推荐设为游戏内保险价",
+        "description": "游戏内保险价：已知物品总价（不含第4回合空置区自动 phantom_vac 填充）超过此值时破保险，出价上限改为此值；未破保险时上限仍为封顶价。0 表示与封顶价相同",
     },
     "automation.enable_bid_price_tail": {
         "label": "启用出价尾数",
