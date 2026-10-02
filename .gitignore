@@ -78,3 +78,8 @@ configs/price_config.json
 
 # Copied PyInstaller artifact at repo root (real build output stays under dist/)
 /grid_view.exe
+
+# Local diagnostic caches and crash dumps
+/.cache/
+*.dmp
+/_backups/
